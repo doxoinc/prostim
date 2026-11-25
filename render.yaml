@@ -1,0 +1,23 @@
+# Render Blueprint: web service + free Postgres for accounts, feed and agent state.
+databases:
+  - name: prostim-db
+    plan: free
+    databaseName: prostim
+    user: prostim
+
+services:
+  - type: web
+    name: prostim
+    runtime: node
+    plan: free
+    rootDir: site
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: prostim-db
+          property: connectionString

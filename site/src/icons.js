@@ -1,0 +1,50 @@
+const filled = 'fill="currentColor" stroke="none"';
+
+const paths = {
+  home: '<path d="M3.5 10.2 12 3.5l8.5 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-4.2v-6h-5.6v6H5A1.5 1.5 0 0 1 3.5 19z"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  inbox: '<path d="M20.5 11.5a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1.4-4.4A8.5 8.5 0 1 1 20.5 11.5z"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+  up: '<path d="M12 19.5v-15M5.5 11 12 4.5 18.5 11"/>',
+  comment: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v10a1.5 1.5 0 0 1-1.5 1.5H9l-5 4z"/>',
+  bookmark: '<path d="M6.5 3.5h11a1 1 0 0 1 1 1v16l-6.5-4.2-6.5 4.2v-16a1 1 0 0 1 1-1z"/>',
+  share: '<path d="M13.5 4.5 21 11.2l-7.5 6.6v-3.9c-5 0-8.2 1.6-10.5 5.4.8-5.8 3.9-9.8 10.5-10.5z"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  chevronLeft: '<path d="m15 5-7 7 7 7"/>',
+  chevronRight: '<path d="m9 5 7 7-7 7"/>',
+  chevronUp: '<path d="m5 15 7-7 7 7"/>',
+  chevronDown: '<path d="m5 9 7 7 7-7"/>',
+  send: '<path d="M20.5 3.5 10 14M20.5 3.5l-6.5 17-4-6.5-6.5-4z"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  file: '<path d="M14 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3.5V8h4.5"/>',
+  doc: '<path d="M14 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3.5V8h4.5M9 12.5h6M9 16h4"/>',
+  folder: '<path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5V18a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 18z"/>',
+  code: '<path d="m8.5 8-4 4 4 4M15.5 8l4 4-4 4M13.5 5l-3 14"/>',
+  sparkle: `<path d="M11 2.5c.6 4.8 2.7 6.9 7.5 7.5-4.8.6-6.9 2.7-7.5 7.5-.6-4.8-2.7-6.9-7.5-7.5 4.8-.6 6.9-2.7 7.5-7.5z" ${filled}/><path d="M18.5 14.5c.2 1.9 1.1 2.8 3 3-1.9.2-2.8 1.1-3 3-.2-1.9-1.1-2.8-3-3 1.9-.2 2.8-1.1 3-3z" ${filled}/>`,
+  gamepad: '<path d="M7.5 7h9a5 5 0 0 1 4.9 6l-.6 3.2a2.4 2.4 0 0 1-4.1 1.2L14.5 15h-5l-2.2 2.4a2.4 2.4 0 0 1-4.1-1.2L2.6 13a5 5 0 0 1 4.9-6z"/><path d="M8 10v3M6.5 11.5h3M15.5 11h.01M17.5 12.5h.01"/>',
+  rocket: '<path d="M14.5 4.5c2.5-1 5-1 5-1s0 2.5-1 5L12 15l-3-3z"/><path d="M9 12 6 11.5l2.5-3h4M12 15l.5 3 3-2.5v-4M6.5 17.5c-1 1-1.5 3-1.5 3s2-.5 3-1.5"/>',
+  coins: '<ellipse cx="12" cy="6.5" rx="6.5" ry="2.8"/><path d="M5.5 6.5v5.5c0 1.5 2.9 2.8 6.5 2.8s6.5-1.3 6.5-2.8V6.5M5.5 12v5.5c0 1.5 2.9 2.8 6.5 2.8s6.5-1.3 6.5-2.8V12"/>',
+  pen: '<path d="M4.5 19.5h4l10-10a2.1 2.1 0 0 0-3-3l-10 10z"/><path d="m13.5 8.5 2 2"/>',
+  download: '<path d="M12 3.5v11M7.5 10.5 12 15l4.5-4.5M5 20h14"/>',
+  external: '<path d="M14 4.5h5.5V10M19.5 4.5 11 13M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/>',
+  grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  users: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5a6.5 6.5 0 0 1 13 0M16 5.3a3.5 3.5 0 0 1 0 6.4M18 14a6.5 6.5 0 0 1 3.5 5.5"/>',
+  box: '<path d="M20 7.5 12 3.5l-8 4v9l8 4 8-4z"/><path d="m4 7.5 8 4 8-4M12 11.5v9"/>',
+  film: '<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="m10 9 5 3-5 3z"/>',
+  image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-4.5-4.5-8.5 8"/>',
+  text: '<path d="M5 6.5h14M5 12h14M5 17.5h9"/>',
+  tag: '<path d="M3.5 12.2V5A1.5 1.5 0 0 1 5 3.5h7.2l8.3 8.3-8.7 8.7z"/><circle cx="8.5" cy="8.5" r="1.5"/>',
+  branch: '<circle cx="6.5" cy="5.5" r="2"/><circle cx="6.5" cy="18.5" r="2"/><circle cx="17.5" cy="8" r="2"/><path d="M6.5 7.5v9M17.5 10c0 3.5-4 4-11 6.5"/>',
+  drive: '<path d="M12 4.5 20.5 19h-17z"/><path d="M8 12.5h8"/>',
+  cloud: '<path d="M7 18.5a4.5 4.5 0 1 1 .9-8.9A6 6 0 0 1 19.4 11 3.8 3.8 0 0 1 18 18.5z"/>',
+  play: `<path d="M8 5.5v13l10.5-6.5z" ${filled}/>`,
+  pin: '<path d="M9 4.5h6l-1 5 3 3v1.5H7v-1.5l3-3z"/><path d="M12 14v6"/>'
+};
+
+export function icon(name, className = '') {
+  return `<svg class="i${className ? ` ${className}` : ''}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || ''}</svg>`;
+}
+
+export const logoMark = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M17 18h30v28H36V29h-8v17H17z" fill="currentColor"/></svg>';

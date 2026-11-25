@@ -1,0 +1,9 @@
+.DS_Store
+.env*
+*.zip
+node_modules/
+.claude/
+site/data/
+site/dist/
+site/preview/
+site/.openai/

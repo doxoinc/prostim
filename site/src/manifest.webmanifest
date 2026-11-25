@@ -1,0 +1,9 @@
+{
+  "name": "про.стим",
+  "short_name": "про.стим",
+  "lang": "ru",
+  "start_url": "/#/feed",
+  "display": "standalone",
+  "background_color": "#0c0e0d",
+  "theme_color": "#0c0e0d"
+}
