@@ -73,12 +73,18 @@ export const demoThreads = [
 
 // Studio facts for the Steam tab. Fill steamUrl and team to show real people and the Steam page.
 export const studio = {
-  name: 'Warcuda Games',
+  name: 'Warkuda Games',
   country: 'Молдова',
   tagline: 'Издаём игры независимых авторов в Steam и ведём расчёты за них',
-  steamUrl: '',
+  steamUrl: 'https://store.steampowered.com/curator/45969311-Warkuda-Games/',
+  links: [
+    ['Куратор в Steam', 'https://store.steampowered.com/curator/45969311-Warkuda-Games/'],
+    ['Разработчик на SteamDB', 'https://steamdb.info/developer/Warkuda/']
+  ],
   contact: 'Чат «про.стим · Steam» во «Входящих»',
-  team: []
+  team: [
+    { name: 'Eduard Ivanov', role: 'Основатель, владелец студии', initials: 'EI', color: '#9fcaff', link: 'https://store.steampowered.com/curator/45969311-Warkuda-Games/' }
+  ]
 };
 
 export const publisherServices = [

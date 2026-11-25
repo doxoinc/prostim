@@ -53,7 +53,8 @@ test('normal app entry renders all main sections and direct project links', () =
   assert.match(app.elements.get('main').innerHTML, /Выпускаем твою игру/);
   assert.match(app.elements.get('main').innerHTML, /Дорожная карта/);
   app.navigate('#/steam/studio');
-  assert.match(app.elements.get('main').innerHTML, /Warcuda Games/);
+  assert.match(app.elements.get('main').innerHTML, /Warkuda Games/);
+  assert.match(app.elements.get('main').innerHTML, /Eduard Ivanov/);
   app.navigate('#/steam/discussions');
   assert.match(app.elements.get('main').innerHTML, /Обсуждения Steam/);
   app.navigate('#/ai/connections');

@@ -867,7 +867,7 @@ function steamLinkHtml(className = 'btn btn-glass') {
 
 function studioCardHtml() {
   const official = online ? userByHandle('prostim') : null;
-  return `<section class="block studio-card"><div class="studio-head"><span class="studio-mark">${logoMark}</span><div><h2>${escapeHtml(studio.name)}</h2><p>${escapeHtml(studio.tagline)} · ${escapeHtml(studio.country)}</p></div></div><div class="studio-facts"><span>${icon('check')} Работаем по договору</span><span>${icon('coins')} Счёт и выплаты в Молдове</span><span>${icon('users')} Отвечаем в чате</span></div><div class="hero-actions">${steamLinkHtml('btn btn-ghost')}<a class="btn btn-ghost" href="#/steam/studio">${icon('users')} Кто мы</a>${official ? `<a class="btn btn-ghost" href="#/inbox/prostim">${icon('inbox')} Написать</a>` : ''}</div></section>`;
+  return `<section class="block studio-card"><div class="studio-head"><span class="studio-mark">${logoMark}</span><div><h2>${escapeHtml(studio.name)}</h2><p>${escapeHtml(studio.tagline)} · ${escapeHtml(studio.country)}</p></div></div><div class="studio-facts"><span>${icon('check')} Работаем по договору</span><span>${icon('coins')} Счёт и выплаты в Молдове</span><span>${icon('users')} Отвечаем в чате</span></div>${studio.team.length ? `<div class="studio-people">${studio.team.map(person => `<span>${avatar(person)}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role)}</small></span>`).join('')}</div>` : ''}<div class="hero-actions">${steamLinkHtml('btn btn-ghost')}<a class="btn btn-ghost" href="#/steam/studio">${icon('users')} Кто мы</a>${official ? `<a class="btn btn-ghost" href="#/inbox/prostim">${icon('inbox')} Написать</a>` : ''}</div></section>`;
 }
 
 function servicesHtml() {
@@ -888,9 +888,10 @@ function faqHtml() {
 
 function renderStudio() {
   const team = studio.team.length
-    ? `<div class="team-grid">${studio.team.map(person => `<div class="team-card">${avatar(person, 'xl')}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role || '')}</small>${person.link && safeUrl(person.link) ? `<a class="text-link" href="${escapeHtml(safeUrl(person.link))}" target="_blank" rel="noopener noreferrer">Профиль</a>` : ''}</div>`).join('')}</div>`
+    ? `<div class="team-grid">${studio.team.map(person => `<div class="team-card">${avatar(person, 'xl')}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role || '')}</small>${person.link && safeUrl(person.link) ? `<a class="text-link" href="${escapeHtml(safeUrl(person.link))}" target="_blank" rel="noopener noreferrer">Steam</a>` : ''}</div>`).join('')}</div>`
     : `<p class="muted-line">Карточки команды появятся здесь: имя, роль и ссылка на профиль.</p>`;
-  return `${studioCardHtml()}<section class="block"><h2 class="block-title">Команда</h2>${team}</section><section class="block"><h2 class="block-title">Зачем мы это делаем</h2><div class="why-grid"><div><b>Автору</b><p>Выпустить игру в Steam без своей компании за границей: договор, страница, билд и выплаты берёт на себя издатель.</p></div><div><b>Игрокам</b><p>Видеть игры до релиза в ленте, пробовать демо и поддерживать авторов.</p></div><div><b>Нам</b><p>Доля от продаж по договору и платные услуги, если автору они нужны. Других скрытых платежей нет.</p></div></div></section>${roadmapHtml()}`;
+  const links = (studio.links || []).map(([label, url]) => safeUrl(url) ? `<a class="ext-link" href="${escapeHtml(safeUrl(url))}" target="_blank" rel="noopener noreferrer">${icon('external')} ${escapeHtml(label)}</a>` : '').join('');
+  return `${studioCardHtml()}<section class="block"><h2 class="block-title">Команда</h2>${team}${links ? `<div class="studio-links">${links}</div>` : ''}</section><section class="block"><h2 class="block-title">Зачем мы это делаем</h2><div class="why-grid"><div><b>Автору</b><p>Выпустить игру в Steam без своей компании за границей: договор, страница, билд и выплаты берёт на себя издатель.</p></div><div><b>Игрокам</b><p>Видеть игры до релиза в ленте, пробовать демо и поддерживать авторов.</p></div><div><b>Нам</b><p>Доля от продаж по договору и платные услуги, если автору они нужны. Других скрытых платежей нет.</p></div></div></section>${roadmapHtml()}`;
 }
 
 function renderSteam(page) {
