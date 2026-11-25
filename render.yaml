@@ -2,6 +2,7 @@
 databases:
   - name: prostim-db
     plan: free
+    region: frankfurt
     databaseName: prostim
     user: prostim
 
@@ -10,6 +11,7 @@ services:
     name: prostim
     runtime: node
     plan: free
+    region: frankfurt
     rootDir: site
     buildCommand: npm ci --omit=dev
     startCommand: npm start
