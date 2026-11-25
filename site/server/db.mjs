@@ -15,10 +15,11 @@ const empty = () => ({
   devices: {},
   workspaces: {},
   tasks: {},
-  pairCodes: {}
+  pairCodes: {},
+  uploads: {}
 });
 
-const uploadTypes = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+export const uploadTypes = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4', webm: 'video/webm', mov: 'video/mp4' };
 
 // The pilot keeps the whole state as one JSON document: a file locally, a Postgres row on hosting
 // where the disk is wiped on every restart. Writes are debounced; uploads are stored next to it.

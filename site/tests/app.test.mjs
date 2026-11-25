@@ -50,7 +50,10 @@ test('normal app entry renders all main sections and direct project links', () =
   const app = createApp();
   assert.match(app.elements.get('main').innerHTML, /Лесной свет/);
   app.navigate('#/steam');
-  assert.match(app.elements.get('main').innerHTML, /Публикуем игры/);
+  assert.match(app.elements.get('main').innerHTML, /Выпускаем твою игру/);
+  assert.match(app.elements.get('main').innerHTML, /Дорожная карта/);
+  app.navigate('#/steam/studio');
+  assert.match(app.elements.get('main').innerHTML, /Warcuda Games/);
   app.navigate('#/steam/discussions');
   assert.match(app.elements.get('main').innerHTML, /Обсуждения Steam/);
   app.navigate('#/ai/connections');

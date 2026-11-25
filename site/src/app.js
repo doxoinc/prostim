@@ -1,4 +1,4 @@
-import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads } from './data.js';
+import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq } from './data.js';
 import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels } from './trust.js';
@@ -41,7 +41,9 @@ let renderedView = '';
 let workspacePane = 'assistant';
 let openStep = steamSteps[0].id;
 let authMode = 'register';
-let publishImages = [];
+let publishMedia = [];
+let feedMuted = true;
+let avatarDraft = null;
 let liveEvents = null;
 const reviewsCache = new Map();
 const calculator = { price: 15, copiesIndex: 5, share: 30 };
@@ -202,9 +204,14 @@ function isCompact() {
   return Boolean(window.matchMedia?.('(max-width: 1100px)').matches);
 }
 
+function uploadUrl(value) {
+  return /^\/uploads\/[\w.-]+$/.test(value || '') ? value : '';
+}
+
 function avatar(person, className = '') {
   const color = /^#[0-9a-f]{6}$/i.test(person?.color || '') ? person.color : '#cfd9c4';
-  return `<span class="avatar ${className}" style="--avatar:${color}">${escapeHtml(person?.initials || (person?.name || 'Я').slice(0, 1))}</span>`;
+  const photo = uploadUrl(person?.avatar);
+  return `<span class="avatar ${className} ${photo ? 'photo' : ''}" style="--avatar:${color}">${photo ? `<img src="${photo}" alt="" loading="lazy">` : escapeHtml(person?.initials || (person?.name || 'Я').slice(0, 1))}</span>`;
 }
 
 function stars(value) {
@@ -396,7 +403,10 @@ function afterRender(view, changedPage, current) {
   if (typeof IntersectionObserver === 'function' && feed.querySelectorAll) {
     feed.classList.add('io');
     feedObserver = new IntersectionObserver(entries => {
-      for (const entry of entries) entry.target.classList.toggle('in-view', entry.isIntersecting);
+      for (const entry of entries) {
+        entry.target.classList.toggle('in-view', entry.isIntersecting);
+        syncFeedVideo(entry.target);
+      }
     }, { root: feed, threshold: 0.55 });
     feed.querySelectorAll('.feed-item').forEach(item => feedObserver.observe(item));
   }
@@ -404,20 +414,42 @@ function afterRender(view, changedPage, current) {
 
 /* Scenes: covers drawn from HTML and CSS, or uploaded screenshots */
 
+function projectMedia(project) {
+  const list = project.media || (project.images || []).map(url => ({ type: 'image', url }));
+  return list.filter(item => uploadUrl(item.url) && ['image', 'video'].includes(item.type)).slice(0, 8);
+}
+
 function projectImages(project) {
-  return (project.images || []).filter(src => /^\/uploads\/[\w.-]+$/.test(src)).slice(0, 4);
+  return projectMedia(project).filter(item => item.type === 'image').map(item => item.url);
+}
+
+function syncFeedVideo(item) {
+  const video = item?.querySelector?.('video[data-feed-video]');
+  if (!video) return;
+  video.muted = feedMuted;
+  if (item.classList.contains('in-view') && !modal.open) video.play?.().catch(() => {}); else video.pause?.();
+}
+
+function mediaHtml(item, title, mode) {
+  if (item.type === 'video') {
+    const poster = uploadUrl(item.poster);
+    if (mode === 'still') return poster ? `<div class="scene photo upload"><img src="${poster}" alt="${escapeHtml(title)}" loading="lazy" draggable="false"><span class="play-mark">${icon('play')}</span></div>` : `<div class="scene photo upload"><video src="${item.url}#t=0.5" muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
+    if (mode === 'player') return `<div class="scene photo upload player"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} controls playsinline preload="metadata"></video></div>`;
+    return `<div class="scene photo upload video"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} muted loop playsinline preload="metadata" data-feed-video></video><button class="sound-btn" data-action="toggle-sound" aria-label="${feedMuted ? 'Включить звук' : 'Выключить звук'}">${feedMuted ? '🔇' : '🔊'}</button></div>`;
+  }
+  return `<div class="scene photo upload"><img src="${item.url}" alt="${escapeHtml(title || 'Скриншот проекта')}" loading="lazy" draggable="false"></div>`;
 }
 
 function slideKinds(project) {
-  const images = projectImages(project);
-  if (images.length) return images.map(() => 'image');
+  const media = projectMedia(project);
+  if (media.length) return media.map(item => item.type);
   const count = Math.max(1, Math.min(3, Number(project.slides) || 1));
   return count === 3 ? ['cover', 'alt', 'feature'] : count === 2 ? ['cover', 'feature'] : ['cover'];
 }
 
-function scene(project, slide = 0) {
-  const images = projectImages(project);
-  if (images.length) return `<div class="scene photo upload"><img src="${escapeHtml(images[Math.min(slide, images.length - 1)])}" alt="${escapeHtml(project.title || 'Скриншот проекта')}" loading="lazy" draggable="false"></div>`;
+function scene(project, slide = 0, mode = 'feed') {
+  const media = projectMedia(project);
+  if (media.length) return mediaHtml(media[Math.min(slide, media.length - 1)], project.title || '', mode);
   const kind = slideKinds(project)[slide] || 'cover';
   const type = ['forest', 'coast', 'board', 'analytics'].includes(project.scene) ? project.scene : 'board';
   if (kind === 'feature') {
@@ -507,6 +539,7 @@ function changeSlide(id, direction) {
   const media = document.querySelector(`.card-media[data-id="${id}"]`);
   if (!media?.classList) { render(); return; }
   media.innerHTML = mediaInner(project);
+  syncFeedVideo(media.closest?.('.feed-item'));
   media.classList.remove('from-left', 'from-right');
   void media.offsetWidth;
   media.classList.add(direction > 0 ? 'from-right' : 'from-left');
@@ -581,7 +614,7 @@ async function toggleFollow(handle, target) {
 /* Search */
 
 function thumbsHtml(list) {
-  return `<div class="thumb-grid">${list.map(project => `<button class="thumb" data-action="open-project" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(project.title)}">${scene(project, 0)}<span class="thumb-title">${escapeHtml(project.title)}</span><span class="thumb-meta">${icon('up')}${voteCount(project)}</span></button>`).join('')}</div>`;
+  return `<div class="thumb-grid">${list.map(project => `<button class="thumb" data-action="open-project" data-id="${escapeHtml(project.id)}" aria-label="${escapeHtml(project.title)}">${scene(project, 0, 'still')}<span class="thumb-title">${escapeHtml(project.title)}</span><span class="thumb-meta">${icon('up')}${voteCount(project)}</span></button>`).join('')}</div>`;
 }
 
 function searchResults() {
@@ -753,9 +786,15 @@ function openTrustInfo(handle) {
   showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp} XP, уровень ${person.level}.</li></ul>${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
 }
 
+function avatarEditInner() {
+  const preview = avatarDraft ? avatarDraft.preview || '' : uploadUrl(me?.avatar);
+  return `<span class="avatar xl ${preview ? 'photo' : ''}" style="--avatar:${me?.color || '#c4f56f'}">${preview ? `<img src="${preview}" alt="">` : escapeHtml(me?.initials || 'Я')}</span><div><label class="btn btn-ghost btn-sm">${icon('image')} ${preview ? 'Другое фото' : 'Загрузить фото'}<input type="file" name="avatar-file" accept="image/*" hidden></label>${preview ? `<button type="button" class="text-link" data-action="remove-avatar">Убрать фото</button>` : ''}<p class="fine">Настоящее фото помогает людям доверять тебе.</p></div>`;
+}
+
 function openEditProfile() {
   if (!me) return;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form></div>`);
+  avatarDraft = null;
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form></div>`);
 }
 
 /* Steam */
@@ -821,19 +860,53 @@ function myApplications() {
   return online ? remote?.applications || [] : state.applications;
 }
 
+function steamLinkHtml(className = 'btn btn-glass') {
+  const url = safeUrl(studio.steamUrl);
+  return url ? `<a class="${className}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon('external')} ${escapeHtml(studio.name)} в Steam</a>` : '';
+}
+
+function studioCardHtml() {
+  const official = online ? userByHandle('prostim') : null;
+  return `<section class="block studio-card"><div class="studio-head"><span class="studio-mark">${logoMark}</span><div><h2>${escapeHtml(studio.name)}</h2><p>${escapeHtml(studio.tagline)} · ${escapeHtml(studio.country)}</p></div></div><div class="studio-facts"><span>${icon('check')} Работаем по договору</span><span>${icon('coins')} Счёт и выплаты в Молдове</span><span>${icon('users')} Отвечаем в чате</span></div><div class="hero-actions">${steamLinkHtml('btn btn-ghost')}<a class="btn btn-ghost" href="#/steam/studio">${icon('users')} Кто мы</a>${official ? `<a class="btn btn-ghost" href="#/inbox/prostim">${icon('inbox')} Написать</a>` : ''}</div></section>`;
+}
+
+function servicesHtml() {
+  return `<section class="block"><h2 class="block-title">Что делает издатель</h2><div class="service-grid">${publisherServices.map(item => `<div class="service">${icon(item.icon)}<b>${item.title}</b><p>${item.text}</p></div>`).join('')}</div></section>`;
+}
+
+function payoutHtml() {
+  return `<section class="block payout"><h2 class="block-title">Как автор получает деньги</h2><div class="payout-flow">${payoutFlow.map((item, index) => `${index ? `<i class="payout-arrow">${icon('chevronRight')}</i>` : ''}<div class="payout-node">${icon(item.icon)}<b>${item.title}</b><small>${item.text}</small></div>`).join('')}</div><div class="payout-facts">${payoutFacts.map(([value, text]) => `<div><b>${value}</b><small>${text}</small></div>`).join('')}</div><p class="fine">Условия Steam: <a class="text-link inline" href="https://partner.steamgames.com/doc/finance/payments_salesreporting" target="_blank" rel="noopener noreferrer">выплаты и отчёты Steamworks</a>. Налоги и банковские комиссии зависят от договора и банка.</p></section>`;
+}
+
+function roadmapHtml() {
+  return `<section class="block"><h2 class="block-title">Дорожная карта</h2><ol class="roadmap">${roadmap.map(stage => `<li class="${stage.done ? 'done' : ''}"><i>${stage.done ? icon('check') : ''}</i><div><small>${stage.when}</small><b>${stage.title}</b><ul>${stage.items.map(item => `<li>${item}</li>`).join('')}</ul></div></li>`).join('')}</ol><p class="fine">План может меняться — новости публикуем в обсуждениях.</p></section>`;
+}
+
+function faqHtml() {
+  return `<section class="block"><h2 class="block-title">Частые вопросы</h2><div class="faq">${steamFaq.map(([question, answer]) => `<details class="more"><summary>${question}</summary><p>${answer}</p></details>`).join('')}</div></section>`;
+}
+
+function renderStudio() {
+  const team = studio.team.length
+    ? `<div class="team-grid">${studio.team.map(person => `<div class="team-card">${avatar(person, 'xl')}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role || '')}</small>${person.link && safeUrl(person.link) ? `<a class="text-link" href="${escapeHtml(safeUrl(person.link))}" target="_blank" rel="noopener noreferrer">Профиль</a>` : ''}</div>`).join('')}</div>`
+    : `<p class="muted-line">Карточки команды появятся здесь: имя, роль и ссылка на профиль.</p>`;
+  return `${studioCardHtml()}<section class="block"><h2 class="block-title">Команда</h2>${team}</section><section class="block"><h2 class="block-title">Зачем мы это делаем</h2><div class="why-grid"><div><b>Автору</b><p>Выпустить игру в Steam без своей компании за границей: договор, страница, билд и выплаты берёт на себя издатель.</p></div><div><b>Игрокам</b><p>Видеть игры до релиза в ленте, пробовать демо и поддерживать авторов.</p></div><div><b>Нам</b><p>Доля от продаж по договору и платные услуги, если автору они нужны. Других скрытых платежей нет.</p></div></div></section>${roadmapHtml()}`;
+}
+
 function renderSteam(page) {
-  const tab = ['documents', 'discussions'].includes(page) ? page : '';
-  const navigation = subnav('steam', [['', 'Обзор'], ['documents', 'Документы'], ['discussions', 'Обсуждения']], tab);
+  const tab = ['studio', 'documents', 'discussions'].includes(page) ? page : '';
+  const navigation = subnav('steam', [['', 'Обзор'], ['studio', 'Студия'], ['documents', 'Документы'], ['discussions', 'Обсуждения']], tab);
+  if (tab === 'studio') return `<div class="page">${navigation}<h1 class="sr-only">Студия ${escapeHtml(studio.name)}</h1>${renderStudio()}</div>`;
   if (tab === 'documents') {
-    return `<div class="page">${navigation}<h1 class="sr-only">Документы Steam</h1><div class="tile-grid">${steamDocuments.map(document => `<button class="doc-tile" data-action="document" data-id="${document.id}"><span class="doc-icon">${icon(document.icon)}</span><span><b>${document.title}</b><small>${document.subtitle}</small></span></button>`).join('')}</div><a class="ext-link" href="https://partner.steamgames.com/doc/home" target="_blank" rel="noopener noreferrer">${icon('external')} Документация Steamworks</a></div>`;
+    return `<div class="page">${navigation}<h1 class="sr-only">Документы Steam</h1><div class="tile-grid">${steamDocuments.map(document => `<button class="doc-tile" data-action="document" data-id="${document.id}"><span class="doc-icon">${icon(document.icon)}</span><span><b>${document.title}</b><small>${document.subtitle}</small></span></button>`).join('')}</div>${faqHtml()}<a class="ext-link" href="https://partner.steamgames.com/doc/home" target="_blank" rel="noopener noreferrer">${icon('external')} Документация Steamworks</a></div>`;
   }
   if (tab === 'discussions') {
     const topics = allTopics();
-    return `<div class="page">${navigation}<div class="page-head"><h1 class="sr-only">Обсуждения Steam</h1><span class="muted-count">${topics.length} тем</span><button class="btn btn-primary btn-sm" data-action="new-topic">${icon('plus')} Тема</button></div><div class="topic-list">${topics.map(topic => `<button class="topic-row" data-action="topic" data-id="${escapeHtml(topic.id)}">${avatar({ initials: (topic.author || '?').slice(0, 1), color: topic.color || (topic.author === 'Вы' ? '#c4f56f' : '#b7d5fa') })}<span class="topic-text"><small>${topic.pinned ? `${icon('pin')} ` : ''}${escapeHtml(topic.category || 'Общее')} · ${escapeHtml(topic.author || '')}${topic.createdAt ? ` · ${timeAgo(topic.createdAt)}` : ''}</small><b>${escapeHtml(topic.title)}</b></span><span class="topic-count">${icon('comment')}${topicReplies(topic).length}</span></button>`).join('')}</div></div>`;
+    return `<div class="page">${navigation}<div class="page-head"><h1 class="sr-only">Обсуждения Steam</h1><span class="muted-count">${topics.length} тем</span><button class="btn btn-primary btn-sm" data-action="new-topic">${icon('plus')} Тема</button></div><div class="topic-list">${topics.map(topic => `<button class="topic-row" data-action="topic" data-id="${escapeHtml(topic.id)}">${avatar({ initials: (topic.author || '?').slice(0, 1), color: topic.color || (topic.author === 'Вы' ? '#c4f56f' : '#b7d5fa'), avatar: topic.avatar })}<span class="topic-text"><small>${topic.pinned ? `${icon('pin')} ` : ''}${escapeHtml(topic.category || 'Общее')} · ${escapeHtml(topic.author || '')}${topic.createdAt ? ` · ${timeAgo(topic.createdAt)}` : ''}</small><b>${escapeHtml(topic.title)}</b></span><span class="topic-count">${icon('comment')}${topicReplies(topic).length}</span></button>`).join('')}</div></div>`;
   }
   const applications = myApplications();
   const mine = applications.length ? `<section class="block my-apps"><h2 class="block-title">Мои заявки</h2>${applications.slice(0, 3).map(application => `<a class="app-row" href="#/me/applications"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || 'Черновик')} · ${escapeHtml(application.stage || '')}</small></span>${icon('chevronRight')}</a>`).join('')}</section>` : '';
-  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art">${scene(demoProjects[0], 0)}</div><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} Паблишинг</span><h1>Публикуем игры <span>в Steam</span></h1><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button><a class="btn btn-glass" href="#/steam/documents">Условия</a></div></div></section>${mine}<section class="block"><h2 class="block-title">Как это работает</h2>${stepsHtml()}</section><div class="blocks-2">${readinessHtml()}${calculatorHtml()}</div></div>`;
+  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art">${scene(demoProjects[0], 0)}</div><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span>в Steam</span></h1><p class="hero-lead">Договор, страница, билд, запуск и выплаты — через издателя в Молдове. Права на игру остаются у тебя.</p><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml()}<a class="btn btn-glass" href="#/steam/studio">Кто мы</a></div></div></section>${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
 }
 
 /* AI world */
@@ -1276,9 +1349,11 @@ function openProject(id) {
   const remove = mine && online ? `<button class="btn btn-ghost btn-square" data-action="delete-project" data-id="${projectId}" aria-label="Удалить проект">${icon('close')}</button>` : '';
   const more = project.description && project.description !== project.summary ? `<details class="more"><summary>Подробнее</summary><p>${escapeHtml(project.description)}</p></details>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
-  const images = projectImages(project);
-  const gallery = images.length > 1 ? `<div class="sheet-gallery">${images.map(src => `<img src="${escapeHtml(src)}" alt="" loading="lazy">`).join('')}</div>` : '';
-  showDialog(`<div class="sheet-media">${scene(project, 0)}</div><div class="sheet-body"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title">${escapeHtml(project.title)}</h2><p class="lead">${escapeHtml(project.summary)}</p><div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>${more}${gallery}<div class="sheet-actions">${primary}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div>`, { kind: 'project', id });
+  const media = projectMedia(project);
+  const gallery = media.length > 1 ? `<div class="sheet-gallery">${media.slice(1).map(item => item.type === 'video' ? `<video src="${item.url}" ${uploadUrl(item.poster) ? `poster="${item.poster}"` : ''} controls playsinline preload="metadata"></video>` : `<img src="${item.url}" alt="" loading="lazy">`).join('')}</div>` : '';
+  const trailer = safeUrl(project.video) ? `<a class="btn btn-ghost" href="${escapeHtml(safeUrl(project.video))}" target="_blank" rel="noopener noreferrer">${icon('play')} Трейлер</a>` : '';
+  document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
+  showDialog(`<div class="sheet-media">${scene(project, 0, 'player')}</div><div class="sheet-body"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title">${escapeHtml(project.title)}</h2><p class="lead">${escapeHtml(project.summary)}</p><div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>${more}${gallery}<div class="sheet-actions">${primary}${trailer}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div>`, { kind: 'project', id });
 }
 
 function openComments(id) {
@@ -1291,30 +1366,89 @@ function chipRadio(name, options, checked) {
 }
 
 function imagePickerHtml() {
-  return `<div class="image-pick">${publishImages.map((src, index) => `<span class="image-thumb"><img src="${src}" alt=""><button type="button" data-action="remove-image" data-index="${index}" aria-label="Убрать картинку">${icon('close')}</button></span>`).join('')}${publishImages.length < 4 ? `<label class="image-add">${icon('image')}<small>${publishImages.length ? 'Ещё' : 'Скриншоты'}</small><input type="file" name="images" accept="image/*" multiple></label>` : ''}</div>`;
+  const items = publishMedia.map((item, index) => `<span class="image-thumb ${index === 0 ? 'cover' : ''}">${item.type === 'video' ? `<video src="${item.preview}" muted playsinline preload="metadata"></video><span class="play-mark small">${icon('play')}</span>` : `<img src="${item.preview}" alt="">`}${index === 0 ? '<em>обложка</em>' : `<button type="button" class="make-cover" data-action="media-cover" data-index="${index}" aria-label="Сделать обложкой">${icon('up')}</button>`}<button type="button" data-action="remove-image" data-index="${index}" aria-label="Убрать">${icon('close')}</button></span>`).join('');
+  return `<div class="image-pick">${items}${publishMedia.length < 8 ? `<label class="image-add">${icon('image')}<small>${publishMedia.length ? 'Ещё' : 'Фото и видео'}</small><input type="file" name="images" accept="image/*,video/mp4,video/quicktime,video/webm" multiple></label>` : ''}</div>`;
 }
 
-function openPublish() {
-  if (needLogin('Чтобы публиковать проекты, войди в аккаунт')) return;
-  publishImages = [];
-  const covers = [['board', 'Интерфейс'], ['analytics', 'Данные'], ['forest', 'Лес'], ['coast', 'Море']];
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Новый проект</h2><form id="publish-form" class="form">${online ? `<div class="image-pick-wrap">${imagePickerHtml()}</div><p class="fine">До 4 картинок — они станут слайдами. Без картинок возьмём обложку:</p>` : ''}<div class="cover-picker" role="radiogroup" aria-label="Обложка">${covers.map(([value, label], index) => `<label class="cover-opt"><input type="radio" name="scene" value="${value}" ${index === 0 ? 'checked' : ''}><span class="cover-thumb">${scene({ scene: value, slides: 1, category: 'apps', tags: [] }, 0)}</span><small>${label}</small></label>`).join('')}</div><input name="title" maxlength="80" placeholder="Название" aria-label="Название" required><input name="summary" maxlength="160" placeholder="Коротко: что это и для кого" aria-label="Короткое описание" required>${chipRadio('category', Object.entries(categoryNames).map(([id, label]) => [id, label, categoryIcons[id]]), 'apps')}<input name="url" type="url" placeholder="Ссылка · необязательно" aria-label="Ссылка на проект"><input name="tags" maxlength="120" placeholder="Теги через запятую: Web, Прототип" aria-label="Теги"><details class="more"><summary>Описание</summary><textarea name="description" rows="3" maxlength="2400" placeholder="Идея и текущий этап" aria-label="Подробное описание"></textarea></details><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('send')} Опубликовать</button></form></div>`, { kind: 'publish' });
-}
-
-async function resizeImage(file) {
+async function imageToBlob(file, maxSide = 1600, square = false) {
   if (!file.type.startsWith('image/')) throw new Error('Это не картинка');
   const url = URL.createObjectURL(file);
   try {
     const image = await new Promise((resolve, reject) => { const element = new Image(); element.onload = () => resolve(element); element.onerror = () => reject(new Error('Не удалось открыть картинку')); element.src = url; });
-    const scale = Math.min(1, 1440 / Math.max(image.naturalWidth, image.naturalHeight));
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    const sourceWidth = square ? side : image.naturalWidth;
+    const sourceHeight = square ? side : image.naturalHeight;
+    const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.84);
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    canvas.getContext('2d').drawImage(image, (image.naturalWidth - sourceWidth) / 2, (image.naturalHeight - sourceHeight) / 2, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+    return await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Не удалось сжать картинку')), 'image/jpeg', 0.85));
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+async function videoPoster(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = url;
+    await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = () => reject(new Error('no preview')); setTimeout(resolve, 5000); });
+    video.currentTime = Math.min(0.5, (video.duration || 1) / 3);
+    await new Promise(resolve => { video.onseeked = resolve; setTimeout(resolve, 2500); });
+    if (!video.videoWidth) return null;
+    const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    return await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function addPublishFiles(fileList) {
+  for (const file of Array.from(fileList).slice(0, 8 - publishMedia.length)) {
+    try {
+      if (file.type.startsWith('video/')) {
+        if (file.size > 40 * 1024 * 1024) { toast('Видео больше 40 МБ — сожми его или дай ссылку на YouTube'); continue; }
+        publishMedia.push({ type: 'video', blob: file, preview: URL.createObjectURL(file), poster: await videoPoster(file) });
+      } else {
+        const blob = await imageToBlob(file);
+        publishMedia.push({ type: 'image', blob, preview: URL.createObjectURL(blob) });
+      }
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  const wrap = modal.querySelector?.('.image-pick-wrap');
+  if (wrap) wrap.innerHTML = imagePickerHtml();
+}
+
+async function uploadBlob(blob) {
+  const response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Ошибка загрузки ${response.status}`);
+  return data.url;
+}
+
+function clearPublishMedia() {
+  for (const item of publishMedia) URL.revokeObjectURL(item.preview);
+  publishMedia = [];
+}
+
+function openPublish() {
+  if (needLogin('Чтобы публиковать проекты, войди в аккаунт')) return;
+  clearPublishMedia();
+  const covers = [['board', 'Интерфейс'], ['analytics', 'Данные'], ['forest', 'Лес'], ['coast', 'Море']];
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Новый проект</h2><form id="publish-form" class="form">${online ? `<div class="image-pick-wrap">${imagePickerHtml()}</div><p class="fine">До 8 фото и видео (видео до 40 МБ) — они станут слайдами, первое — обложка. Без них возьмём рисунок:</p>` : ''}<div class="cover-picker" role="radiogroup" aria-label="Обложка">${covers.map(([value, label], index) => `<label class="cover-opt"><input type="radio" name="scene" value="${value}" ${index === 0 ? 'checked' : ''}><span class="cover-thumb">${scene({ scene: value, slides: 1, category: 'apps', tags: [] }, 0)}</span><small>${label}</small></label>`).join('')}</div><input name="title" maxlength="80" placeholder="Название" aria-label="Название" required><input name="summary" maxlength="160" placeholder="Коротко: что это и для кого" aria-label="Короткое описание" required>${chipRadio('category', Object.entries(categoryNames).map(([id, label]) => [id, label, categoryIcons[id]]), 'apps')}<input name="url" type="url" placeholder="Ссылка · необязательно" aria-label="Ссылка на проект">${online ? '<input name="video" type="url" placeholder="Трейлер на YouTube, VK или Steam · необязательно" aria-label="Ссылка на трейлер">' : ''}<input name="tags" maxlength="120" placeholder="Теги через запятую: Web, Прототип" aria-label="Теги"><details class="more"><summary>Описание</summary><textarea name="description" rows="3" maxlength="2400" placeholder="Идея и текущий этап" aria-label="Подробное описание"></textarea></details><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('send')} Опубликовать</button></form></div>`, { kind: 'publish' });
 }
 
 function openApplication() {
@@ -1645,8 +1779,22 @@ document.addEventListener('click', async event => {
       render();
       toast('Проект удалён');
     } catch (error) { toast(error.message); }
+  } else if (action === 'toggle-sound') {
+    feedMuted = !feedMuted;
+    document.querySelectorAll('video[data-feed-video]').forEach(video => { video.muted = feedMuted; });
+    document.querySelectorAll('.sound-btn').forEach(button => { button.textContent = feedMuted ? '🔇' : '🔊'; button.setAttribute('aria-label', feedMuted ? 'Включить звук' : 'Выключить звук'); });
+  } else if (action === 'media-cover') {
+    const [item] = publishMedia.splice(Number(target.dataset.index), 1);
+    publishMedia.unshift(item);
+    const wrap = modal.querySelector?.('.image-pick-wrap');
+    if (wrap) wrap.innerHTML = imagePickerHtml();
+  } else if (action === 'remove-avatar') {
+    avatarDraft = { url: '' };
+    const holder = modal.querySelector?.('.avatar-edit');
+    if (holder) holder.innerHTML = avatarEditInner();
   } else if (action === 'remove-image') {
-    publishImages.splice(Number(target.dataset.index), 1);
+    const [removed] = publishMedia.splice(Number(target.dataset.index), 1);
+    if (removed) URL.revokeObjectURL(removed.preview);
     const wrap = modal.querySelector?.('.image-pick-wrap');
     if (wrap) wrap.innerHTML = imagePickerHtml();
   } else if (action === 'copy') copyText(target.dataset.copy || '');
@@ -1729,7 +1877,15 @@ document.addEventListener('submit', async event => {
     if (online) {
       if (submit) { submit.disabled = true; submit.textContent = 'Публикуем…'; }
       try {
-        const { project } = await apiCall('POST', '/api/projects', { ...fields, images: publishImages });
+        const media = [];
+        for (const [index, item] of publishMedia.entries()) {
+          if (submit) submit.textContent = `Загружаем ${index + 1} из ${publishMedia.length}…`;
+          const url = item.url || (item.url = await uploadBlob(item.blob));
+          const poster = item.type === 'video' && item.poster ? item.posterUrl || (item.posterUrl = await uploadBlob(item.poster)) : '';
+          media.push({ url, ...(poster ? { poster } : {}) });
+        }
+        if (submit) submit.textContent = 'Публикуем…';
+        const { project } = await apiCall('POST', '/api/projects', { ...fields, media, video: value('video') });
         remote.projects.unshift(project);
       } catch (error) {
         formError(form, error.message);
@@ -1740,7 +1896,7 @@ document.addEventListener('submit', async event => {
       state.projects.unshift({ id: newId('local'), ...fields, tags: tags.length ? tags : ['Новый проект'], author: 'Вы', initials: 'Я', handle: 'me', color: '#c4f56f', votes: 0, createdAt: Date.now(), slides: 1, comments: [] });
       persist();
     }
-    publishImages = [];
+    clearPublishMedia();
     feedCategory = 'all';
     feedScrollTop = 0;
     go('#/feed');
@@ -1825,7 +1981,10 @@ document.addEventListener('submit', async event => {
     modal.querySelector?.('#demo-task-form input')?.focus?.();
   } else if (form.id === 'profile-form') {
     try {
-      const result = await apiCall('PATCH', '/api/me', { name: value('name'), bio: value('bio') });
+      const patch = { name: value('name'), bio: value('bio') };
+      if (avatarDraft) patch.avatar = avatarDraft.blob ? await uploadBlob(avatarDraft.blob) : '';
+      const result = await apiCall('PATCH', '/api/me', patch);
+      avatarDraft = null;
       updateUser(result.me);
       closeDialog();
       render();
@@ -1907,12 +2066,14 @@ document.addEventListener('change', async event => {
   else if (target.name === 'task-mode') ai.mode = target.value;
   else if (target.name === 'task-engine') { ai.engine[route().extra] = target.value; renderKeepingInput(); }
   else if (target.name === 'task-continue') ai.continueChat = target.checked;
-  else if (target.name === 'images' && target.files) {
-    for (const file of Array.from(target.files).slice(0, 4 - publishImages.length)) {
-      try { publishImages.push(await resizeImage(file)); } catch (error) { toast(error.message); }
-    }
-    const wrap = modal.querySelector?.('.image-pick-wrap');
-    if (wrap) wrap.innerHTML = imagePickerHtml();
+  else if (target.name === 'images' && target.files) await addPublishFiles(target.files);
+  else if (target.name === 'avatar-file' && target.files?.[0]) {
+    try {
+      const blob = await imageToBlob(target.files[0], 400, true);
+      avatarDraft = { blob, preview: URL.createObjectURL(blob) };
+      const holder = modal.querySelector?.('.avatar-edit');
+      if (holder) holder.innerHTML = avatarEditInner();
+    } catch (error) { toast(error.message); }
   }
 });
 
@@ -1959,6 +2120,10 @@ document.addEventListener('keydown', event => {
 });
 
 modal.addEventListener('click', event => { if (event.target === modal) closeDialog(); });
+modal.addEventListener('close', () => {
+  modal.querySelectorAll?.('video').forEach(video => video.pause?.());
+  document.querySelectorAll?.('.feed-item.in-view').forEach(syncFeedVideo);
+});
 modal.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
 window.addEventListener('hashchange', () => {
   connectionVersion += 1;

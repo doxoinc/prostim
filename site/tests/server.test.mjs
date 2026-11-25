@@ -108,3 +108,28 @@ test('a paired device receives tasks and streams events back to the owner', asyn
   await owner('POST', `/api/workspaces/${workspaceId}/shares`, { handle: 'guest1', role: 'run' });
   assert.equal((await guest('POST', `/api/workspaces/${workspaceId}/tasks`, { prompt: 'x', mode: 'read' })).status, 200);
 });
+
+test('media uploads: owner-only reuse, type sniffing and byte ranges for video', async () => {
+  const dave = client();
+  const eve = client();
+  await dave('POST', '/api/auth/register', { handle: 'dave', name: 'Дэйв', password: 'secret12' });
+  await eve('POST', '/api/auth/register', { handle: 'eve', name: 'Ева', password: 'secret12' });
+  const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: 'dave', password: 'secret12' }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(200, 7)]);
+  const upload = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'video/mp4', Cookie: cookie }, body: mp4 }).then(response => response.json());
+  assert.match(upload.url, /^\/uploads\/v-[\w-]+\.mp4$/);
+  const fake = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'video/mp4', Cookie: cookie }, body: Buffer.from('not a video at all') });
+  assert.equal(fake.status, 400);
+  const form = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'text/plain', Cookie: cookie }, body: 'x' });
+  assert.equal(form.status, 415);
+  const partial = await fetch(`${base}${upload.url}`, { headers: { Range: 'bytes=0-9' } });
+  assert.equal(partial.status, 206);
+  assert.equal(partial.headers.get('content-range'), `bytes 0-9/${mp4.length}`);
+  assert.equal((await partial.arrayBuffer()).byteLength, 10);
+  const stolen = await eve('POST', '/api/projects', { title: 'x', summary: 'y', media: [{ url: upload.url }] });
+  assert.equal(stolen.status, 400, 'another user cannot attach someone else’s upload');
+  const created = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ title: 'Видео', summary: 'Трейлер', media: [{ url: upload.url }], video: 'https://www.youtube.com/watch?v=abc' }) }).then(response => response.json());
+  assert.deepEqual(created.project.media, [{ type: 'video', url: upload.url }]);
+  assert.equal(created.project.video, 'https://www.youtube.com/watch?v=abc');
+});

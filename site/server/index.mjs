@@ -74,7 +74,7 @@ function publicUser(user, stats = userStats()) {
   if (!user) return null;
   const entry = stats.get(user.id) || { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [] };
   return {
-    id: user.id, handle: user.handle, name: user.name, initials: user.initials, color: user.color, bio: user.bio || '',
+    id: user.id, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', bio: user.bio || '',
     createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official),
     projects: entry.projects, followers: entry.followers, following: entry.following, votesReceived: entry.votesReceived,
     ...trustSummary(entry)
@@ -83,7 +83,11 @@ function publicUser(user, stats = userStats()) {
 
 function personRef(userId, fallbackName = 'Гость') {
   const user = D.users[userId];
-  return user ? { name: user.name, handle: user.handle, initials: user.initials, color: user.color } : { name: fallbackName, handle: '', initials: initialsOf(fallbackName), color: '#cfd9c4' };
+  return user ? { name: user.name, handle: user.handle, initials: user.initials, color: user.color, avatar: user.avatar || '' } : { name: fallbackName, handle: '', initials: initialsOf(fallbackName), color: '#cfd9c4', avatar: '' };
+}
+
+function projectMedia(project) {
+  return project.media || (project.images || []).map(url => ({ type: 'image', url }));
 }
 
 function projectView(project, meId) {
@@ -91,9 +95,9 @@ function projectView(project, meId) {
   const voted = Boolean(meId && project.votes.includes(meId));
   return {
     id: project.id, title: project.title, summary: project.summary, description: project.description, category: project.category,
-    url: project.url, scene: project.scene, images: project.images || [], tags: project.tags || [], createdAt: project.createdAt,
-    slides: project.images?.length || project.slides || 1,
-    author: owner.name, handle: owner.handle, initials: owner.initials, color: owner.color,
+    url: project.url, video: project.video || '', scene: project.scene, media: projectMedia(project), images: project.images || [], tags: project.tags || [], createdAt: project.createdAt,
+    slides: projectMedia(project).length || project.slides || 1,
+    author: owner.name, handle: owner.handle, initials: owner.initials, color: owner.color, avatar: owner.avatar || '',
     votes: (project.seedVotes || 0) + project.votes.length - Number(voted),
     comments: project.comments.map(comment => ({ ...personRef(comment.userId, comment.name), text: comment.text, time: comment.time || '', createdAt: comment.createdAt }))
   };
@@ -103,7 +107,7 @@ function topicView(topic) {
   const author = personRef(topic.userId);
   return {
     id: topic.id, title: topic.title, category: topic.category, pinned: topic.pinned, createdAt: topic.createdAt,
-    author: author.name, handle: author.handle, color: author.color,
+    author: author.name, handle: author.handle, color: author.color, avatar: author.avatar,
     replies: topic.replies.map(reply => ({ ...personRef(reply.userId), text: reply.text, createdAt: reply.createdAt }))
   };
 }
@@ -120,7 +124,7 @@ function threadsFor(meId) {
   return [...byOther.entries()].filter(([other]) => D.users[other]).map(([other, list]) => {
     const user = D.users[other];
     return {
-      id: user.handle, handle: user.handle, name: user.name, initials: user.initials, color: user.color, official: Boolean(user.official),
+      id: user.handle, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', official: Boolean(user.official),
       unread: list.filter(message => message.to === meId && message.createdAt > (reads[other] || 0)).length,
       lastAt: list[list.length - 1].createdAt,
       messages: list.map(message => ({ from: message.from === meId ? 'me' : 'them', text: message.text, createdAt: message.createdAt }))
@@ -358,6 +362,7 @@ on('PATCH', '/api/me', async ({ user, body }) => {
     user.initials = initialsOf(name);
   }
   if (body.bio !== undefined) user.bio = cleanText(body.bio, 300);
+  if (body.avatar !== undefined) user.avatar = body.avatar ? ownedUpload(body.avatar, user, 'image').url : '';
   db.save();
   return { me: publicUser(user) };
 });
@@ -393,6 +398,57 @@ function decodeImage(dataUrl) {
   return { bytes, extension: match[1] === 'jpeg' ? 'jpg' : match[1] };
 }
 
+function ownedUpload(url, user, kind = '') {
+  const name = /^\/uploads\/([\w.-]+)$/.exec(String(url || ''))?.[1];
+  const meta = name && D.uploads[name];
+  if (!meta || meta.userId !== user.id) fail(400, 'Файл не найден, загрузи его ещё раз');
+  if (kind && meta.type !== kind) fail(400, 'Неверный тип файла');
+  return { url: `/uploads/${name}`, type: meta.type };
+}
+
+function videoLink(value) {
+  const url = safeHttpUrl(cleanText(value, 300));
+  if (!url) return '';
+  const host = new URL(url).hostname.replace(/^www\.|^m\./, '');
+  return ['youtube.com', 'youtu.be', 'vimeo.com', 'rutube.ru', 'vk.com', 'vkvideo.ru', 'store.steampowered.com', 'twitch.tv'].includes(host) ? url : '';
+}
+
+const uploadLimits = { image: 4 * 1024 * 1024, video: 40 * 1024 * 1024 };
+const uploadLimit = limiter(60, 60 * 60 * 1000);
+
+function sniffMedia(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return ['image', 'jpg'];
+  if (bytes.subarray(0, 4).toString('hex') === '89504e47') return ['image', 'png'];
+  if (bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP') return ['image', 'webp'];
+  if (bytes.subarray(0, 4).toString('hex') === '1a45dfa3') return ['video', 'webm'];
+  if (bytes.subarray(4, 8).toString() === 'ftyp') return ['video', /qt {2}/.test(bytes.subarray(8, 12).toString()) ? 'mov' : 'mp4'];
+  return null;
+}
+
+// Raw upload: the body is the file itself. Only image/* and video/* content types are accepted,
+// which a cross-site form cannot send without a CORS preflight.
+on('POST', '/api/uploads', async ({ user, request }) => {
+  needUser(user);
+  const declared = String(request.headers['content-type'] || '');
+  const kind = declared.startsWith('video/') ? 'video' : declared.startsWith('image/') ? 'image' : fail(415, 'Можно загружать только картинки и видео');
+  if (!uploadLimit(user.id)) fail(429, 'Слишком много загрузок, подожди немного');
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > uploadLimits[kind]) fail(413, kind === 'video' ? 'Видео больше 40 МБ — сожми его или дай ссылку на YouTube' : 'Картинка больше 4 МБ');
+    chunks.push(chunk);
+  }
+  const bytes = Buffer.concat(chunks);
+  const sniffed = sniffMedia(bytes);
+  if (!sniffed || sniffed[0] !== kind) fail(400, kind === 'video' ? 'Нужен MP4, MOV или WebM' : 'Нужна картинка JPEG, PNG или WebP');
+  const name = `${sniffed[0][0]}-${randomUUID().slice(0, 18)}.${sniffed[1]}`;
+  await db.putUpload(name, bytes);
+  D.uploads[name] = { userId: user.id, type: sniffed[0], size: bytes.length, createdAt: Date.now() };
+  db.save();
+  return { url: `/uploads/${name}`, type: sniffed[0] };
+});
+
 on('POST', '/api/projects', async ({ user, request }) => {
   needUser(user);
   const body = await readJson(request, 12 * 1024 * 1024);
@@ -407,11 +463,17 @@ on('POST', '/api/projects', async ({ user, request }) => {
     await db.putUpload(name, bytes);
     images.push(`/uploads/${name}`);
   }
+  const media = images.map(url => ({ type: 'image', url }));
+  for (const item of Array.isArray(body.media) ? body.media.slice(0, 8) : []) {
+    const upload = ownedUpload(item?.url, user);
+    const poster = item?.poster && upload.type === 'video' ? ownedUpload(item.poster, user, 'image').url : '';
+    media.push({ type: upload.type, url: upload.url, ...(poster ? { poster } : {}) });
+  }
   const project = {
     id, ownerId: user.id, title, summary, description: cleanText(body.description, 2400),
     category: ['games', 'apps', 'tools'].includes(body.category) ? body.category : 'apps',
     url: safeHttpUrl(cleanText(body.url, 500)), scene: ['forest', 'coast', 'board', 'analytics'].includes(body.scene) ? body.scene : 'board',
-    slides: 1, images, tags: (Array.isArray(body.tags) ? body.tags : []).map(tag => cleanText(tag, 24)).filter(Boolean).slice(0, 5),
+    slides: 1, images: media.filter(item => item.type === 'image').map(item => item.url), media, video: videoLink(body.video), tags: (Array.isArray(body.tags) ? body.tags : []).map(tag => cleanText(tag, 24)).filter(Boolean).slice(0, 5),
     createdAt: Date.now(), seedVotes: 0, votes: [], saves: [], comments: []
   };
   if (!project.tags.length) project.tags = ['Новый проект'];
@@ -814,7 +876,7 @@ const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'DENY',
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src 'self' https://api.github.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; media-src 'self' blob:; connect-src 'self' https://api.github.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 };
 
 const server = http.createServer(async (request, response) => {
@@ -827,9 +889,9 @@ const server = http.createServer(async (request, response) => {
     if (!route) return sendJson(response, 404, { error: 'Не найдено' });
     try {
       const isAgent = pathname.startsWith('/api/agent/');
-      if (!isAgent && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
+      if (!isAgent && pathname !== '/api/uploads' && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
       const params = route.regex.exec(pathname).groups || {};
-      const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/agent/reply', '/api/agent/events'].includes(pathname);
+      const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/uploads', '/api/agent/reply', '/api/agent/events'].includes(pathname);
       const body = needsBody ? await readJson(request) : {};
       const result = await route.handler({ request, response, params, query: url.searchParams, body, user: isAgent ? null : currentUser(request), device: isAgent ? currentDevice(request) : null });
       if (result === null) return;
@@ -847,7 +909,17 @@ const server = http.createServer(async (request, response) => {
     const name = pathname.slice('/uploads/'.length);
     const upload = /^[\w.-]+$/.test(name) ? await db.getUpload(name).catch(() => null) : null;
     if (!upload) return sendJson(response, 404, { error: 'Файл не найден' });
-    response.writeHead(200, { 'Content-Type': upload.type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Content-Length': upload.bytes.length });
+    const total = upload.bytes.length;
+    const headers = { 'Content-Type': upload.type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Accept-Ranges': 'bytes' };
+    const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range || '');
+    if (range && (range[1] || range[2])) {
+      const start = range[1] ? Number(range[1]) : Math.max(0, total - Number(range[2]));
+      const end = range[1] && range[2] ? Math.min(total - 1, Number(range[2])) : total - 1;
+      if (start >= total || start > end) { response.writeHead(416, { 'Content-Range': `bytes */${total}` }); return response.end(); }
+      response.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 });
+      return response.end(upload.bytes.subarray(start, end + 1));
+    }
+    response.writeHead(200, { ...headers, 'Content-Length': total });
     return response.end(upload.bytes);
   }
   const file = inside(staticRoot, pathname === '/' ? '/index.html' : pathname);
