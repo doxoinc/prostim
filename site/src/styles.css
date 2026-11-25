@@ -876,7 +876,7 @@ code { padding: 1px 6px; border-radius: 6px; background: var(--surface-3); color
 .studio-facts span { display: inline-flex; align-items: center; gap: 6px; }
 .studio-facts .i { color: var(--blue); }
 .studio-people { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
-.studio-people span { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 10px; padding: 8px 14px 8px 8px; border-radius: 16px; background: var(--surface-2); }
+.studio-people > span { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 10px; padding: 8px 14px 8px 8px; border-radius: 16px; background: var(--surface-2); }
 .studio-people .avatar { grid-row: span 2; }
 .studio-people b { font-size: 14px; }
 .studio-people small { color: var(--dim); font-size: 12px; }
