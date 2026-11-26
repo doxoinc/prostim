@@ -92,7 +92,7 @@ const categoryNames = { games: 'Игры', apps: 'Приложения', tools: 
 const categoryIcons = { games: 'gamepad', apps: 'grid', tools: 'code' };
 const services = [['feed', 'Лента'], ['steam', 'Steam'], ['ai', 'ИИ-мир']];
 const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', me: 'Профиль', u: 'Автор' };
-const localMe = { handle: 'me', name: 'Вы', author: 'Вы', initials: 'Я', color: '#c4f56f' };
+const localMe = { handle: 'me', name: 'Вы', author: 'Вы', initials: 'Я', color: '#e5e1d8' };
 const number = new Intl.NumberFormat('ru-RU');
 const money = value => `$${number.format(Math.round(value))}`;
 const canReachServer = typeof fetch === 'function' && /^https?:$/.test(globalThis.location?.protocol || '');
@@ -882,7 +882,7 @@ function mediaInner(project, reason = '') {
     : '';
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${postBadges(project)}${visibleTags(project).slice(0, 3).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${tagline(project)}</div>`;
 }
 
 // Tags shown on cards and pages: no automatic placeholder and no repeat of the stage badge.
@@ -891,10 +891,12 @@ function visibleTags(project) {
   return (project.tags || []).filter(tag => tag !== 'Новый проект' && tag.toLocaleLowerCase('ru') !== stage);
 }
 
-function postBadges(project) {
-  const stage = labelOf(postStages, project.stage);
-  return `${stage ? `<span class="tag-stage">${icon('flag')}${stage}</span>` : ''}${project.ai ? `<span class="tag-ai">${icon('sparkle')}ИИ</span>` : ''}`;
+// Feed design code "Cinema": facts and tags are one quiet line of text, not coloured pills.
+function tagline(project) {
+  const parts = [labelOf(postStages, project.stage), project.ai ? 'Сделано с ИИ' : '', ...visibleTags(project)].filter(Boolean).slice(0, 4);
+  return parts.length ? `<p class="card-tagline">${parts.map(escapeHtml).join(' · ')}</p>` : '';
 }
+
 
 function railButton(action, id, iconName, count, on, label, pop) {
   const pressed = action === 'vote' || action === 'save' ? `aria-pressed="${on}"` : '';
@@ -1210,7 +1212,7 @@ function openTrustInfo(handle) {
 
 function avatarEditInner() {
   const preview = avatarDraft ? avatarDraft.preview || '' : uploadUrl(me?.avatar);
-  return `<span class="avatar xl ${preview ? 'photo' : ''}" style="--avatar:${me?.color || '#c4f56f'}">${preview ? `<img src="${preview}" alt="">` : escapeHtml(me?.initials || 'Я')}</span><div><label class="btn btn-ghost btn-sm">${icon('image')} ${preview ? 'Другое фото' : 'Загрузить фото'}<input type="file" name="avatar-file" accept="image/*" hidden></label>${preview ? `<button type="button" class="text-link" data-action="remove-avatar">Убрать фото</button>` : ''}<p class="fine">Настоящее фото помогает людям доверять тебе.</p></div>`;
+  return `<span class="avatar xl ${preview ? 'photo' : ''}" style="--avatar:${me?.color || '#e5e1d8'}">${preview ? `<img src="${preview}" alt="">` : escapeHtml(me?.initials || 'Я')}</span><div><label class="btn btn-ghost btn-sm">${icon('image')} ${preview ? 'Другое фото' : 'Загрузить фото'}<input type="file" name="avatar-file" accept="image/*" hidden></label>${preview ? `<button type="button" class="text-link" data-action="remove-avatar">Убрать фото</button>` : ''}<p class="fine">Настоящее фото помогает людям доверять тебе.</p></div>`;
 }
 
 function openEditProfile() {
@@ -1372,7 +1374,7 @@ function renderSteam(page) {
   }
   if (tab === 'discussions') {
     const topics = allTopics();
-    return `<div class="page">${navigation}<div class="page-head"><h1 class="sr-only">Обсуждения Steam</h1><span class="muted-count">${topics.length} тем</span><button class="btn btn-primary btn-sm" data-action="new-topic">${icon('plus')} Тема</button></div><div class="topic-list">${topics.map(topic => `<button class="topic-row" data-action="topic" data-id="${escapeHtml(topic.id)}">${avatar({ initials: (topic.author || '?').slice(0, 1), color: topic.color || (topic.author === 'Вы' ? '#c4f56f' : '#b7d5fa'), avatar: topic.avatar })}<span class="topic-text"><small>${topic.pinned ? `${icon('pin')} ` : ''}${escapeHtml(topic.category || 'Общее')} · ${escapeHtml(topic.author || '')}${topic.createdAt ? ` · ${timeAgo(topic.createdAt)}` : ''}</small><b>${escapeHtml(topic.title)}</b></span><span class="topic-count">${icon('comment')}${topicReplies(topic).length}</span></button>`).join('')}</div></div>`;
+    return `<div class="page">${navigation}<div class="page-head"><h1 class="sr-only">Обсуждения Steam</h1><span class="muted-count">${topics.length} тем</span><button class="btn btn-primary btn-sm" data-action="new-topic">${icon('plus')} Тема</button></div><div class="topic-list">${topics.map(topic => `<button class="topic-row" data-action="topic" data-id="${escapeHtml(topic.id)}">${avatar({ initials: (topic.author || '?').slice(0, 1), color: topic.color || (topic.author === 'Вы' ? '#e5e1d8' : '#b7d5fa'), avatar: topic.avatar })}<span class="topic-text"><small>${topic.pinned ? `${icon('pin')} ` : ''}${escapeHtml(topic.category || 'Общее')} · ${escapeHtml(topic.author || '')}${topic.createdAt ? ` · ${timeAgo(topic.createdAt)}` : ''}</small><b>${escapeHtml(topic.title)}</b></span><span class="topic-count">${icon('comment')}${topicReplies(topic).length}</span></button>`).join('')}</div></div>`;
   }
   const applications = myApplications();
   const mine = applications.length ? `<section class="block my-apps"><h2 class="block-title">Мои заявки</h2>${applications.slice(0, 3).map(application => `<a class="app-row" href="#/me/applications"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || 'Черновик')} · ${escapeHtml(application.stage || '')}</small></span>${icon('chevronRight')}</a>`).join('')}</section>` : '';
@@ -1827,7 +1829,7 @@ function navigateToProject(id) {
 function commentsHtml(project) {
   const comments = projectComments(project);
   const list = comments.length
-    ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#c4f56f' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
+    ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
     : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
   return `<div class="comments">${list}</div><form id="comment-form" data-id="${escapeHtml(project.id)}" class="composer sticky"><input name="text" maxlength="1200" placeholder="${online && !me ? 'Войди, чтобы комментировать' : 'Комментарий…'}" aria-label="Комментарий" autocomplete="off" required><button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
 }
@@ -2462,7 +2464,7 @@ function openTopic(id) {
   if (!topic) return;
   const replies = topicReplies(topic);
   const list = replies.length
-    ? replies.map(reply => `<div class="comment">${avatar({ initials: reply.initials || reply.name.slice(0, 1), color: reply.color || (reply.name === 'Вы' ? '#c4f56f' : '#b7d5fa') })}<div><b>${reply.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(reply.handle)}">${escapeHtml(reply.name)}</button>` : escapeHtml(reply.name)}</b>${reply.createdAt ? `<small>${timeAgo(reply.createdAt)}</small>` : ''}<p>${escapeHtml(reply.text)}</p></div></div>`).join('')
+    ? replies.map(reply => `<div class="comment">${avatar({ initials: reply.initials || reply.name.slice(0, 1), color: reply.color || (reply.name === 'Вы' ? '#e5e1d8' : '#b7d5fa') })}<div><b>${reply.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(reply.handle)}">${escapeHtml(reply.name)}</button>` : escapeHtml(reply.name)}</b>${reply.createdAt ? `<small>${timeAgo(reply.createdAt)}</small>` : ''}<p>${escapeHtml(reply.text)}</p></div></div>`).join('')
     : `<p class="comments-empty">${icon('comment')} Ответь первым</p>`;
   showDialog(`<div class="sheet-body"><p class="kicker">${escapeHtml(topic.category || 'Общее')} · ${escapeHtml(topic.author)}</p><h2 id="modal-title">${escapeHtml(topic.title)}</h2><div class="comments">${list}</div><form id="reply-form" data-id="${escapeHtml(id)}" class="composer sticky"><input name="text" required maxlength="2000" placeholder="${online && !me ? 'Войди, чтобы ответить' : 'Ответить…'}" aria-label="Ответ в теме" autocomplete="off"><button type="submit" aria-label="Отправить">${icon('send')}</button></form></div>`, { kind: 'topic', id });
 }
@@ -2965,7 +2967,7 @@ document.addEventListener('submit', async event => {
       const local = { ...fields, ...clean, url: clean.links[0] || '', scene: '', tags: tags.length ? tags : ['Новый проект'] };
       const existing = state.projects.find(project => project.id === editing);
       if (existing) Object.assign(existing, local);
-      else state.projects.unshift({ id: newId('local'), ...local, author: 'Вы', initials: 'Я', handle: 'me', color: '#c4f56f', votes: 0, createdAt: Date.now(), slides: 1, comments: [] });
+      else state.projects.unshift({ id: newId('local'), ...local, author: 'Вы', initials: 'Я', handle: 'me', color: '#e5e1d8', votes: 0, createdAt: Date.now(), slides: 1, comments: [] });
       savedId = existing ? existing.id : state.projects[0].id;
       persist();
     }

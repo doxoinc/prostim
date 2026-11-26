@@ -11,7 +11,7 @@ test('invalid persisted state recovers and removes malformed records', () => {
   assert.equal(state.projects[0].scene, '', 'an unknown scene falls back to the title cover');
   assert.deepEqual(state.projects[0].tags, []);
   assert.equal(state.projects[0].handle, 'me');
-  assert.equal(state.projects[0].color, '#c4f56f');
+  assert.equal(state.projects[0].color, '#e5e1d8');
   const messages = loadState({ getItem: () => JSON.stringify({ dms: { markv: [{ text: 'Привет', time: 5 }, { text: 3 }], '<bad>': [{ text: 'x' }] }, readiness: ['build', 4] }) });
   assert.deepEqual(messages.dms, { markv: [{ text: 'Привет', time: '' }] });
   assert.deepEqual(messages.readiness, ['build']);

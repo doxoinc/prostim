@@ -35,7 +35,7 @@ export const pageBlockTypes = {
 };
 export const PAGE_BLOCK_LIMIT = 30;
 export const POST_LINK_LIMIT = 6;
-export const DEFAULT_ACCENT = '#c4f56f';
+export const DEFAULT_ACCENT = '#f2f1ee';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
