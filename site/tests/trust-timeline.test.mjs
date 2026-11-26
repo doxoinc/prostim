@@ -40,12 +40,13 @@ test('agent text is escaped before light formatting', () => {
   assert.doesNotMatch(html, /\/Users\/me/);
 });
 
-test('avatar ring colours: ten tiers, a glow from the fifth, a rainbow at the top', async () => {
+test('avatar ring colours: ten tiers, a glow from level 5, a shimmer from 14, a rainbow at the top', async () => {
   const { levelTier, levelTiers } = await import('../src/trust.js');
   assert.equal(levelTiers.length, 10);
   assert.deepEqual([levelTier(1).tier, levelTier(2).tier, levelTier(4).tier, levelTier(6).tier, levelTier(7).tier, levelTier(50).tier], [1, 2, 3, 4, 5, 10]);
-  assert.equal(levelTier(6).aura, false);
-  assert.equal(levelTier(7).aura, true, 'the fifth colour starts glowing');
+  assert.equal(levelTier(4).aura, false);
+  assert.equal(levelTier(5).aura, true, 'the ring glows from level 5');
+  assert.deepEqual([levelTier(13).strong, levelTier(14).strong], [false, true]);
   assert.equal(levelTier(40).legend, true);
   assert.equal(levelTier(0).tier, 1, 'missing levels count as the first');
   assert.equal(levelTier(10).to, 13);

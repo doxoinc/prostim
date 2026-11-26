@@ -1413,8 +1413,14 @@ textarea.pe-field { display: block; width: 100%; min-height: 0; padding: 2px 4px
 .lvl > .avatar { box-shadow: 0 0 0 2px var(--bg); }
 .store .lvl > .avatar { box-shadow: 0 0 0 2px var(--page-bg, var(--surface)); }
 dialog .lvl > .avatar { box-shadow: 0 0 0 2px var(--surface); }
+.rail-avatar .lvl { padding: 5px; box-shadow: 0 2px 12px rgba(0, 0, 0, .35); }
 .rail-avatar .lvl > .avatar { box-shadow: 0 0 0 2px rgba(0, 0, 0, .55); }
+.dock-item .lvl { padding: 3px; }
+.dock-item .lvl::before { inset: -4px; filter: blur(3px); }
+.dock-item .lvl > .dock-avatar, .dock-item.active .lvl > .dock-avatar { box-shadow: 0 0 0 1.5px var(--bg); }
 .lvl.aura::before { content: ""; position: absolute; z-index: -1; inset: -6px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--ring) 75%, transparent) 45%, transparent 72%); filter: blur(5px); animation: aura 2.8s ease-in-out infinite; }
+.lvl.strong { background: conic-gradient(from var(--spin), var(--ring), color-mix(in srgb, var(--ring) 45%, #fff) 25%, var(--ring) 50%, color-mix(in srgb, var(--ring) 45%, #fff) 75%, var(--ring)); animation: ring-spin 3s linear infinite; }
+.lvl.strong::before { inset: -9px; animation-duration: 1.9s; }
 .lvl.legend { background: conic-gradient(from var(--spin), #ff5d73, #ffd84d, #3ddbb0, #6cb8ff, #b78cff, #ff5d73); animation: ring-spin 4s linear infinite; }
 .lvl.legend::before { background: conic-gradient(from var(--spin), #ff5d73, #ffd84d, #3ddbb0, #6cb8ff, #b78cff, #ff5d73); filter: blur(10px); opacity: .7; animation: ring-spin 4s linear infinite; }
 .lvl-profile { padding: 7px; margin-bottom: 14px; background: conic-gradient(var(--ring) calc(var(--p, 100) * 1%), color-mix(in srgb, var(--ring) 22%, transparent) 0); cursor: pointer; transition: transform .2s var(--ease); }
@@ -1423,6 +1429,7 @@ dialog .lvl > .avatar { box-shadow: 0 0 0 2px var(--surface); }
 .profile-head .lvl-profile .avatar { margin: 0; box-shadow: 0 0 0 3px var(--bg); }
 .lvl-badge { position: absolute; z-index: 1; left: 50%; bottom: -9px; min-width: 30px; height: 22px; padding: 0 8px; display: grid; place-items: center; border-radius: 99px; background: var(--ring); color: #121512; font-size: 12px; font-weight: 850; transform: translateX(-50%); box-shadow: 0 0 0 3px var(--bg); }
 .lvl-profile.legend .lvl-badge { background: #fff; }
+.lvl.lvl-profile.strong:not(.legend) { background: conic-gradient(var(--ring) calc(var(--p, 100) * 1%), color-mix(in srgb, var(--ring) 22%, transparent) 0); animation: none; }
 .level-legend { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px 6px; margin: 4px 0 20px; }
 .legend-item { display: grid; justify-items: center; gap: 6px; color: var(--dim); font-size: 12px; font-weight: 650; }
 .legend-item .lvl { padding: 5px; }

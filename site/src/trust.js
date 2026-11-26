@@ -13,7 +13,8 @@ export const trustLevels = {
 
 const levelNames = ['Новичок', 'Исследователь', 'Создатель', 'Мастер', 'Легенда'];
 
-// Avatar ring colour by level: ten tiers from white to an animated rainbow. From the fifth tier the ring glows.
+// Avatar ring colour by level: ten tiers from white to an animated rainbow.
+// From level 5 the ring glows, from level 14 it also shimmers, the last tier is a spinning rainbow.
 export const levelTiers = [
   { from: 1, color: '#eef1e8', name: 'Белое' },
   { from: 2, color: '#7ee081', name: 'Зелёное' },
@@ -31,7 +32,7 @@ export function levelTier(level) {
   const value = Math.max(1, Number(level) || 1);
   const index = levelTiers.reduce((found, tier, position) => value >= tier.from ? position : found, 0);
   const next = levelTiers[index + 1];
-  return { ...levelTiers[index], tier: index + 1, to: next ? next.from - 1 : 50, aura: index >= 4, legend: index === levelTiers.length - 1 };
+  return { ...levelTiers[index], tier: index + 1, to: next ? next.from - 1 : 50, aura: index >= 3, strong: index >= 6, legend: index === levelTiers.length - 1 };
 }
 
 export function trustSummary({ scores = [], projects = 0, votesReceived = 0, followers = 0, comments = 0 } = {}) {

@@ -246,7 +246,11 @@ function avatar(person, className = '') {
 function ringAvatar(person, className = '', level = person?.level) {
   if (!Number(level)) return avatar(person, className);
   const tier = levelTier(level);
-  return `<span class="lvl ${tier.aura ? 'aura' : ''} ${tier.legend ? 'legend' : ''}" style="--ring:${tier.color}" title="Уровень ${Number(level)}">${avatar(person, className)}</span>`;
+  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="Уровень ${Number(level)}">${avatar(person, className)}</span>`;
+}
+
+function ringClass(tier, extra = '') {
+  return ['lvl', extra, tier.aura ? 'aura' : '', tier.strong ? 'strong' : '', tier.legend ? 'legend' : ''].filter(Boolean).join(' ');
 }
 
 function levelOf(handle) {
@@ -422,7 +426,7 @@ function renderChrome(view, current) {
   ];
   dock.innerHTML = `<a class="dock-brand" href="#/feed" aria-label="про.стим — лента"><span class="brand-mark">${logoMark}</span><span class="label">про.стим</span></a>${items.map(([id, href, label, iconName, active, badge]) => id === 'publish'
     ? `<button class="dock-item dock-publish" data-action="publish" aria-label="Опубликовать проект">${icon('plus')}<span class="label">Опубликовать</span></button>`
-    : `<a class="dock-item ${active ? 'active' : ''}" href="${href}" ${active ? 'aria-current="page"' : ''} ${id === 'home' ? 'data-action="home"' : ''}>${id === 'me' && me ? avatar(me, 'dock-avatar') : icon(iconName)}<span class="label">${label}</span>${badge ? `<i class="badge" aria-label="Непрочитанных: ${badge}">${badge}</i>` : ''}</a>`).join('')}<div class="dock-foot">${online ? (me ? `@${escapeHtml(me.handle)}` : 'Гость') : 'Локальный режим'} · Молдова</div>`;
+    : `<a class="dock-item ${active ? 'active' : ''}" href="${href}" ${active ? 'aria-current="page"' : ''} ${id === 'home' ? 'data-action="home"' : ''}>${id === 'me' && me ? ringAvatar(me, 'dock-avatar') : icon(iconName)}<span class="label">${label}</span>${badge ? `<i class="badge" aria-label="Непрочитанных: ${badge}">${badge}</i>` : ''}</a>`).join('')}<div class="dock-foot">${online ? (me ? `@${escapeHtml(me.handle)}` : 'Гость') : 'Локальный режим'} · Молдова</div>`;
 }
 
 function afterRender(view, changedPage, current) {
@@ -979,7 +983,7 @@ function levelLegendHtml(level) {
   return `<div class="level-legend">${levelTiers.map((tier, index) => {
     const info = levelTier(tier.from);
     const range = info.to >= 50 ? `${tier.from}+` : info.to > tier.from ? `${tier.from}–${info.to}` : `${tier.from}`;
-    return `<span class="legend-item ${index + 1 === current ? 'on' : ''}"><span class="lvl ${info.aura ? 'aura' : ''} ${info.legend ? 'legend' : ''}" style="--ring:${tier.color}"><i class="legend-dot"></i></span><small>${range}</small></span>`;
+    return `<span class="legend-item ${index + 1 === current ? 'on' : ''}"><span class="${ringClass(info)}" style="--ring:${tier.color}"><i class="legend-dot"></i></span><small>${range}</small></span>`;
   }).join('')}</div>`;
 }
 
@@ -987,7 +991,7 @@ function profileAvatarHtml(person, handle) {
   const level = Number(person.level) || 1;
   const tier = levelTier(level);
   const progress = Math.round((Number(person.levelProgress) || 0) * 100);
-  return `<button class="lvl lvl-profile ${tier.aura ? 'aura' : ''} ${tier.legend ? 'legend' : ''}" style="--ring:${tier.color};--p:${progress}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="Уровень ${level}${person.xp !== undefined ? `, ${person.xp} XP` : ''}. Подробнее">${avatar(person, 'xxl')}<span class="lvl-badge">${level}</span></button>`;
+  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color};--p:${progress}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="Уровень ${level}${person.xp !== undefined ? `, ${person.xp} XP` : ''}. Подробнее">${avatar(person, 'xxl')}<span class="lvl-badge">${level}</span></button>`;
 }
 
 function reviewsHtml(handle) {
@@ -1069,7 +1073,7 @@ function openTrustInfo(handle) {
   const person = userByHandle(handle);
   if (!person) return;
   const level = trustLevels[person.trust] || trustLevels.new;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Цвет кольца вокруг аватарки показывает уровень, с пятого цвета кольцо светится.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Цвет кольца вокруг аватарки показывает уровень: с 5-го уровня кольцо светится, с 14-го ещё и переливается.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
 }
 
 function avatarEditInner() {
