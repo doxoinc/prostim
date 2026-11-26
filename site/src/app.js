@@ -1330,6 +1330,11 @@ function liquidHtml(className = '') {
   return `<div class="liquid ${className}" aria-hidden="true"><i></i><i></i><i></i></div>`;
 }
 
+// The AI world's own motif: a glowing core with orbits and nodes (Steam has liquid chrome, the feed has neither).
+function neuralHtml(className = '') {
+  return `<div class="neural ${className}" aria-hidden="true"><i class="n-ring"></i><i class="n-ring"></i><i class="n-ring"></i><i class="n-core"></i><i class="n-node"></i><i class="n-node"></i><i class="n-node"></i></div>`;
+}
+
 function logoLoaderHtml(text = '') {
   return `<div class="logo-loader" role="status" aria-label="${escapeHtml(text || 'Загрузка')}"><span class="ll-stage"><span class="ll-ring"></span><span class="ll-ring"></span><span class="brand-mark big ll-mark">${logoMark}<i class="ll-sheen"></i></span></span>${text ? `<small>${escapeHtml(text)}</small>` : ''}</div>`;
 }
@@ -1415,7 +1420,7 @@ function aiHowHtml() {
 }
 
 function renderAiHub() {
-  const hero = `<section class="ai-hero">${liquidHtml('ai-orb')}<span class="hero-kicker">${icon('sparkle')} ИИ-мир</span><h1>Claude Code и Codex в твоём проекте — с любого устройства</h1><p class="lead">Подключи компьютер один раз, а потом ставь задачи с телефона. Видно, что ИИ думает, какие файлы читает и как их меняет.</p><div class="hero-actions"><a class="btn btn-primary" href="#/ai/connect">${icon('plus')} Подключить компьютер</a><a class="btn btn-ghost" href="#/ai/editor">${icon('folder')} Папка в браузере</a></div></section>`;
+  const hero = `<section class="ai-hero">${neuralHtml()}<span class="hero-kicker">${icon('sparkle')} ИИ-мир</span><h1>Claude Code и Codex в твоём проекте — с любого устройства</h1><p class="lead">Подключи компьютер один раз, а потом ставь задачи с телефона. Видно, что ИИ думает, какие файлы читает и как их меняет.</p><div class="hero-actions"><a class="btn btn-primary" href="#/ai/connect">${icon('plus')} Подключить компьютер</a><a class="btn btn-ghost" href="#/ai/editor">${icon('folder')} Папка в браузере</a></div></section>`;
   if (!online) return `<div class="page">${aiNav('')}${hero}<div class="note">${icon('lock')}<p>Это локальная копия сайта. Подключение компьютера работает на сервере про.стим — запусти <code>npm start</code> или открой опубликованный сайт.</p></div>${aiHowHtml()}</div>`;
   if (!me) return `<div class="page">${aiNav('')}${hero}${aiHowHtml()}<div class="narrow-block">${loginCard('Войди, чтобы подключить свой компьютер и проекты')}</div></div>`;
   const mine = ai.workspaces.filter(workspace => workspace.role === 'owner' && workspace.present);
@@ -3480,7 +3485,7 @@ document.addEventListener('visibilitychange', () => {
 
 async function boot() {
   if (canReachServer) {
-    main.innerHTML = `<div class="boot">${logoLoaderHtml()}${wavesSvg('boot-waves')}</div>`;
+    main.innerHTML = `<div class="boot">${logoLoaderHtml()}</div>`;
     try {
       await loadBootstrap();
       online = true;
