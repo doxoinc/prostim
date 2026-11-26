@@ -885,8 +885,10 @@ function mediaInner(project, reason = '') {
   return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${postBadges(project)}${visibleTags(project).slice(0, 3).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
 }
 
+// Tags shown on cards and pages: no automatic placeholder and no repeat of the stage badge.
 function visibleTags(project) {
-  return (project.tags || []).filter(tag => tag !== 'Новый проект');
+  const stage = labelOf(postStages, project.stage).toLocaleLowerCase('ru');
+  return (project.tags || []).filter(tag => tag !== 'Новый проект' && tag.toLocaleLowerCase('ru') !== stage);
 }
 
 function postBadges(project) {
