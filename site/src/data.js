@@ -104,6 +104,23 @@ export const demoThreads = [
   { id: 'alinar', handle: 'alinar', name: 'Алина Русу', initials: 'АР', color: '#e7c7ab', unread: 0, messages: [{ from: 'them', text: 'Попробуй мини-демо «Контура» — интересно твоё мнение.', time: 'пн' }] }
 ];
 
+// Games Warkuda Games has published on Steam. Images load from Steam's own CDN.
+const steamAsset = (appId, hash, file) => `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/${hash}/${file}`;
+export const studioGames = [
+  {
+    id: 'bullet-head', title: 'Bullet Head', appId: 4346710, released: 'Февраль 2026', genres: ['Экшен', 'Аркадный шутер'],
+    summary: 'Динамичный аркадный шутер: непрерывный экшен, реакция и агрессивный стиль игры без лишней сложности.',
+    header: steamAsset(4346710, '8baa1a89444c7b96d729c7f098be9430461efeec', 'header.jpg?t=1772159599'),
+    shots: ['9f1688b21e92915bfcd4e49088bfc96d31e2292a', '4cf777b2f022002a1fc3a867492ce705977aa103', '7049a4b653ca07235f1267930a38ebd870ff46ba'].map(hash => steamAsset(4346710, hash, `ss_${hash}.1920x1080.jpg?t=1772159599`))
+  },
+  {
+    id: 'last-of-ram', title: 'The Last of RAM', appId: 4577980, released: 'Сентябрь 2026', genres: ['Паркур', 'FPS'],
+    summary: 'Паркурный FPS, где движение — это выживание: прорывайся в охраняемые комплексы и не останавливайся.',
+    header: steamAsset(4577980, 'ff677c793afdddb3585c6cc3e38d587921c9fe52', 'header.jpg?t=1789073427'),
+    shots: ['6a64388d515d337333bb6c52acf1f14d4ed3f5af', 'fabefb8f6b07e0de3a5846c0a04a859b027e6d8e', 'a2677e3500926110d7f9bcfcebc19c1778956c67'].map(hash => steamAsset(4577980, hash, `ss_${hash}.1920x1080.jpg?t=1789073427`))
+  }
+];
+
 // Studio facts for the Steam tab. Fill steamUrl and team to show real people and the Steam page.
 export const studio = {
   name: 'Warkuda Games',

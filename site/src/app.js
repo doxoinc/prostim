@@ -1,4 +1,4 @@
-import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq, PUBLISHER_FEE, publisherPerks } from './data.js';
+import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq, PUBLISHER_FEE, publisherPerks, studioGames } from './data.js';
 import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers } from './trust.js';
@@ -247,11 +247,11 @@ function avatar(person, className = '') {
   return `<span class="avatar ${className} ${photo ? 'photo' : ''}" style="--avatar:${color}">${photo ? `<img src="${photo}" alt="" loading="lazy">` : escapeHtml(person?.initials || (person?.name || 'Я').slice(0, 1))}</span>`;
 }
 
-// Avatar with a ring in the colour of the person's level (see levelTiers in trust.js).
-function ringAvatar(person, className = '', level = person?.level) {
+// Avatar inside a level gauge in the colour of the person's level (see levelTiers in trust.js).
+function ringAvatar(person, className = '', level = person?.level, withNumber = false) {
   if (!Number(level)) return avatar(person, className);
   const tier = levelTier(level);
-  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="Уровень ${Number(level)}">${avatar(person, className)}</span>`;
+  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="Уровень ${Number(level)}">${avatar(person, className)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}${withNumber ? `<i class="lvl-num">${Number(level)}</i>` : ''}</span>`;
 }
 
 function ringClass(tier, extra = '') {
@@ -413,7 +413,8 @@ function markRead(id) {
 function renderChrome(view, current) {
   const isService = services.some(([id]) => id === view);
   if (isService) {
-    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}</nav>`;
+    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>`;
+    placeServicesBar();
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
     const title = thread ? thread.name : view === 'u' ? `@${current.page}` : view === 'me' && online && !me ? 'Вход' : sectionTitles[view];
@@ -434,11 +435,70 @@ function renderChrome(view, current) {
     : `<a class="dock-item ${active ? 'active' : ''}" href="${href}" ${active ? 'aria-current="page"' : ''} ${id === 'home' ? 'data-action="home"' : ''}>${id === 'me' && me ? ringAvatar(me, 'dock-avatar') : icon(iconName)}<span class="label">${label}</span>${badge ? `<i class="badge" aria-label="Непрочитанных: ${badge}">${badge}</i>` : ''}</a>`).join('')}<div class="dock-foot">${online ? (me ? `@${escapeHtml(me.handle)}` : 'Гость') : 'Локальный режим'} · Молдова</div>`;
 }
 
+let servicesBarX = null;
+
+function placeServicesBar() {
+  const nav = topbar.querySelector?.('.services');
+  const bar = nav?.querySelector?.('.services-bar');
+  const active = nav?.querySelector?.('a.active');
+  if (!bar?.style || !active) return;
+  const x = active.offsetLeft + active.offsetWidth / 2;
+  if (servicesBarX !== null && servicesBarX !== x) {
+    bar.style.transition = 'none';
+    bar.style.transform = `translateX(${servicesBarX}px)`;
+    void bar.offsetWidth;
+    bar.style.transition = '';
+  }
+  bar.style.transform = `translateX(${x}px)`;
+  servicesBarX = x;
+}
+
+const routeOrder = { feed: 0, steam: 1, ai: 2, search: 3, inbox: 4, me: 5, u: 6 };
+
+// New content slides in from the side we are moving to; inside a section it just fades up.
+function animateRoute(before, after) {
+  if (!before || before.key === after.key || typeof document.createElement !== 'function') return;
+  const target = after.view === 'feed' ? document.querySelector('#feed') : main.firstElementChild;
+  if (!target?.classList) return;
+  const dir = before.view === after.view ? 0 : Math.sign((routeOrder[after.view] ?? 3) - (routeOrder[before.view] ?? 3));
+  // Pages with pinned composers only fade: a moving parent would drag fixed elements along for a moment.
+  const name = target.querySelector?.('.chat-composer, .workspace, .composer') ? 'route-fade' : 'route-in';
+  target.style.setProperty('--dir', String(dir));
+  target.classList.remove('route-in', 'route-fade');
+  void target.offsetWidth;
+  target.classList.add(name);
+  target.addEventListener('animationend', () => target.classList.remove(name), { once: true });
+}
+
+// Big numbers count up the first time they scroll into view.
+function countUp(root = main) {
+  if (typeof IntersectionObserver !== 'function') return;
+  const numbers = root.querySelectorAll?.('[data-count]:not([data-counted])') || [];
+  const observer = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      const element = entry.target;
+      const end = Number(element.dataset.count) || 0;
+      const suffix = element.textContent.replace(/[\d\s]/g, '');
+      const start = performance.now();
+      const step = now => {
+        const t = Math.min(1, (now - start) / 1100);
+        element.textContent = `${Math.round(end * (1 - (1 - t) ** 3))}${suffix}`;
+        if (t < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+  }, { threshold: 0.4 });
+  numbers.forEach(element => { element.dataset.counted = '1'; observer.observe(element); });
+}
+
 function afterRender(view, changedPage, current) {
   endView();
   feedObserver?.disconnect();
   feedObserver = null;
   if (view === 'ai') afterAiRender(current, changedPage);
+  if (view === 'steam') countUp();
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
   if (view !== 'feed') {
@@ -447,8 +507,16 @@ function afterRender(view, changedPage, current) {
   }
   const feed = document.querySelector('#feed');
   if (!feed) return;
+  sizeFeed(feed);
+  watchFeedSize(feed);
   feed.scrollTop = feedScrollTop;
-  feed.addEventListener('scroll', () => { feedScrollTop = feed.scrollTop; }, { passive: true });
+  feed.addEventListener('scroll', () => {
+    feedScrollTop = feed.scrollTop;
+    // Decorative animations pause while the feed moves, so scrolling keeps the full frame rate.
+    document.body.classList.add('scrolling');
+    clearTimeout(scrollIdleTimer);
+    scrollIdleTimer = setTimeout(() => document.body.classList.remove('scrolling'), 180);
+  }, { passive: true });
   feed.addEventListener('wheel', onFeedWheel, { passive: true });
   if (typeof IntersectionObserver === 'function' && feed.querySelectorAll) {
     feed.classList.add('io');
@@ -464,6 +532,25 @@ function afterRender(view, changedPage, current) {
     }, { root: feed, threshold: 0.55 });
     observeFeedItems(feed);
   }
+}
+
+let scrollIdleTimer;
+
+// Cards get a whole-pixel height: with a fractional one, snapping leaves a 1 px seam of the next card.
+// A ResizeObserver keeps it right when styles arrive late or Safari's toolbar changes the viewport.
+let feedResizeObserver = null;
+
+function sizeFeed(feed = document.querySelector('#feed')) {
+  if (!feed?.style || !feed.getBoundingClientRect || getComputedStyle(feed).position !== 'fixed') return;
+  const height = Math.ceil(feed.getBoundingClientRect().height);
+  if (height > 0 && feed.style.getPropertyValue('--item-h') !== `${height}px`) feed.style.setProperty('--item-h', `${height}px`);
+}
+
+function watchFeedSize(feed) {
+  feedResizeObserver?.disconnect();
+  if (typeof ResizeObserver !== 'function') return;
+  feedResizeObserver = new ResizeObserver(() => sizeFeed(feed));
+  feedResizeObserver.observe(feed);
 }
 
 function observeFeedItems(feed) {
@@ -642,7 +729,7 @@ function renderFeed() {
   if (!feedOrder || feedOrder.key !== feedCategory) buildFeedOrder();
   const items = feedOrder.entries.map(feedEntryHtml).join('') || `<section class="feed-item">${emptyState('search', 'Здесь пока пусто', `<button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать первым</button>`)}</section>`;
   const chip = feedCategory === 'all' ? '' : `<a class="filter-chip" href="#/feed" aria-label="Сбросить фильтр «${categoryNames[feedCategory]}»">${icon(categoryIcons[feedCategory])}${categoryNames[feedCategory]}${icon('close')}</a>`;
-  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
+  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span><i class="ptr-mark">${logoMark}</i>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
 }
 
 function feedItem(project, reason = '') {
@@ -934,7 +1021,7 @@ function renderSearch() {
 function creatorsHtml() {
   const authors = authorsList();
   if (!authors.length) return `<p class="muted-line">Авторов не нашли</p>`;
-  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', levelOf(project.handle))}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
+  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', levelOf(project.handle), true)}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
 }
 
 /* Inbox */
@@ -1000,7 +1087,7 @@ function profileAvatarHtml(person, handle) {
   const level = Number(person.level) || 1;
   const tier = levelTier(level);
   const progress = Math.round((Number(person.levelProgress) || 0) * 100);
-  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color};--p:${progress}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="Уровень ${level}${person.xp !== undefined ? `, ${person.xp} XP` : ''}. Подробнее">${avatar(person, 'xxl')}<span class="lvl-badge">${level}</span></button>`;
+  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color};--p:${progress}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="Уровень ${level}${person.xp !== undefined ? `, ${person.xp} XP` : ''}. Подробнее">${avatar(person, 'xxl')}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}<span class="lvl-badge">${level}</span></button>`;
 }
 
 function reviewsHtml(handle) {
@@ -1082,7 +1169,7 @@ function openTrustInfo(handle) {
   const person = userByHandle(handle);
   if (!person) return;
   const level = trustLevels[person.trust] || trustLevels.new;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Цвет кольца вокруг аватарки показывает уровень: с 5-го уровня кольцо светится, с 14-го ещё и переливается.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Шкала вокруг аватарки показывает уровень цветом, а в профиле её сегменты заполняются по мере роста к следующему уровню. С 5-го уровня шкала светится, с 14-го по ней бежит искра.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
 }
 
 function avatarEditInner() {
@@ -1131,7 +1218,7 @@ function updateCalculator() {
 
 // Advantages in accent: the 2% fee is the headline, the rest backs it up.
 function perksHtml() {
-  return `<section class="perks" aria-label="Почему с нами"><div class="perk-fee"><span class="perk-fee-big">${feePercent}</span><div><b>Доля издателя</b><p>С выплаты Steam за игру — и всё. Удерживаем первыми, остальные 98% твои.</p></div><div class="fee-compare" aria-label="Сравнение доли издателя"><span><i style="width:${PUBLISHER_FEE * 100 * 2}%"></i><b>про.стим</b><small>${feePercent}</small></span><span class="usual"><i style="width:80%"></i><b>У многих издателей</b><small>30–50%</small></span></div></div>${publisherPerks.map(perk => `<div class="perk">${icon(perk.icon)}<b>${perk.title}</b><small>${perk.text}</small></div>`).join('')}</section>`;
+  return `<section class="perks" aria-label="Почему с нами">${publisherPerks.map(perk => `<div class="perk">${icon(perk.icon)}<b>${perk.title}</b><small>${perk.text}</small></div>`).join('')}</section>`;
 }
 
 function readinessPercent() {
@@ -1190,6 +1277,43 @@ function faqHtml() {
   return `<section class="block"><h2 class="block-title">Частые вопросы</h2><div class="faq">${steamFaq.map(([question, answer]) => `<details class="more"><summary>${question}</summary><p>${answer}</p></details>`).join('')}</div></section>`;
 }
 
+/* Liquid chrome and waves: the visual motif of про.стим */
+
+// Three layered waves that drift sideways; each path is drawn twice so the loop has no seam.
+let wavesSeq = 0;
+
+function wavesSvg(className = '') {
+  const id = `wv${++wavesSeq}`;
+  const crest = (y, amp) => `M0 ${y} C 240 ${y - amp} 480 ${y + amp} 720 ${y} S 1200 ${y - amp} 1440 ${y} C 1680 ${y - amp} 1920 ${y + amp} 2160 ${y} S 2640 ${y - amp} 2880 ${y}`;
+  const body = (y, amp) => `${crest(y, amp)} V 160 H 0 Z`;
+  const gradient = (name, stops) => `<linearGradient id="${id}${name}" x1="0" x2="1" y1="0" y2="0">${stops.map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`).join('')}</linearGradient>`;
+  const layer = (name, y, amp) => `<g class="wave ${name}"><path d="${body(y, amp)}" fill="url(#${id}${name})"/><path class="crest" d="${crest(y, amp)}"/></g>`;
+  return `<svg class="waves ${className}" viewBox="0 0 1440 160" preserveAspectRatio="none" aria-hidden="true"><defs>${gradient('w1', [[0, '#6cb8ff'], [0.25, '#b78cff'], [0.5, '#ff7aa2'], [0.75, '#6cb8ff'], [1, '#b78cff']])}${gradient('w2', [[0, '#c4f56f'], [0.3, '#3ddbb0'], [0.6, '#6cb8ff'], [1, '#c4f56f']])}${gradient('w3', [[0, '#5d6773'], [0.2, '#f4f7fb'], [0.45, '#7d8794'], [0.7, '#ffffff'], [1, '#5d6773']])}</defs>${layer('w1', 66, 34)}${layer('w2', 92, 26)}${layer('w3', 116, 18)}</svg>`;
+}
+
+// A drop of liquid chrome: a morphing silver body, an iridescent film and a highlight.
+function liquidHtml(className = '') {
+  return `<div class="liquid ${className}" aria-hidden="true"><i></i><i></i><i></i></div>`;
+}
+
+function logoLoaderHtml(text = '') {
+  return `<div class="logo-loader" role="status" aria-label="${escapeHtml(text || 'Загрузка')}"><span class="ll-stage"><span class="ll-ring"></span><span class="ll-ring"></span><span class="brand-mark big ll-mark">${logoMark}<i class="ll-sheen"></i></span></span>${text ? `<small>${escapeHtml(text)}</small>` : ''}</div>`;
+}
+
+// Big marketing numbers: the author keeps 98%, the publisher takes 2%.
+function moneySplitHtml() {
+  const ours = Math.round(PUBLISHER_FEE * 100);
+  const yours = 100 - ours;
+  return `<section class="money-split"><div class="split-glow">${liquidHtml('small')}</div><p class="split-kicker">${icon('coins')} С каждой выплаты Steam за игру</p><div class="split-nums"><div class="split-num yours"><b class="chrome-text" data-count="${yours}">${yours}%</b><span>получаешь <em>ты</em></span></div><div class="split-num ours"><b class="iri-text">${ours}%</b><span>берём <em>мы</em></span></div></div><div class="split-bar" aria-hidden="true"><i style="--w:${yours}%"></i><i style="--w:${ours}%"></i></div><ul class="split-facts"><li><b>0 ₽</b>за заявку</li><li><b>1</b>прозрачный договор</li><li><b>${ours}%</b>и больше ничего</li></ul>${wavesSvg('split-waves')}</section>`;
+}
+
+function gamesHtml() {
+  return `<section class="block games"><div class="block-head"><h2 class="block-title">Наши игры в Steam</h2><span class="muted-count">${escapeHtml(studio.name)}</span></div><div class="game-grid">${studioGames.map(game => {
+    const store = `https://store.steampowered.com/app/${game.appId}/`;
+    return `<article class="game-card"><button class="game-art" data-action="view-game" data-id="${game.id}" data-index="0" aria-label="Скриншоты ${escapeHtml(game.title)}"><img src="${escapeHtml(game.header)}" alt="${escapeHtml(game.title)}" loading="lazy" referrerpolicy="no-referrer"><span class="game-shine"></span></button><div class="game-body"><div class="game-title"><h3>${escapeHtml(game.title)}</h3><span>${escapeHtml(game.released)}</span></div><p>${escapeHtml(game.summary)}</p><div class="game-shots">${game.shots.map((shot, index) => `<button data-action="view-game" data-id="${game.id}" data-index="${index + 1}" aria-label="Скриншот ${index + 1}"><img src="${escapeHtml(shot.replace('1920x1080', '600x338'))}" alt="" loading="lazy" referrerpolicy="no-referrer"></button>`).join('')}</div><div class="game-foot"><span class="chips">${game.genres.map(genre => `<span>${escapeHtml(genre)}</span>`).join('')}</span><a class="btn btn-primary btn-sm" href="${store}" target="_blank" rel="noopener noreferrer">${icon('gamepad')} В Steam</a></div></div></article>`;
+  }).join('')}</div></section>`;
+}
+
 function renderStudio() {
   const team = studio.team.length
     ? `<div class="team-grid">${studio.team.map(person => `<div class="team-card">${avatar(person, 'xl')}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role || '')}</small>${person.link && safeUrl(person.link) ? `<a class="text-link" href="${escapeHtml(safeUrl(person.link))}" target="_blank" rel="noopener noreferrer">Steam</a>` : ''}</div>`).join('')}</div>`
@@ -1201,7 +1325,7 @@ function renderStudio() {
 function renderSteam(page) {
   const tab = ['studio', 'documents', 'discussions'].includes(page) ? page : '';
   const navigation = subnav('steam', [['', 'Обзор'], ['studio', 'Студия'], ['documents', 'Документы'], ['discussions', 'Обсуждения']], tab);
-  if (tab === 'studio') return `<div class="page">${navigation}<h1 class="sr-only">Студия ${escapeHtml(studio.name)}</h1>${renderStudio()}</div>`;
+  if (tab === 'studio') return `<div class="page">${navigation}<h1 class="sr-only">Студия ${escapeHtml(studio.name)}</h1>${renderStudio()}${gamesHtml()}</div>`;
   if (tab === 'documents') {
     return `<div class="page">${navigation}<h1 class="sr-only">Документы Steam</h1><div class="tile-grid">${steamDocuments.map(document => `<button class="doc-tile" data-action="document" data-id="${document.id}"><span class="doc-icon">${icon(document.icon)}</span><span><b>${document.title}</b><small>${document.subtitle}</small></span></button>`).join('')}</div>${faqHtml()}<a class="ext-link" href="https://partner.steamgames.com/doc/home" target="_blank" rel="noopener noreferrer">${icon('external')} Документация Steamworks</a></div>`;
   }
@@ -1211,7 +1335,7 @@ function renderSteam(page) {
   }
   const applications = myApplications();
   const mine = applications.length ? `<section class="block my-apps"><h2 class="block-title">Мои заявки</h2>${applications.slice(0, 3).map(application => `<a class="app-row" href="#/me/applications"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || 'Черновик')} · ${escapeHtml(application.stage || '')}</small></span>${icon('chevronRight')}</a>`).join('')}</section>` : '';
-  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art">${scene(demoProjects[0], 0)}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span>в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml()}<a class="btn btn-glass" href="#/steam/studio">Кто мы</a></div></div></section>${perksHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
+  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art chrome-art">${liquidHtml()}${wavesSvg('hero-waves')}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span class="chroma" data-text="в Steam">в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml()}<a class="btn btn-glass" href="#/steam/studio">Кто мы</a></div></div></section>${moneySplitHtml()}${perksHtml()}${gamesHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
 }
 
 /* AI world */
@@ -1257,7 +1381,7 @@ function aiHowHtml() {
 }
 
 function renderAiHub() {
-  const hero = `<section class="ai-hero"><span class="hero-kicker">${icon('sparkle')} ИИ-мир</span><h1>Claude Code и Codex в твоём проекте — с любого устройства</h1><p class="lead">Подключи компьютер один раз, а потом ставь задачи с телефона. Видно, что ИИ думает, какие файлы читает и как их меняет.</p><div class="hero-actions"><a class="btn btn-primary" href="#/ai/connect">${icon('plus')} Подключить компьютер</a><a class="btn btn-ghost" href="#/ai/editor">${icon('folder')} Папка в браузере</a></div></section>`;
+  const hero = `<section class="ai-hero">${liquidHtml('ai-orb')}<span class="hero-kicker">${icon('sparkle')} ИИ-мир</span><h1>Claude Code и Codex в твоём проекте — с любого устройства</h1><p class="lead">Подключи компьютер один раз, а потом ставь задачи с телефона. Видно, что ИИ думает, какие файлы читает и как их меняет.</p><div class="hero-actions"><a class="btn btn-primary" href="#/ai/connect">${icon('plus')} Подключить компьютер</a><a class="btn btn-ghost" href="#/ai/editor">${icon('folder')} Папка в браузере</a></div></section>`;
   if (!online) return `<div class="page">${aiNav('')}${hero}<div class="note">${icon('lock')}<p>Это локальная копия сайта. Подключение компьютера работает на сервере про.стим — запусти <code>npm start</code> или открой опубликованный сайт.</p></div>${aiHowHtml()}</div>`;
   if (!me) return `<div class="page">${aiNav('')}${hero}${aiHowHtml()}<div class="narrow-block">${loginCard('Войди, чтобы подключить свой компьютер и проекты')}</div></div>`;
   const mine = ai.workspaces.filter(workspace => workspace.role === 'owner' && workspace.present);
@@ -1746,7 +1870,7 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', levelOf(project.handle))}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', levelOf(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
 }
@@ -2633,6 +2757,9 @@ document.addEventListener('click', async event => {
   else if (action === 'view-media') {
     const project = projectById(id);
     if (project) openViewer(viewerItemsFor(project), Number(target.dataset.index) || 0);
+  } else if (action === 'view-game') {
+    const game = studioGames.find(item => item.id === id);
+    if (game) openViewer([game.header, ...game.shots].map(url => `<img src="${escapeHtml(url)}" alt="${escapeHtml(game.title)}" referrerpolicy="no-referrer" draggable="false">`), Number(target.dataset.index) || 0);
   } else if (action === 'viewer-close') closeViewer();
   else if (action === 'viewer-step') stepViewer(Number(target.dataset.direction));
   else if (action === 'wizard-step') setWizardStep(target.dataset.step);
@@ -3069,6 +3196,7 @@ document.addEventListener('touchend', () => {
 });
 document.addEventListener('touchcancel', () => { if (pullState) { pullState = null; setPull(0); } });
 window.addEventListener('pagehide', () => { endView(); flushFeedEvents(true); });
+window.addEventListener('resize', () => sizeFeed());
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
 
 document.addEventListener('keydown', event => {
@@ -3283,7 +3411,9 @@ window.addEventListener('hashchange', () => {
   connectionVersion += 1;
   if (modal.open) modal.close();
   dialogContext = null;
+  const before = { key: renderedView, view: renderedView.split(/[:/]/)[0] };
   render(false);
+  animateRoute(before, { key: renderedView, view: renderedView.split(/[:/]/)[0] });
 });
 document.addEventListener('error', event => {
   if (event.target.matches?.('.scene.photo img')) event.target.parentElement.classList.add('image-unavailable');
@@ -3304,7 +3434,7 @@ document.addEventListener('visibilitychange', () => {
 
 async function boot() {
   if (canReachServer) {
-    main.innerHTML = `<div class="boot"><span class="brand-mark big">${logoMark}</span></div>`;
+    main.innerHTML = `<div class="boot">${logoLoaderHtml()}${wavesSvg('boot-waves')}</div>`;
     try {
       await loadBootstrap();
       online = true;

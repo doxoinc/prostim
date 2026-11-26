@@ -107,7 +107,9 @@ test('steam calculator: 30% to Steam, then 2% of the payout to the publisher', (
   const app = createApp();
   app.navigate('#/steam');
   assert.match(app.elements.get('main').innerHTML, /Сколько получит автор/);
-  assert.match(app.elements.get('main').innerHTML, /perk-fee-big">2%/);
+  assert.match(app.elements.get('main').innerHTML, /class="iri-text">2%/);
+  assert.match(app.elements.get('main').innerHTML, /data-count="98">98%/);
+  assert.match(app.elements.get('main').innerHTML, /Bullet Head[\s\S]*The Last of RAM/);
   const values = runInContext('calcValues()', app.context);
   assert.equal(values.gross, 75000);
   assert.equal(values.payout, 52500, 'Steam keeps 30%');
