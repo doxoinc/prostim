@@ -65,10 +65,10 @@ let lastTap = { time: 0, id: '' };
 let tapTimer;
 let pointerStart = null;
 const TASTE_KEY = 'prostim-taste-v1';
-const FEED_ROUNDS = 4;
 let localTaste = emptyTaste();
 let localStats = {};
 let feedOrder = null;
+const slideFrom = new Map(); // project id → slide it is leaving, for the dot that shrinks
 let feedSeed = Math.floor(Math.random() * 1e6);
 let pinnedProjectId = '';
 let activeView = null;
@@ -723,9 +723,17 @@ function buildFeedOrder() {
   feedOrder = { key: feedCategory, rounds: 1, done: false, adState, entries: placeAds(entries, feedAds(), adState) };
 }
 
-// Promoted posts the server picked for this viewer (none for Plus subscribers).
+// Promoted posts the server picked for this viewer (none for Plus subscribers). Now and then про.стим
+// takes one of these slots to offer its own subscription.
 function feedAds() {
-  return online ? (remote?.ads || []).filter(ad => projectById(ad.projectId)) : [];
+  if (!online) return [];
+  const ads = (remote?.ads || []).filter(ad => projectById(ad.projectId));
+  return hasPlusNow() ? ads : [...ads, { id: 'plus', projectId: '' }];
+}
+
+function plusFeedItem() {
+  const perks = plusPlan.perks.slice(0, 3).map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('');
+  return `<section class="feed-item is-ad plus-ad" data-ad="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button><div class="card-media plus-promo"><div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info"><span class="reason-chip ad">${icon('megaphone')}Реклама про.стим</span><h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">Оформить · ${plusPlan.price} ₽ в месяц</button></div></div></article></section>`;
 }
 
 // The card before an ad gets a pearly wave along its bottom edge and a «skip» pill, so the ad never
@@ -733,16 +741,23 @@ function feedAds() {
 function markNextAds(feed = document.querySelector('#feed')) {
   feed?.querySelectorAll?.('.feed-item.is-ad').forEach(ad => {
     const before = ad.previousElementSibling;
-    if (!before?.classList?.contains('feed-item') || before.classList.contains('is-ad') || before.classList.contains('next-ad')) return;
+    if (!before?.classList?.contains('feed-item') || before.classList.contains('is-ad')) return;
     before.classList.add('next-ad');
-    before.insertAdjacentHTML?.('beforeend', `<div class="ad-glow" aria-hidden="true"><i></i></div><button class="ad-next" data-action="ad-skip" aria-label="Дальше реклама — пропустить">${icon('megaphone')}<span>Дальше реклама</span><b>Пропустить ${icon('skip')}</b></button>`);
+    const media = before.querySelector?.('.card-media');
+    if (media && !media.querySelector?.('.ad-glow')) media.insertAdjacentHTML?.('beforeend', adGlowHtml());
   });
+}
+
+// Like the edge light of the new Siri, but only along the bottom: the screen glows from below
+// a moment before an ad, with a pill to skip it.
+function adGlowHtml() {
+  return `<div class="ad-glow" aria-hidden="true"><span class="glow-line"></span><span class="glow-soft"><b></b></span></div><button class="ad-next" data-action="ad-skip" aria-label="Дальше реклама — пропустить">${icon('megaphone')}<span>Дальше реклама</span><b>Пропустить ${icon('skip')}</b></button>`;
 }
 
 const adReported = new Set();
 function reportAd(id, event) {
   const key = `${event}:${id}`;
-  if (!online || !id || adReported.has(key) || typeof fetch !== 'function') return;
+  if (!online || !id || id === 'plus' || adReported.has(key) || typeof fetch !== 'function') return;
   adReported.add(key);
   fetch(`/api/ads/${encodeURIComponent(id)}/${event}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
 }
@@ -758,7 +773,8 @@ function skipAd(from) {
   if (next) feed.scrollTo?.({ top: next.offsetTop, behavior: 'smooth' });
 }
 
-// The catalogue is small: after the last post another round starts, with what was just seen pushed back.
+// The feed never ends: after the new posts a card says so, and then round after round of what is there,
+// with what was just seen pushed back. Ads keep their rhythm across rounds.
 function extendFeedNear(item) {
   const feed = document.querySelector('#feed');
   const items = feed?.querySelectorAll?.('.feed-item');
@@ -766,7 +782,7 @@ function extendFeedNear(item) {
   if (Array.prototype.indexOf.call(items, item) < items.length - 2) return;
   const { list } = feedPool();
   let added;
-  if (feedOrder.rounds >= FEED_ROUNDS || !list.length) {
+  if (!list.length) {
     added = [{ sep: 'final' }];
     feedOrder.done = true;
   } else {
@@ -796,6 +812,7 @@ function feedEndHtml(kind) {
 
 function feedEntryHtml(entry) {
   if (entry.sep) return feedEndHtml(entry.sep);
+  if (entry.ad === 'plus') return plusFeedItem();
   const project = projectById(entry.id);
   return project ? feedItem(project, entry.reason, entry.ad) : '';
 }
@@ -929,7 +946,8 @@ function mediaInner(project, reason = '') {
   const controls = count > 1
     ? `<button class="slide-arrow prev" data-action="slide" data-direction="-1" data-id="${id}" aria-label="Предыдущий слайд" ${slide === 0 ? 'disabled' : ''}>${icon('chevronLeft')}</button><button class="slide-arrow next" data-action="slide" data-direction="1" data-id="${id}" aria-label="Следующий слайд" ${slide === count - 1 ? 'disabled' : ''}>${icon('chevronRight')}</button>`
     : '';
-  const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div>` : '';
+  const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
+  const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
   return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${tagline(project)}</div>`;
 }
@@ -984,6 +1002,7 @@ function changeSlide(id, direction) {
   const next = Math.max(0, Math.min(count - 1, current + direction));
   if (next === current) return;
   slides.set(id, next);
+  slideFrom.set(id, current);
   if (activeView?.id === id && activeView.slides < 3) {
     activeView.slides += 1;
     trackSignal(project, 'slide');
@@ -997,6 +1016,8 @@ function changeSlide(id, direction) {
     void media.offsetWidth;
     media.classList.add(direction > 0 ? 'from-right' : 'from-left');
   });
+  slideFrom.delete(id);
+  markNextAds();
 }
 
 function stepFeed(direction) {
@@ -1427,7 +1448,7 @@ function renderProfile(handle, tab) {
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
   const badges = `${levelChip(person)}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine && online ? plusCardHtml() : ''}${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1459,12 +1480,12 @@ function accountHtml() {
   let mail = '';
   if (authFlow?.purpose === 'link') mail = authCodeHtml().replace('id="auth-code-form"', 'id="link-code-form"');
   else if (account.email) mail = `<div class="account-row">${icon('send')}<span><b>${escapeHtml(account.email)}</b><small>Почта подтверждена, по ней можно войти</small></span>${icon('check')}</div>`;
-  else if (emailSignIn()) mail = `<form id="link-email-form" class="form"><p class="fine">Привяжи почту: по ней можно войти без пароля и восстановить доступ.</p><div class="inline-field"><input name="email" type="email" maxlength="254" placeholder="Почта" aria-label="Почта" autocomplete="email" autocapitalize="none" spellcheck="false" required><button class="btn btn-ghost" type="submit">Код</button></div><p class="form-error" role="alert"></p></form>`;
+  else if (emailSignIn()) mail = `<form id="link-email-form" class="form"><p class="fine">Привяжи почту: по ней можно войти без пароля и восстановить доступ.</p><div class="inline-field"><input class="field" name="email" type="email" maxlength="254" placeholder="Почта" aria-label="Почта" autocomplete="email" autocapitalize="none" spellcheck="false" required><button class="btn btn-ghost" type="submit">Код</button></div><p class="form-error" role="alert"></p></form>`;
   const linked = providers.map(provider => account.providers.includes(provider.id)
     ? `<span class="social-btn linked ${escapeHtml(provider.id)}">${providerIcons[provider.id] || ''}<span>${escapeHtml(provider.label)} подключён</span>${icon('check')}</span>`
     : `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || ''}<span>Подключить ${escapeHtml(provider.label)}</span></a>`).join('');
-  if (!mail && !linked) return '';
-  return `<section class="account-block"><h3>Вход и почта</h3>${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>`;
+  const login = mail || linked ? `<section class="account-block"><h3>Вход и почта</h3>${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>` : '';
+  return `${login}<section class="account-block"><h3>Подписка</h3>${plusRowHtml()}</section>`;
 }
 
 function openEditProfile() {
@@ -2292,9 +2313,10 @@ function openBoost(projectId) {
   showDialog(`<div class="sheet-body boost"><span class="boost-mark">${icon('megaphone')}</span><h2 id="modal-title">Продвинуть «${escapeHtml(project.title)}»</h2><p class="lead">Пост будет появляться в ленте у других людей после каждых ${AD_EVERY} постов, с пометкой «Реклама». Перед ним край ленты подсвечивается и рекламу можно пропустить — смотрят те, кому интересно.</p><form id="boost-form" class="form" data-id="${escapeHtml(project.id)}"><div class="plan-grid">${plans}</div><p class="fine">Показ засчитывается один раз на человека за полчаса. Подписчики Плюс рекламу не видят.${plus ? ' Твоя скидка Плюс уже учтена.' : ''}</p>${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit" ${mode ? '' : 'disabled'}>${mode ? `Оплатить <span data-boost-price>${rub(boostPrice(chosen, plus))}</span>` : 'Оплата скоро появится'}</button></form></div>`, { kind: 'boost', id: projectId });
 }
 
-function plusCardHtml() {
-  if (hasPlusNow()) return `<div class="plus-card on"><span class="plus-mark">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Активен до ${shortDate(remote.account.plusUntil)} · лента без рекламы</small></span><button class="btn btn-ghost btn-sm" data-action="plus">Продлить</button></div>`;
-  return `<button class="plus-card" data-action="plus"><span class="plus-mark">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Без рекламы, значок и скидка на продвижение · ${rub(plusPlan.price)} в месяц</small></span>${icon('chevronRight')}</button>`;
+// A quiet row in the profile settings; the loud offer only ever appears as an ad slot in the feed.
+function plusRowHtml() {
+  if (hasPlusNow()) return `<button class="plus-row on" data-action="plus"><span class="plus-mark small">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Активен до ${shortDate(remote.account.plusUntil)}</small></span><em>Продлить</em></button>`;
+  return `<button class="plus-row" data-action="plus"><span class="plus-mark small">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Без рекламы · ${rub(plusPlan.price)} в месяц</small></span>${icon('chevronRight')}</button>`;
 }
 
 function openPlus() {

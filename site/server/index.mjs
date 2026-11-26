@@ -38,7 +38,7 @@ function seed() {
   if (!D.users.prostim) {
     D.users.prostim = { id: 'prostim', handle: 'prostim', name: 'про.стим', initials: 'ПС', color: '#9fcaff', bio: 'Официальный аккаунт сервиса', official: true, createdAt: Date.now() };
   }
-  if (D.projects.length || Object.keys(D.users).length > 1) { addDemoPages(); db.save(); return; }
+  if (D.projects.length || Object.keys(D.users).length > 1) { addDemoPages(); seedDemoAds(); db.save(); return; }
   const now = Date.now();
   for (const project of demoProjects) {
     if (!D.users[project.handle]) D.users[project.handle] = { id: project.handle, handle: project.handle, name: project.author, initials: project.initials, color: project.color, bio: '', demo: true, createdAt: now - 864e5 * 40 };
@@ -59,7 +59,21 @@ function seed() {
       replies: topic.replies.map(text => ({ id: randomUUID(), userId: 'prostim', text, createdAt: now - index * 864e5 + 6e5 }))
     });
   });
+  seedDemoAds();
   db.save();
+}
+
+// Two demo posts run as ads, so the feed shows how promotion looks before anyone has bought it.
+// DEMO_ADS=0 takes them out.
+function seedDemoAds() {
+  D.promotions ||= [];
+  if (process.env.DEMO_ADS === '0') { D.promotions = D.promotions.filter(item => !item.demo); return; }
+  const now = Date.now();
+  for (const projectId of ['between-shores', 'pulse']) {
+    const project = D.projects.find(item => item.id === projectId);
+    if (!project || D.promotions.some(item => item.demo && item.projectId === projectId)) continue;
+    D.promotions.push({ id: `ad-demo-${projectId}`, projectId, ownerId: project.ownerId, plan: 'month', days: 3650, impressions: 1e9, shown: 0, clicks: 0, status: 'active', demo: true, createdAt: now, startsAt: now, endsAt: now + 3650 * 864e5 });
+  }
 }
 
 // Demo posts seeded before posts had pages get the page, facts and colours from data.js once.

@@ -360,10 +360,13 @@ test('promotion: paid in test mode, shown to others between posts, never to Plus
   assert.equal(bought.body.payment.amount, 790);
   assert.equal(bought.body.payment.mode, 'test');
   assert.equal(bought.body.promotion.status, 'pending');
-  assert.deepEqual((await viewer('GET', '/api/bootstrap')).body.ads, [], 'nothing is shown before payment');
+  const bought_ = list => list.filter(ad => !ad.id.startsWith('ad-demo-'));
+  const before = (await viewer('GET', '/api/bootstrap')).body.ads;
+  assert.deepEqual(before.map(ad => ad.projectId).sort(), ['between-shores', 'pulse'], 'two demo posts run as ads from the start');
+  assert.deepEqual(bought_(before), [], 'nothing is shown before payment');
   assert.equal((await viewer('POST', `/api/payments/${bought.body.payment.id}/test`)).status, 404, 'nobody else can settle the payment');
   assert.equal((await owner('POST', `/api/payments/${bought.body.payment.id}/test`)).body.payment.status, 'succeeded');
-  const ads = (await viewer('GET', '/api/bootstrap')).body.ads;
+  const ads = bought_((await viewer('GET', '/api/bootstrap')).body.ads);
   assert.deepEqual(ads.map(ad => ad.projectId), [project.id]);
   assert.equal((await owner('POST', '/api/promotions', { projectId: project.id, plan: 'day' })).status, 409, 'one campaign at a time');
   await viewer('POST', `/api/ads/${ads[0].id}/seen`);
