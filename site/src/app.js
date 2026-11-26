@@ -247,19 +247,44 @@ function avatar(person, className = '') {
   return `<span class="avatar ${className} ${photo ? 'photo' : ''}" style="--avatar:${color}">${photo ? `<img src="${photo}" alt="" loading="lazy">` : escapeHtml(person?.initials || (person?.name || 'Я').slice(0, 1))}</span>`;
 }
 
-// Avatar inside a level gauge in the colour of the person's level (see levelTiers in trust.js).
-function ringAvatar(person, className = '', level = person?.level, withNumber = false) {
-  if (!Number(level)) return avatar(person, className);
-  const tier = levelTier(level);
-  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="Уровень ${Number(level)}">${avatar(person, className)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}${withNumber ? `<i class="lvl-num">${Number(level)}</i>` : ''}</span>`;
+// Rating gauge around an avatar: a full circle of rounded segments, like a speedometer.
+// Lit segments show the average rating out of 5, the colour shows the level (levelTiers in trust.js),
+// and the rating itself sits under the avatar: 4,0 · 4,7 · 1,2.
+const gaugeArcs = new Map();
+
+function gaugePaths(count) {
+  if (gaugeArcs.has(count)) return gaugeArcs.get(count);
+  const radius = 46;
+  const step = 360 / count;
+  const gap = step * 0.5;
+  const point = angle => `${(50 + radius * Math.cos(angle * Math.PI / 180)).toFixed(2)} ${(50 + radius * Math.sin(angle * Math.PI / 180)).toFixed(2)}`;
+  // Starts at the bottom, under the rating, and goes clockwise.
+  const paths = Array.from({ length: count }, (_, index) => `M${point(90 + index * step + gap / 2)}A${radius} ${radius} 0 0 1 ${point(90 + (index + 1) * step - gap / 2)}`);
+  gaugeArcs.set(count, paths);
+  return paths;
+}
+
+function ratingText(value) {
+  return Number(value).toFixed(1).replace('.', ',');
+}
+
+function gaugeSvg(who, tier, count = 12) {
+  const rated = Number(who?.ratingCount) > 0;
+  const lit = rated ? Math.round(Math.max(0, Math.min(5, Number(who.ratingAverage) || 0)) / 5 * count) : 0;
+  return `<svg class="gauge" viewBox="0 0 100 100" aria-hidden="true">${gaugePaths(count).map((path, index) => `<path d="${path}" class="${index < lit ? 'on' : ''}"${tier.legend ? ` style="stroke:hsl(${Math.round(index * 360 / count)} 90% 72%)"` : ''}/>`).join('')}</svg>`;
 }
 
 function ringClass(tier, extra = '') {
   return ['lvl', extra, tier.aura ? 'aura' : '', tier.strong ? 'strong' : '', tier.legend ? 'legend' : ''].filter(Boolean).join(' ');
 }
 
-function levelOf(handle) {
-  return userByHandle(handle)?.level || 0;
+function ringAvatar(person, className = '', who = person, withScore = false) {
+  const level = Number(who?.level);
+  if (!level) return avatar(person, className);
+  const tier = levelTier(level);
+  const rated = Number(who.ratingCount) > 0;
+  const title = `Уровень ${level}${rated ? ` · оценка ${ratingText(who.ratingAverage)}` : ''}`;
+  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="${title}">${avatar(person, className)}${gaugeSvg(who, tier)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}${withScore && rated ? `<i class="lvl-score">${ratingText(who.ratingAverage)}</i>` : ''}</span>`;
 }
 
 function stars(value) {
@@ -479,6 +504,8 @@ function countUp(root = main) {
       if (!entry.isIntersecting) continue;
       observer.unobserve(entry.target);
       const element = entry.target;
+      // Hold the final width so nothing around the number jumps while it counts.
+      element.style.minWidth = `${element.offsetWidth}px`;
       const end = Number(element.dataset.count) || 0;
       const suffix = element.textContent.replace(/[\d\s]/g, '');
       const start = performance.now();
@@ -879,7 +906,7 @@ function railInner(project, pop = '') {
   const saved = state.saved.includes(project.id);
   const followed = state.follows.includes(project.handle);
   const follow = isMine(project.handle) ? '' : `<button class="rail-follow ${followed ? 'on' : ''}" data-action="follow" data-handle="${handle}" aria-pressed="${followed}" aria-label="${followed ? 'Отписаться' : 'Подписаться'}">${icon(followed ? 'check' : 'plus')}</button>`;
-  return `<div class="rail-author"><button class="rail-avatar" data-action="profile" data-handle="${handle}" aria-label="Автор: ${escapeHtml(project.author)}">${ringAvatar(project, '', levelOf(project.handle))}</button>${follow}</div>${railButton('vote', id, 'up', voteCount(project), voted, 'Поддержать', pop === 'vote')}${railButton('comments', id, 'comment', commentCount(project), false, 'Комментарии')}${railButton('save', id, 'bookmark', '', saved, saved ? 'Убрать из сохранённого' : 'Сохранить', pop === 'save')}${railButton('share', id, 'share', '', false, 'Поделиться')}`;
+  return `<div class="rail-author"><button class="rail-avatar" data-action="profile" data-handle="${handle}" aria-label="Автор: ${escapeHtml(project.author)}">${ringAvatar(project, '', userByHandle(project.handle), true)}</button>${follow}</div>${railButton('vote', id, 'up', voteCount(project), voted, 'Поддержать', pop === 'vote')}${railButton('comments', id, 'comment', commentCount(project), false, 'Комментарии')}${railButton('save', id, 'bookmark', '', saved, saved ? 'Убрать из сохранённого' : 'Сохранить', pop === 'save')}${railButton('share', id, 'share', '', false, 'Поделиться')}`;
 }
 
 function syncRails(pop = {}) {
@@ -1021,7 +1048,7 @@ function renderSearch() {
 function creatorsHtml() {
   const authors = authorsList();
   if (!authors.length) return `<p class="muted-line">Авторов не нашли</p>`;
-  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', levelOf(project.handle), true)}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
+  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
 }
 
 /* Inbox */
@@ -1079,15 +1106,22 @@ function levelLegendHtml(level) {
   return `<div class="level-legend">${levelTiers.map((tier, index) => {
     const info = levelTier(tier.from);
     const range = info.to >= 50 ? `${tier.from}+` : info.to > tier.from ? `${tier.from}–${info.to}` : `${tier.from}`;
-    return `<span class="legend-item ${index + 1 === current ? 'on' : ''}"><span class="${ringClass(info)}" style="--ring:${tier.color}"><i class="legend-dot"></i></span><small>${range}</small></span>`;
+    return `<span class="legend-item ${index + 1 === current ? 'on' : ''}"><span class="${ringClass(info)}" style="--ring:${tier.color}"><i class="legend-dot"></i>${gaugeSvg({ ratingCount: 1, ratingAverage: 5 }, info)}</span><small>${range}</small></span>`;
   }).join('')}</div>`;
 }
 
 function profileAvatarHtml(person, handle) {
   const level = Number(person.level) || 1;
   const tier = levelTier(level);
-  const progress = Math.round((Number(person.levelProgress) || 0) * 100);
-  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color};--p:${progress}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="Уровень ${level}${person.xp !== undefined ? `, ${person.xp} XP` : ''}. Подробнее">${avatar(person, 'xxl')}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}<span class="lvl-badge">${level}</span></button>`;
+  const rated = Number(person.ratingCount) > 0;
+  const label = `Уровень ${level}${rated ? `, оценка ${ratingText(person.ratingAverage)}` : ', оценок пока нет'}. Подробнее`;
+  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="${label}">${avatar(person, 'xxl')}${gaugeSvg(person, tier, 16)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}<span class="lvl-badge">${rated ? `★ ${ratingText(person.ratingAverage)}` : '—'}</span></button>`;
+}
+
+function levelChip(person) {
+  const level = Number(person.level) || 1;
+  const tier = levelTier(level);
+  return `<span class="level-chip" style="--ring:${tier.color}"><i></i>Ур. ${level}${person.levelName ? ` · ${escapeHtml(person.levelName)}` : ''}</span>`;
 }
 
 function reviewsHtml(handle) {
@@ -1151,7 +1185,7 @@ function renderProfile(handle, tab) {
   }
   const base = mine ? '#/me' : `#/u/${encodeURIComponent(handle)}`;
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
-  const badges = `${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
+  const badges = `${levelChip(person)}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
   return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
@@ -1169,7 +1203,7 @@ function openTrustInfo(handle) {
   const person = userByHandle(handle);
   if (!person) return;
   const level = trustLevels[person.trust] || trustLevels.new;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Шкала вокруг аватарки показывает уровень цветом, а в профиле её сегменты заполняются по мере роста к следующему уровню. С 5-го уровня шкала светится, с 14-го по ней бежит искра.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Шкала вокруг аватарки — спидометр оценки: чем выше средняя оценка, тем больше сегментов горит, а под аватаркой стоит сама оценка. Цвет шкалы — уровень. С 5-го уровня шкала светится, с 14-го по ней бежит искра.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
 }
 
 function avatarEditInner() {
@@ -1251,9 +1285,9 @@ function myApplications() {
   return online ? remote?.applications || [] : state.applications;
 }
 
-function steamLinkHtml(className = 'btn btn-glass') {
+function steamLinkHtml(className = 'btn btn-glass', label = `${studio.name} в Steam`) {
   const url = safeUrl(studio.steamUrl);
-  return url ? `<a class="${className}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon('external')} ${escapeHtml(studio.name)} в Steam</a>` : '';
+  return url ? `<a class="${className}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon('external')} ${escapeHtml(label)}</a>` : '';
 }
 
 function studioCardHtml() {
@@ -1335,7 +1369,7 @@ function renderSteam(page) {
   }
   const applications = myApplications();
   const mine = applications.length ? `<section class="block my-apps"><h2 class="block-title">Мои заявки</h2>${applications.slice(0, 3).map(application => `<a class="app-row" href="#/me/applications"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || 'Черновик')} · ${escapeHtml(application.stage || '')}</small></span>${icon('chevronRight')}</a>`).join('')}</section>` : '';
-  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art chrome-art">${liquidHtml()}${wavesSvg('hero-waves')}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span class="chroma" data-text="в Steam">в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml()}<a class="btn btn-glass" href="#/steam/studio">Кто мы</a></div></div></section>${moneySplitHtml()}${perksHtml()}${gamesHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
+  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art chrome-art">${liquidHtml()}${wavesSvg('hero-waves')}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span class="chroma" data-text="в Steam">в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary hero-main" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml('btn btn-glass', 'Мы в Steam')}<a class="btn btn-glass" href="#/steam/studio">${icon('users')} Кто мы</a></div></div></section>${moneySplitHtml()}${perksHtml()}${gamesHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
 }
 
 /* AI world */
@@ -1786,7 +1820,7 @@ function navigateToProject(id) {
 function commentsHtml(project) {
   const comments = projectComments(project);
   const list = comments.length
-    ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#c4f56f' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? levelOf(comment.handle) : 0)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
+    ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#c4f56f' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
     : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
   return `<div class="comments">${list}</div><form id="comment-form" data-id="${escapeHtml(project.id)}" class="composer sticky"><input name="text" maxlength="1200" placeholder="${online && !me ? 'Войди, чтобы комментировать' : 'Комментарий…'}" aria-label="Комментарий" autocomplete="off" required><button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
 }
@@ -1870,7 +1904,7 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', levelOf(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
 }
@@ -3197,6 +3231,18 @@ document.addEventListener('touchend', () => {
 document.addEventListener('touchcancel', () => { if (pullState) { pullState = null; setPull(0); } });
 window.addEventListener('pagehide', () => { endView(); flushFeedEvents(true); });
 window.addEventListener('resize', () => sizeFeed());
+
+// iPhone keyboard: the visual viewport shrinks, the layout one does not. Pinned composers follow the keyboard
+// and the bottom bar steps aside while typing.
+function syncKeyboard() {
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  const keyboard = Math.max(0, Math.round(innerHeight - viewport.height - viewport.offsetTop));
+  document.documentElement.style.setProperty('--kb', `${keyboard}px`);
+  document.body.classList.toggle('keyboard', keyboard > 80);
+}
+window.visualViewport?.addEventListener('resize', syncKeyboard);
+window.visualViewport?.addEventListener('scroll', syncKeyboard);
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
 
 document.addEventListener('keydown', event => {
