@@ -8,6 +8,7 @@ import { HttpError, fail, sha256, token, hashPassword, verifyPassword, pairingCo
 import { trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
 import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
+import { cleanPostFields } from '../src/page.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -17,7 +18,7 @@ const HOST = process.env.HOST || (process.env.RENDER ? '0.0.0.0' : '127.0.0.1');
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
 const SESSION_DAYS = 60;
 const MODES = ['read', 'edit', 'full'];
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 const db = await openDatabase({ directory: DATA_DIR, url: process.env.DATABASE_URL });
 const D = db.data;
@@ -29,7 +30,7 @@ function seed() {
   if (!D.users.prostim) {
     D.users.prostim = { id: 'prostim', handle: 'prostim', name: 'про.стим', initials: 'ПС', color: '#9fcaff', bio: 'Официальный аккаунт сервиса', official: true, createdAt: Date.now() };
   }
-  if (D.projects.length || Object.keys(D.users).length > 1) { db.save(); return; }
+  if (D.projects.length || Object.keys(D.users).length > 1) { addDemoPages(); db.save(); return; }
   const now = Date.now();
   for (const project of demoProjects) {
     if (!D.users[project.handle]) D.users[project.handle] = { id: project.handle, handle: project.handle, name: project.author, initials: project.initials, color: project.color, bio: '', demo: true, createdAt: now - 864e5 * 40 };
@@ -39,7 +40,8 @@ function seed() {
       id: project.id, ownerId: project.handle, title: project.title, summary: project.summary, description: project.description,
       category: project.category, url: '', scene: project.scene, slides: project.slides, images: [], tags: project.tags,
       createdAt: now - (index + 1) * 36e5 * 7, seedVotes: project.votes, votes: [], saves: [],
-      comments: project.comments.map(comment => ({ id: randomUUID(), userId: null, name: comment.name, text: comment.text, time: comment.time, createdAt: now - 36e5 }))
+      comments: project.comments.map(comment => ({ id: randomUUID(), userId: null, name: comment.name, text: comment.text, time: comment.time, createdAt: now - 36e5 })),
+      ...cleanPostFields(project)
     });
   });
   const authors = { 'про.стим': 'prostim', 'Алина': 'alinar', 'Дан': 'danm' };
@@ -50,6 +52,14 @@ function seed() {
     });
   });
   db.save();
+}
+
+// Demo posts seeded before posts had pages get the page, facts and colours from data.js once.
+function addDemoPages() {
+  for (const demo of demoProjects) {
+    const project = D.projects.find(item => item.id === demo.id && item.ownerId === demo.handle);
+    if (project && !project.theme) Object.assign(project, cleanPostFields(demo));
+  }
 }
 
 /* Views */
@@ -97,6 +107,7 @@ function projectView(project, meId) {
   return {
     id: project.id, title: project.title, summary: project.summary, description: project.description, category: project.category,
     url: project.url, video: project.video || '', scene: project.scene, media: projectMedia(project), images: project.images || [], tags: project.tags || [], createdAt: project.createdAt,
+    ...cleanPostFields(project, block => ({ url: block.url, type: block.type })),
     slides: projectMedia(project).length || project.slides || 1,
     author: owner.name, handle: owner.handle, initials: owner.initials, color: owner.color, avatar: owner.avatar || '',
     votes: (project.seedVotes || 0) + project.votes.length - Number(voted),
@@ -417,13 +428,14 @@ function videoLink(value) {
   return ['youtube.com', 'youtu.be', 'vimeo.com', 'rutube.ru', 'vk.com', 'vkvideo.ru', 'store.steampowered.com', 'twitch.tv'].includes(host) ? url : '';
 }
 
-const uploadLimits = { image: 4 * 1024 * 1024, video: 40 * 1024 * 1024 };
+const uploadLimits = { image: 4 * 1024 * 1024, gif: 8 * 1024 * 1024, video: 40 * 1024 * 1024 };
 const uploadLimit = limiter(60, 60 * 60 * 1000);
 
 function sniffMedia(bytes) {
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return ['image', 'jpg'];
   if (bytes.subarray(0, 4).toString('hex') === '89504e47') return ['image', 'png'];
   if (bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WEBP') return ['image', 'webp'];
+  if (['GIF87a', 'GIF89a'].includes(bytes.subarray(0, 6).toString())) return ['image', 'gif'];
   if (bytes.subarray(0, 4).toString('hex') === '1a45dfa3') return ['video', 'webm'];
   if (bytes.subarray(4, 8).toString() === 'ftyp') return ['video', /qt {2}/.test(bytes.subarray(8, 12).toString()) ? 'mov' : 'mp4'];
   return null;
@@ -436,16 +448,18 @@ on('POST', '/api/uploads', async ({ user, request }) => {
   const declared = String(request.headers['content-type'] || '');
   const kind = declared.startsWith('video/') ? 'video' : declared.startsWith('image/') ? 'image' : fail(415, 'Можно загружать только картинки и видео');
   if (!uploadLimit(user.id)) fail(429, 'Слишком много загрузок, подожди немного');
+  const limit = declared.startsWith('image/gif') ? uploadLimits.gif : uploadLimits[kind];
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > uploadLimits[kind]) fail(413, kind === 'video' ? 'Видео больше 40 МБ — сожми его или дай ссылку на YouTube' : 'Картинка больше 4 МБ');
+    if (size > limit) fail(413, kind === 'video' ? 'Видео больше 40 МБ — сожми его или дай ссылку на YouTube' : limit === uploadLimits.gif ? 'GIF больше 8 МБ' : 'Картинка больше 4 МБ');
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks);
   const sniffed = sniffMedia(bytes);
-  if (!sniffed || sniffed[0] !== kind) fail(400, kind === 'video' ? 'Нужен MP4, MOV или WebM' : 'Нужна картинка JPEG, PNG или WebP');
+  if (!sniffed || sniffed[0] !== kind) fail(400, kind === 'video' ? 'Нужен MP4, MOV или WebM' : 'Нужна картинка JPEG, PNG, WebP или GIF');
+  if (sniffed[1] === 'gif' ? size > uploadLimits.gif : size > uploadLimits[kind]) fail(413, 'Файл слишком большой');
   const name = `${sniffed[0][0]}-${randomUUID().slice(0, 18)}.${sniffed[1]}`;
   await db.putUpload(name, bytes);
   D.uploads[name] = { userId: user.id, type: sniffed[0], size: bytes.length, createdAt: Date.now() };
@@ -467,21 +481,57 @@ on('POST', '/api/projects', async ({ user, request }) => {
     await db.putUpload(name, bytes);
     images.push(`/uploads/${name}`);
   }
-  const media = images.map(url => ({ type: 'image', url }));
-  for (const item of Array.isArray(body.media) ? body.media.slice(0, 8) : []) {
+  const media = [...images.map(url => ({ type: 'image', url })), ...postMedia(body.media, user)];
+  const fields = cleanPostFields(body, block => ownedUpload(block.url, user));
+  const project = {
+    id, ownerId: user.id, title, summary, description: cleanText(body.description, 2400),
+    category: ['games', 'apps', 'tools'].includes(body.category) ? body.category : 'apps',
+    url: fields.links[0] || safeHttpUrl(cleanText(body.url, 500)), scene: legacyScenes.includes(body.scene) ? body.scene : '',
+    slides: 1, images: media.filter(item => item.type === 'image').map(item => item.url), media, video: videoLink(body.video), tags: postTags(body.tags),
+    createdAt: Date.now(), seedVotes: 0, votes: [], saves: [], comments: [], ...fields
+  };
+  D.projects.push(project);
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+const legacyScenes = ['forest', 'coast', 'board', 'analytics'];
+
+function postTags(value) {
+  const tags = (Array.isArray(value) ? value : []).map(tag => cleanText(tag, 24)).filter(Boolean).slice(0, 5);
+  return tags.length ? tags : ['Новый проект'];
+}
+
+// Slides: files this user uploaded, plus (when editing) files the post already shows.
+function postMedia(list, user, current = []) {
+  const media = [];
+  for (const item of Array.isArray(list) ? list.slice(0, 8) : []) {
+    const kept = current.find(existing => existing.url === item?.url);
+    if (kept) { media.push(kept); continue; }
     const upload = ownedUpload(item?.url, user);
     const poster = item?.poster && upload.type === 'video' ? ownedUpload(item.poster, user, 'image').url : '';
     media.push({ type: upload.type, url: upload.url, ...(poster ? { poster } : {}) });
   }
-  const project = {
-    id, ownerId: user.id, title, summary, description: cleanText(body.description, 2400),
-    category: ['games', 'apps', 'tools'].includes(body.category) ? body.category : 'apps',
-    url: safeHttpUrl(cleanText(body.url, 500)), scene: ['forest', 'coast', 'board', 'analytics'].includes(body.scene) ? body.scene : 'board',
-    slides: 1, images: media.filter(item => item.type === 'image').map(item => item.url), media, video: videoLink(body.video), tags: (Array.isArray(body.tags) ? body.tags : []).map(tag => cleanText(tag, 24)).filter(Boolean).slice(0, 5),
-    createdAt: Date.now(), seedVotes: 0, votes: [], saves: [], comments: []
-  };
-  if (!project.tags.length) project.tags = ['Новый проект'];
-  D.projects.push(project);
+  return media;
+}
+
+on('PATCH', '/api/projects/:id', async ({ user, params, request }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (project.ownerId !== user.id) fail(403, 'Изменить может только автор');
+  const body = await readJson(request, 512 * 1024);
+  const title = cleanText(body.title, 80);
+  const summary = cleanText(body.summary, 160);
+  if (!title || !summary) fail(400, 'Нужны название и короткое описание');
+  const current = projectMedia(project);
+  const media = postMedia(body.media, user, current);
+  const pageFiles = new Set(Array.isArray(project.page) ? project.page.map(block => block?.url).filter(Boolean) : []);
+  const fields = cleanPostFields(body, block => pageFiles.has(block.url) ? { url: block.url, type: block.type } : ownedUpload(block.url, user));
+  Object.assign(project, {
+    title, summary, category: ['games', 'apps', 'tools'].includes(body.category) ? body.category : project.category,
+    url: fields.links[0] || '', media, images: media.filter(item => item.type === 'image').map(item => item.url), video: videoLink(body.video), tags: postTags(body.tags),
+    updatedAt: Date.now(), ...fields
+  });
   db.save();
   return { project: projectView(project, user.id) };
 });
@@ -931,7 +981,7 @@ const server = http.createServer(async (request, response) => {
       const isAgent = pathname.startsWith('/api/agent/');
       if (!isAgent && pathname !== '/api/uploads' && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
       const params = route.regex.exec(pathname).groups || {};
-      const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/uploads', '/api/agent/reply', '/api/agent/events'].includes(pathname);
+      const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/uploads', '/api/agent/reply', '/api/agent/events'].includes(pathname) && !(request.method === 'PATCH' && /^\/api\/projects\/[^/]+$/.test(pathname));
       const body = needsBody ? await readJson(request) : {};
       const result = await route.handler({ request, response, params, query: url.searchParams, body, user: isAgent ? null : currentUser(request), device: isAgent ? currentDevice(request) : null });
       if (result === null) return;

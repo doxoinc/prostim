@@ -4,6 +4,7 @@ import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterPr
 import { trustLevels } from './trust.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals } from './recommend.js';
+import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
 
 const main = document.querySelector('main');
 const topbar = document.querySelector('#topbar');
@@ -17,6 +18,7 @@ try {
   storage = { getItem: () => null, setItem: () => { throw new Error('Storage unavailable'); } };
 }
 let state = loadState(storage);
+state.projects = state.projects.map(project => ({ ...project, ...cleanPostFields(project) }));
 let online = false;
 let remote = null;
 let me = null;
@@ -43,6 +45,9 @@ let workspacePane = 'assistant';
 let openStep = steamSteps[0].id;
 let authMode = 'register';
 let publishMedia = [];
+let postDraft = null;
+const loadedFonts = new Set();
+const legacyScenes = ['forest', 'coast', 'board', 'analytics'];
 let feedMuted = true;
 let avatarDraft = null;
 let liveEvents = null;
@@ -488,6 +493,30 @@ function mediaHtml(item, title, mode) {
   return `<div class="scene photo upload"><img src="${item.url}" alt="${escapeHtml(title || 'Скриншот проекта')}" loading="lazy" draggable="false"></div>`;
 }
 
+// A post without photos gets a poster: its title in the page font on the page colour.
+function coverArt(project) {
+  const theme = cleanTheme(project.theme);
+  ensureFonts(fontFamiliesFor(project));
+  const stage = labelOf(postStages, project.stage);
+  return `<div class="scene cover-art ${themeClass({ ...theme, bg: theme.bg || '#1d2a14' })}" style="${themeVars({ ...theme, bg: theme.bg || '#1d2a14' })}"><span class="cover-art-glow"></span><div class="cover-art-inner"><span class="cover-art-icon">${icon(categoryIcons[project.category] || 'sparkle')}</span><b class="cover-art-title">${escapeHtml(project.title || 'Название проекта')}</b>${stage ? `<span class="cover-art-stage">${stage}</span>` : ''}</div></div>`;
+}
+
+function labelOf(options, key) {
+  return options.find(([value]) => value === key)?.[1] || '';
+}
+
+function ensureFonts(keys) {
+  for (const key of keys) {
+    const family = pageFonts[key]?.family;
+    if (!family || loadedFonts.has(key) || typeof document.createElement !== 'function' || !document.head?.appendChild) continue;
+    loadedFonts.add(key);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?family=${family}&display=swap`;
+    document.head.appendChild(link);
+  }
+}
+
 function slideKinds(project) {
   const media = projectMedia(project);
   if (media.length) return media.map(item => item.type);
@@ -498,8 +527,9 @@ function slideKinds(project) {
 function scene(project, slide = 0, mode = 'feed') {
   const media = projectMedia(project);
   if (media.length) return mediaHtml(media[Math.min(slide, media.length - 1)], project.title || '', mode);
+  if (!legacyScenes.includes(project.scene)) return coverArt(project);
   const kind = slideKinds(project)[slide] || 'cover';
-  const type = ['forest', 'coast', 'board', 'analytics'].includes(project.scene) ? project.scene : 'board';
+  const type = project.scene;
   if (kind === 'feature') {
     return `<div class="scene feature ${type}"><div class="feature-inner"><span class="feature-icon">${icon(categoryIcons[project.category] || 'sparkle')}</span>${(project.tags || []).slice(0, 4).map(tag => `<span class="feature-chip">${escapeHtml(tag)}</span>`).join('')}</div></div>`;
   }
@@ -717,7 +747,12 @@ function mediaInner(project, reason = '') {
     : '';
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${postBadges(project)}${(project.tags || []).slice(0, 3).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+}
+
+function postBadges(project) {
+  const stage = labelOf(postStages, project.stage);
+  return `${stage ? `<span class="tag-stage">${icon('flag')}${stage}</span>` : ''}${project.ai ? `<span class="tag-ai">${icon('sparkle')}ИИ</span>` : ''}`;
 }
 
 function railButton(action, id, iconName, count, on, label, pop) {
@@ -1539,14 +1574,38 @@ function renderEditor() {
 /* Dialogs */
 
 function showDialog(content, context = null) {
+  const wasOpen = modal.open;
   dialogContext = context;
   modal.dataset.kind = context?.kind || '';
   modal.innerHTML = `<div class="grabber" aria-hidden="true"></div><button class="modal-close" data-action="close-modal" aria-label="Закрыть">${icon('close')}</button>${content}`;
-  if (!modal.open) modal.showModal();
+  // On phones a post opens at 70% of the screen and grows to full height once it is scrolled.
+  const detent = context?.kind === 'project' && isPhone() ? (wasOpen && sheetDetent === 'full' ? 'full' : 'half') : 'full';
+  if (!wasOpen) {
+    resetSheet();
+    sheetDetent = detent;
+    if (detent === 'half') setSheetOffset(0);
+    modal.showModal();
+    modal.scrollTop = 0;
+  } else if (detent !== sheetDetent) {
+    sheetDetent = detent;
+    setSheetOffset(0, true);
+  }
+  modal.dataset.detent = sheetDetent;
+}
+
+function isPhone() {
+  return Boolean(window.matchMedia?.('(max-width: 760px)').matches);
 }
 
 function closeDialog() {
   connectionVersion += 1;
+  if (dialogContext?.kind === 'publish' && dialogContext.id && projectById(dialogContext.id)) {
+    const id = dialogContext.id;
+    postDraft = null;
+    clearPublishMedia();
+    openProject(id);
+    return;
+  }
   if (modal.open) modal.close();
   dialogContext = null;
   if (route().section === 'project') {
@@ -1598,24 +1657,66 @@ function interestsCardHtml() {
   return `<section class="taste-card"><div class="taste-head"><span class="taste-title">${icon('sparkle')} Лента знает тебя</span><span class="taste-level"><i style="width:${confidence}%"></i></span><b>${confidence}%</b>${top.length ? `<button class="icon-btn" data-action="reset-taste" aria-label="Сбросить интересы" title="Сбросить">${icon('refresh')}</button>` : ''}</div>${chips}</section>`;
 }
 
+const linkCta = { steam: 'В Steam', epic: 'В Epic Games', itch: 'На itch.io', gog: 'В GOG', github: 'Код на GitHub', gitlab: 'Код на GitLab', appstore: 'В App Store', gplay: 'В Google Play', rustore: 'В RuStore', telegram: 'В Telegram', discord: 'В Discord', youtube: 'На YouTube', vk: 'Во VK', figma: 'В Figma' };
+
+function externalLink(url, className, inner) {
+  return `<a class="${className}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow ugc">${inner}</a>`;
+}
+
+function storeGalleryHtml(project) {
+  const count = slideKinds(project).length;
+  const slidesHtml = Array.from({ length: count }, (_, index) => `<div class="store-slide">${scene(project, index, 'player')}</div>`).join('');
+  const controls = count > 1
+    ? `<button class="gallery-arrow prev" data-action="gallery" data-direction="-1" aria-label="Назад">${icon('chevronLeft')}</button><button class="gallery-arrow next" data-action="gallery" data-direction="1" aria-label="Дальше">${icon('chevronRight')}</button><div class="store-dots" aria-hidden="true">${Array.from({ length: count }, (_, index) => `<i class="${index ? '' : 'on'}"></i>`).join('')}</div>`
+    : '';
+  return `<div class="store-media"><div class="store-gallery">${slidesHtml}</div>${controls}</div>`;
+}
+
+function storeLinksHtml(project) {
+  const links = (project.links?.length ? project.links : [project.url]).map(linkKind).filter(Boolean);
+  const [first, ...rest] = links;
+  const primary = first
+    ? externalLink(first.url, 'btn btn-primary store-cta', `${icon(first.icon)} ${escapeHtml(linkCta[first.kind] || 'Открыть сайт')}`)
+    : project.id === 'contour' ? `<button class="btn btn-primary store-cta" data-action="open-demo">${icon('play')} Попробовать</button>` : '';
+  const trailer = safeUrl(project.video) ? externalLink(safeUrl(project.video), 'link-pill', `${icon('play')}Трейлер`) : '';
+  const pills = rest.map(link => externalLink(link.url, 'link-pill', `${icon(link.icon)}${escapeHtml(link.label)}`)).join('');
+  return primary || trailer || pills ? `<div class="store-cta-row">${primary}${trailer}${pills}</div>` : '';
+}
+
+function storeFactsHtml(project) {
+  const list = (options, keys) => (keys || []).map(key => labelOf(options, key)).filter(Boolean).join(', ');
+  const made = [...(project.ai ? ['ИИ'] : []), ...(project.madeWith || [])].join(', ');
+  const facts = [
+    ['flag', 'Стадия', labelOf(postStages, project.stage)],
+    ['monitor', 'Платформы', list(postPlatforms, project.platforms)],
+    ['coins', 'Цена', labelOf(postPricing, project.pricing)],
+    ['users', 'Автор ищет', list(postSeeking, project.seeking)],
+    [project.ai ? 'sparkle' : 'code', 'Сделано с', made]
+  ].filter(([, , value]) => value);
+  return facts.length ? `<div class="store-facts">${facts.map(([iconName, label, value]) => `<div class="fact">${icon(iconName)}<span><small>${label}</small><b>${escapeHtml(value)}</b></span></div>`).join('')}</div>` : '';
+}
+
 function openProject(id) {
   const project = projectById(id);
   if (!project) return;
   const projectId = escapeHtml(project.id);
-  const url = safeUrl(project.url);
   const mine = isMine(project.handle);
-  const primary = url
-    ? `<a class="btn btn-primary" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon('external')} Открыть проект</a>`
-    : project.id === 'contour' ? `<button class="btn btn-primary" data-action="open-demo">${icon('play')} Попробовать</button>` : '';
+  const theme = cleanTheme(project.theme);
+  ensureFonts(fontFamiliesFor(project));
   const write = mine ? '' : `<a class="btn btn-ghost" href="#/inbox/${encodeURIComponent(project.handle)}">${icon('inbox')} Написать</a>`;
-  const remove = mine && online ? `<button class="btn btn-ghost btn-square" data-action="delete-project" data-id="${projectId}" aria-label="Удалить проект">${icon('close')}</button>` : '';
-  const more = project.description && project.description !== project.summary ? `<details class="more"><summary>Подробнее</summary><p>${escapeHtml(project.description)}</p></details>` : '';
+  const edit = mine && (online || project.handle === 'me') ? `<button class="btn btn-ghost" data-action="edit-project" data-id="${projectId}">${icon('pen')} Редактировать</button>` : '';
+  const remove = mine && online ? `<button class="btn btn-ghost btn-square" data-action="delete-project" data-id="${projectId}" aria-label="Удалить проект">${icon('trash')}</button>` : '';
+  const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
-  const media = projectMedia(project);
-  const gallery = media.length > 1 ? `<div class="sheet-gallery">${media.slice(1).map(item => item.type === 'video' ? `<video src="${item.url}" ${uploadUrl(item.poster) ? `poster="${item.poster}"` : ''} controls playsinline preload="metadata"></video>` : `<img src="${item.url}" alt="" loading="lazy">`).join('')}</div>` : '';
-  const trailer = safeUrl(project.video) ? `<a class="btn btn-ghost" href="${escapeHtml(safeUrl(project.video))}" target="_blank" rel="noopener noreferrer">${icon('play')} Трейлер</a>` : '';
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<div class="sheet-media">${scene(project, 0, 'player')}</div><div class="sheet-body"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title">${escapeHtml(project.title)}</h2><p class="lead">${escapeHtml(project.summary)}</p><div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>${interestHtml(project)}${more}${gallery}<div class="sheet-actions">${primary}${trailer}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}<div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  const gallery = modal.querySelector?.('.store-gallery');
+  gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
+}
+
+function syncGalleryDots(gallery) {
+  const index = Math.round(gallery.scrollLeft / Math.max(1, gallery.clientWidth));
+  gallery.parentElement?.querySelectorAll?.('.store-dots i').forEach((dot, position) => dot.classList.toggle('on', position === index));
 }
 
 function openComments(id) {
@@ -1627,9 +1728,18 @@ function chipRadio(name, options, checked) {
   return `<div class="chip-radio">${options.map(([value, label, iconName]) => `<label><input type="radio" name="${name}" value="${escapeHtml(value)}" ${value === checked ? 'checked' : ''}><span>${iconName ? icon(iconName) : ''}${label}</span></label>`).join('')}</div>`;
 }
 
+const MEDIA_ACCEPT = 'image/*,video/mp4,video/quicktime,video/webm';
+
+function thumbMedia(item) {
+  return item.type === 'video' ? `<video src="${escapeHtml(item.preview)}" muted playsinline preload="metadata"></video><span class="play-mark small">${icon('play')}</span>` : `<img src="${escapeHtml(item.preview)}" alt="">`;
+}
+
 function imagePickerHtml() {
-  const items = publishMedia.map((item, index) => `<span class="image-thumb ${index === 0 ? 'cover' : ''}">${item.type === 'video' ? `<video src="${item.preview}" muted playsinline preload="metadata"></video><span class="play-mark small">${icon('play')}</span>` : `<img src="${item.preview}" alt="">`}${index === 0 ? '<em>обложка</em>' : `<button type="button" class="make-cover" data-action="media-cover" data-index="${index}" aria-label="Сделать обложкой">${icon('up')}</button>`}<button type="button" data-action="remove-image" data-index="${index}" aria-label="Убрать">${icon('close')}</button></span>`).join('');
-  return `<div class="image-pick">${items}${publishMedia.length < 8 ? `<label class="image-add">${icon('image')}<small>${publishMedia.length ? 'Ещё' : 'Фото и видео'}</small><input type="file" name="images" accept="image/*,video/mp4,video/quicktime,video/webm" multiple></label>` : ''}</div>`;
+  const input = `<input class="file-cover" type="file" name="images" accept="${MEDIA_ACCEPT}" multiple aria-label="Фото, GIF или видео">`;
+  if (!online) return `<div class="drop offline"><span class="drop-icon">${icon('image')}</span><b>Обложкой станет название</b><small>Фото и видео можно загрузить на сайте с аккаунтом</small></div>`;
+  if (!publishMedia.length) return `<label class="drop">${input}<span class="drop-icon">${icon('upload')}</span><b>Добавь фото, GIF или видео</b><small>${isCompact() ? 'Нажми, чтобы выбрать' : 'Перетащи сюда или нажми'} · до 8 файлов</small><span class="drop-hint">Первое станет обложкой. Без файлов обложкой будет название на цвете страницы</span></label>`;
+  const [cover, ...rest] = publishMedia;
+  return `<div class="pick-cover">${thumbMedia(cover)}<em>${icon('image')} Обложка</em><button type="button" class="pick-remove" data-action="remove-image" data-index="0" aria-label="Убрать">${icon('close')}</button></div><div class="pick-strip">${rest.map((item, index) => `<span class="pick-thumb">${thumbMedia(item)}<button type="button" class="pick-make-cover" data-action="media-cover" data-index="${index + 1}" aria-label="Сделать обложкой"></button><button type="button" class="pick-remove" data-action="remove-image" data-index="${index + 1}" aria-label="Убрать">${icon('close')}</button></span>`).join('')}${publishMedia.length < 8 ? `<label class="pick-add">${input}${icon('plus')}<small>Ещё</small></label>` : ''}</div>${rest.length ? '<p class="fine">Нажми на миниатюру — она станет обложкой</p>' : ''}`;
 }
 
 async function imageToBlob(file, maxSide = 1600, square = false) {
@@ -1682,6 +1792,9 @@ async function addPublishFiles(fileList) {
       if (file.type.startsWith('video/')) {
         if (file.size > 40 * 1024 * 1024) { toast('Видео больше 40 МБ — сожми его или дай ссылку на YouTube'); continue; }
         publishMedia.push({ type: 'video', blob: file, preview: URL.createObjectURL(file), poster: await videoPoster(file) });
+      } else if (file.type === 'image/gif') {
+        if (file.size > 8 * 1024 * 1024) { toast('GIF больше 8 МБ'); continue; }
+        publishMedia.push({ type: 'image', blob: file, preview: URL.createObjectURL(file) });
       } else {
         const blob = await imageToBlob(file);
         publishMedia.push({ type: 'image', blob, preview: URL.createObjectURL(blob) });
@@ -1702,15 +1815,227 @@ async function uploadBlob(blob) {
 }
 
 function clearPublishMedia() {
-  for (const item of publishMedia) URL.revokeObjectURL(item.preview);
+  for (const item of publishMedia) if (item.blob) URL.revokeObjectURL(item.preview);
   publishMedia = [];
 }
 
-function openPublish() {
+/* Publishing: three short steps — files and name, facts and links, the page */
+
+function chipChoice(name, options, values = [], single = false) {
+  const chosen = Array.isArray(values) ? values : [values];
+  return `<div class="chip-radio">${options.map(([value, label, iconName]) => `<label><input type="checkbox" name="${name}" value="${escapeHtml(value)}" ${chosen.includes(value) ? 'checked' : ''} ${single ? 'data-single' : ''}><span>${iconName ? icon(iconName) : ''}${label}</span></label>`).join('')}</div>`;
+}
+
+function linkRowsHtml() {
+  const rows = postDraft.links.map((value, index) => {
+    const link = linkKind(value);
+    return `<div class="link-row"><span class="link-kind" data-kind-for="${index}">${icon(link?.icon || 'globe')}<small>${escapeHtml(link?.label || 'Ссылка')}</small></span><input name="link" type="url" inputmode="url" autocomplete="off" value="${escapeHtml(value)}" data-link="${index}" placeholder="${index ? 'Ещё ссылка' : 'Steam, Epic, itch.io, GitHub, App Store, сайт'}" aria-label="Ссылка ${index + 1}">${postDraft.links.length > 1 ? `<button type="button" class="icon-btn" data-action="link-remove" data-index="${index}" aria-label="Убрать ссылку">${icon('close')}</button>` : ''}</div>`;
+  }).join('');
+  return `${rows}${postDraft.links.length < POST_LINK_LIMIT ? `<button type="button" class="add-link" data-action="link-add">${icon('plus')} Ещё ссылка</button>` : ''}`;
+}
+
+function openPublish(projectId = '') {
   if (needLogin('Чтобы публиковать проекты, войди в аккаунт')) return;
+  const project = projectId ? projectById(projectId) : null;
+  if (projectId && (!project || !isMine(project.handle))) return;
   clearPublishMedia();
-  const covers = [['board', 'Интерфейс'], ['analytics', 'Данные'], ['forest', 'Лес'], ['coast', 'Море']];
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Новый проект</h2><form id="publish-form" class="form">${online ? `<div class="image-pick-wrap">${imagePickerHtml()}</div><p class="fine">До 8 фото и видео (видео до 40 МБ) — они станут слайдами, первое — обложка. Без них возьмём рисунок:</p>` : ''}<div class="cover-picker" role="radiogroup" aria-label="Обложка">${covers.map(([value, label], index) => `<label class="cover-opt"><input type="radio" name="scene" value="${value}" ${index === 0 ? 'checked' : ''}><span class="cover-thumb">${scene({ scene: value, slides: 1, category: 'apps', tags: [] }, 0)}</span><small>${label}</small></label>`).join('')}</div><input name="title" maxlength="80" placeholder="Название" aria-label="Название" required><input name="summary" maxlength="160" placeholder="Коротко: что это и для кого" aria-label="Короткое описание" required>${chipRadio('category', Object.entries(categoryNames).map(([id, label]) => [id, label, categoryIcons[id]]), 'apps')}<input name="url" type="url" placeholder="Ссылка · необязательно" aria-label="Ссылка на проект">${online ? '<input name="video" type="url" placeholder="Трейлер на YouTube, VK или Steam · необязательно" aria-label="Ссылка на трейлер">' : ''}<input name="tags" maxlength="120" placeholder="Теги через запятую: Web, Прототип" aria-label="Теги"><details class="more"><summary>Описание</summary><textarea name="description" rows="3" maxlength="2400" placeholder="Идея и текущий этап" aria-label="Подробное описание"></textarea></details><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('send')} Опубликовать</button></form></div>`, { kind: 'publish' });
+  if (project) publishMedia = projectMedia(project).map(item => ({ type: item.type, url: item.url, preview: item.url, posterUrl: uploadUrl(item.poster) }));
+  postDraft = {
+    id: project?.id || '', step: 1, selected: -1,
+    theme: cleanTheme(project?.theme),
+    blocks: (project?.page || []).map(block => ({ ...block, ...(block.items ? { items: [...block.items] } : {}) })),
+    links: [...(project?.links?.length ? project.links : project?.url ? [project.url] : []), ''].slice(0, POST_LINK_LIMIT)
+  };
+  if (postDraft.links.length > 1 && !postDraft.links.at(-1)) postDraft.links.pop();
+  const field = (name, attrs) => `<input name="${name}" ${attrs} value="${escapeHtml(project?.[name] ?? '')}">`;
+  const label = (iconName, text) => `<p class="field-label">${icon(iconName)}${text}</p>`;
+  const steps = ['Основное', 'Детали', 'Страница'];
+  showDialog(`<div class="sheet-body publish"><h2 id="modal-title">${project ? 'Редактировать' : 'Новый проект'}</h2><div class="wizard-steps">${steps.map((name, index) => `<button type="button" class="wstep ${index ? '' : 'on'}" data-action="wizard-step" data-step="${index + 1}"><i>${index + 1}</i><span>${name}</span></button>`).join('')}</div><form id="publish-form" class="form wizard" data-step="1" novalidate><fieldset class="wpane" data-pane="1"><div class="image-pick-wrap">${imagePickerHtml()}</div>${field('title', 'maxlength="80" placeholder="Название" aria-label="Название" required autocomplete="off"')}${field('summary', 'maxlength="160" placeholder="Коротко: что это и для кого" aria-label="Короткое описание" required autocomplete="off"')}${label('grid', 'Раздел')}${chipRadio('category', Object.entries(categoryNames).map(([id, name]) => [id, name, categoryIcons[id]]), project?.category || 'apps')}</fieldset><fieldset class="wpane" data-pane="2">${label('flag', 'Стадия')}${chipChoice('stage', postStages, project?.stage, true)}${label('monitor', 'Платформы')}${chipChoice('platforms', postPlatforms, project?.platforms)}${label('coins', 'Цена')}${chipChoice('pricing', postPricing, project?.pricing, true)}${label('users', 'Кого ищешь')}${chipChoice('seeking', postSeeking, project?.seeking)}<label class="toggle-row"><input type="checkbox" name="ai" ${project?.ai ? 'checked' : ''}><span>${icon('sparkle')}<b>Сделано с помощью ИИ</b><small>Вайбкодинг, генерация кода или графики</small></span><i class="toggle" aria-hidden="true"></i></label><input name="madeWith" maxlength="160" placeholder="Чем сделано: Godot, Unity, React, Claude Code" aria-label="Чем сделано" value="${escapeHtml((project?.madeWith || []).join(', '))}" autocomplete="off">${label('globe', 'Ссылки')}<div class="link-rows">${linkRowsHtml()}</div>${online ? field('video', 'type="url" placeholder="Трейлер на YouTube, VK или Steam" aria-label="Ссылка на трейлер"') : ''}<input name="tags" maxlength="120" placeholder="Теги через запятую: Пиксель-арт, Кооператив" aria-label="Теги" value="${escapeHtml((project?.tags || []).filter(tag => tag !== 'Новый проект').join(', '))}" autocomplete="off"></fieldset><fieldset class="wpane" data-pane="3"><div class="pe-host">${pageEditorHtml()}</div></fieldset><p class="form-error" role="alert"></p><div class="wizard-bar"><button type="button" class="btn btn-ghost wizard-back" data-action="wizard-step" data-step="back">${icon('chevronLeft')}</button><button class="btn btn-primary" type="submit">Далее ${icon('chevronRight')}</button></div></form></div>`, { kind: 'publish', id: project?.id || '' });
+  autosizeFields(modal);
+}
+
+function stepOneValid(form) {
+  for (const name of ['title', 'summary']) {
+    const input = form.elements?.[name];
+    if (input && !input.value.trim()) {
+      showWizardStep(1);
+      input.reportValidity?.();
+      input.focus?.();
+      return false;
+    }
+  }
+  return true;
+}
+
+function setWizardStep(step) {
+  const form = modal.querySelector?.('#publish-form');
+  if (!form || !postDraft) return;
+  const next = step === 'back' ? postDraft.step - 1 : Number(step);
+  if (next > 1 && !stepOneValid(form)) return;
+  showWizardStep(next);
+}
+
+function showWizardStep(step) {
+  const form = modal.querySelector?.('#publish-form');
+  if (!form || !postDraft) return;
+  postDraft.step = Math.max(1, Math.min(3, step));
+  form.dataset.step = String(postDraft.step);
+  modal.querySelectorAll?.('.wstep').forEach(button => {
+    const number = Number(button.dataset.step);
+    button.classList.toggle('on', number === postDraft.step);
+    button.classList.toggle('done', number < postDraft.step);
+  });
+  const submit = form.querySelector?.('button[type="submit"]');
+  if (submit) submit.innerHTML = postDraft.step < 3 ? `Далее ${icon('chevronRight')}` : `${icon(postDraft.id ? 'check' : 'send')} ${postDraft.id ? 'Сохранить' : 'Опубликовать'}`;
+  if (postDraft.step === 3) renderPageEditor();
+  modal.scrollTo?.({ top: 0, behavior: 'smooth' });
+}
+
+/* Page editor: blocks the author styles and orders; the preview uses the page's own colours */
+
+function themeSwatches(key, colors) {
+  const current = postDraft.theme[key];
+  const custom = current && !colors.includes(current);
+  return `<div class="swatches"><button type="button" class="swatch none ${current ? '' : 'on'}" data-action="pe-theme" data-key="${key}" data-value="" aria-label="Как в про.стим" title="Как в про.стим"></button>${colors.map(color => `<button type="button" class="swatch ${current === color ? 'on' : ''}" style="--sw:${color}" data-action="pe-theme" data-key="${key}" data-value="${color}" aria-label="Цвет ${color}"></button>`).join('')}<label class="swatch custom ${custom ? 'on' : ''}" ${custom ? `style="--sw:${current}"` : ''} title="Свой цвет"><input type="color" data-pe-theme="${key}" value="${current || '#888888'}" aria-label="Свой цвет"></label></div>`;
+}
+
+function fontChips(current, action, index = '') {
+  const own = action === 'pe-style';
+  return `<div class="pe-fonts">${own ? `<button type="button" class="pe-font ${current ? '' : 'on'}" data-action="pe-style" data-key="font" data-value="" data-index="${index}"><b>Аа</b><small>Как у страницы</small></button>` : ''}${Object.entries(pageFonts).map(([key, font]) => `<button type="button" class="pe-font pf-${key} ${current === key ? 'on' : ''}" data-action="${action}" data-key="font" data-value="${key}" ${own ? `data-index="${index}"` : ''}><b>Аа</b><small>${font.label}</small></button>`).join('')}</div>`;
+}
+
+function blockToolsHtml(block, index) {
+  const textual = ['heading', 'text', 'list', 'quote'].includes(block.type);
+  const button = (key, value, label, on, extra = '') => `<button type="button" class="${on ? 'on' : ''}" data-action="pe-style" data-key="${key}" data-value="${value}" data-index="${index}" ${extra}>${label}</button>`;
+  const weight = Number(block.weight) || (block.type === 'heading' ? 800 : 400);
+  const order = `<div class="pe-seg">${button('move', -1, icon('chevronUp'), false, `aria-label="Выше" ${index ? '' : 'disabled'}`)}${button('move', 1, icon('chevronDown'), false, `aria-label="Ниже" ${index < postDraft.blocks.length - 1 ? '' : 'disabled'}`)}${button('delete', 1, icon('trash'), false, 'aria-label="Удалить блок"')}</div>`;
+  if (!textual) return `<div class="pe-tools"><div class="pe-tool-row">${order}</div></div>`;
+  const colors = `<div class="swatches small"><button type="button" class="swatch none ${block.color ? '' : 'on'}" data-action="pe-style" data-key="color" data-value="" data-index="${index}" aria-label="Цвет текста страницы"></button>${pageColors.map(color => `<button type="button" class="swatch ${block.color === color ? 'on' : ''}" style="--sw:${color}" data-action="pe-style" data-key="color" data-value="${color}" data-index="${index}" aria-label="Цвет ${color}"></button>`).join('')}<label class="swatch custom ${block.color && !pageColors.includes(block.color) ? 'on' : ''}"><input type="color" data-pe-color="${index}" value="${block.color || '#ffffff'}" aria-label="Свой цвет текста"></label></div>`;
+  return `<div class="pe-tools"><div class="pe-tool-row"><div class="pe-seg">${Object.entries(pageSizes).map(([key, label]) => button('size', key, label, (block.size || 'm') === key, `aria-label="Размер ${label}"`)).join('')}</div><div class="pe-seg">${Object.entries(pageWeights).map(([key, label]) => button('weight', key, 'Аа', weight === Number(key), `style="font-weight:${key}" aria-label="${label}" title="${label}"`)).join('')}</div><div class="pe-seg">${button('align', '', icon('alignLeft'), block.align !== 'center', 'aria-label="По левому краю"')}${button('align', 'center', icon('alignCenter'), block.align === 'center', 'aria-label="По центру"')}</div>${order}</div>${fontChips(block.font || '', 'pe-style', index)}${colors}</div>`;
+}
+
+function editBlockHtml(block, index) {
+  const on = postDraft.selected === index ? 'on' : '';
+  const area = (key, value, placeholder) => `<textarea class="${blockClass(block)} pe-field" ${blockStyle(block)} data-pe="${key}" data-index="${index}" rows="1" placeholder="${placeholder}" aria-label="${placeholder}">${escapeHtml(value)}</textarea>`;
+  const input = (key, placeholder, extra = '') => `<input class="pe-input" data-pe="${key}" data-index="${index}" value="${escapeHtml(block[key] || '')}" placeholder="${placeholder}" aria-label="${placeholder}" autocomplete="off" ${extra}>`;
+  let body = '';
+  if (block.type === 'heading') body = area('text', block.text || '', 'Заголовок');
+  else if (block.type === 'text') body = area('text', block.text || '', 'Текст. **Жирный**, _курсив_, [ссылка](https://…)');
+  else if (block.type === 'list') body = `<div class="pe-list">${area('items', (block.items || []).join('\n'), 'Каждый пункт — с новой строки')}</div>`;
+  else if (block.type === 'quote') body = `<div class="pb-quote-shell">${area('text', block.text || '', 'Цитата или отзыв')}${input('author', 'Кто сказал')}</div>`;
+  else if (block.type === 'image' || block.type === 'video') {
+    const source = block.preview || uploadUrl(block.url);
+    const media = block.type === 'video' ? `<video src="${escapeHtml(source)}" muted playsinline controls preload="metadata"></video>` : `<img src="${escapeHtml(source)}" alt="">`;
+    body = `<figure class="pb pb-media ${block.uploading ? 'uploading' : ''}">${media}${block.uploading ? `<span class="pe-uploading">${icon('refresh')} Загружаем…</span>` : ''}</figure>${input('caption', 'Подпись · необязательно')}`;
+  } else if (block.type === 'button') {
+    const link = linkKind(block.url);
+    body = `<div class="pb pb-button pe-button">${icon(link?.icon || 'external')}${input('label', link ? link.label : 'Текст кнопки')}</div>${input('url', 'https://… — куда ведёт кнопка', 'type="url" inputmode="url"')}`;
+  } else if (block.type === 'divider') body = '<hr class="pb pb-divider">';
+  return `<div class="peb ${on}" data-block="${index}">${blockToolsHtml(block, index)}${body}</div>`;
+}
+
+function pageEditorHtml() {
+  if (!postDraft) return '';
+  ensureFonts(Object.keys(pageFonts));
+  const form = modal.querySelector?.('#publish-form');
+  const title = form?.elements?.title?.value || 'Название проекта';
+  const summary = form?.elements?.summary?.value || '';
+  const blocks = postDraft.blocks.map(editBlockHtml).join('');
+  const add = Object.entries(pageBlockTypes).filter(([, type]) => online || !type.media).map(([key, type]) => type.media
+    ? `<label class="pe-add-btn">${icon(type.icon)}<span>${type.label}</span><input class="file-cover" type="file" data-pe-file="${key}" accept="${key === 'video' ? 'video/mp4,video/quicktime,video/webm' : 'image/*'}"></label>`
+    : `<button type="button" class="pe-add-btn" data-action="pe-add" data-type="${key}">${icon(type.icon)}<span>${type.label}</span></button>`).join('');
+  return `<div class="pe-theme"><div class="pe-row"><span>${icon('palette')} Фон</span>${themeSwatches('bg', pageBackgrounds)}</div><div class="pe-row"><span>${icon('sparkle')} Акцент</span>${themeSwatches('accent', pageColors)}</div><div class="pe-row"><span>${icon('text')} Шрифт</span>${fontChips(postDraft.theme.font, 'pe-theme')}</div></div><div class="pe-canvas ${themeClass(postDraft.theme)}" style="${themeVars(postDraft.theme)}"><div class="pe-preview-head"><b class="store-title">${escapeHtml(title)}</b>${summary ? `<p class="store-summary">${escapeHtml(summary)}</p>` : ''}<span class="pe-fake-cta">${icon('external')} Кнопка ссылки</span></div><div class="pe-blocks">${blocks || `<div class="pe-empty">${icon('sparkle')}<b>Собери страницу проекта</b><span>Добавь текст, фото, GIF, видео и кнопки. Каждый блок можно покрасить, выбрать шрифт и размер</span></div>`}</div></div><p class="pe-add-title">Добавить блок</p><div class="pe-add">${add}</div>`;
+}
+
+function renderPageEditor() {
+  const host = modal.querySelector?.('.pe-host');
+  if (!host) return;
+  host.innerHTML = pageEditorHtml();
+  autosizeFields(host);
+}
+
+function rerenderBlock(index) {
+  const element = modal.querySelector?.(`.peb[data-block="${index}"]`);
+  if (!element || !postDraft.blocks[index]) { renderPageEditor(); return; }
+  element.outerHTML = editBlockHtml(postDraft.blocks[index], index);
+  autosizeFields(modal.querySelector?.(`.peb[data-block="${index}"]`));
+}
+
+function selectBlock(index) {
+  if (!postDraft || postDraft.selected === index) return;
+  postDraft.selected = index;
+  modal.querySelectorAll?.('.peb').forEach(element => element.classList.toggle('on', Number(element.dataset.block) === index));
+}
+
+function autosizeFields(root) {
+  root?.querySelectorAll?.('textarea.pe-field').forEach(autosize);
+}
+
+function autosize(field) {
+  if (!field?.style) return;
+  field.style.height = 'auto';
+  field.style.height = `${field.scrollHeight}px`;
+}
+
+function addBlock(type) {
+  if (postDraft.blocks.length >= PAGE_BLOCK_LIMIT) { toast(`Не больше ${PAGE_BLOCK_LIMIT} блоков`); return null; }
+  const block = type === 'list' ? { type, items: [] } : { type };
+  postDraft.blocks.push(block);
+  postDraft.selected = postDraft.blocks.length - 1;
+  renderPageEditor();
+  modal.querySelector?.(`.peb[data-block="${postDraft.selected}"] [data-pe]`)?.focus?.({ preventScroll: false });
+  return block;
+}
+
+async function addPageMedia(file, type) {
+  if (!file || !postDraft) return;
+  const limit = type === 'video' ? 40 : file.type === 'image/gif' ? 8 : 25;
+  if (file.size > limit * 1024 * 1024) { toast(`Файл больше ${limit} МБ`); return; }
+  const block = addBlock(type);
+  if (!block) return;
+  block.uploading = true;
+  block.preview = URL.createObjectURL(file);
+  renderPageEditor();
+  try {
+    const blob = type === 'image' && file.type !== 'image/gif' ? await imageToBlob(file, 2000) : file;
+    block.url = await uploadBlob(blob);
+  } catch (error) {
+    toast(error.message);
+    postDraft.blocks.splice(postDraft.blocks.indexOf(block), 1);
+    postDraft.selected = -1;
+  }
+  delete block.uploading;
+  renderPageEditor();
+}
+
+function styleBlock(index, key, value) {
+  const block = postDraft?.blocks[index];
+  if (!block) return;
+  if (key === 'move') {
+    const to = index + Number(value);
+    if (to < 0 || to >= postDraft.blocks.length) return;
+    [postDraft.blocks[index], postDraft.blocks[to]] = [postDraft.blocks[to], postDraft.blocks[index]];
+    postDraft.selected = to;
+    renderPageEditor();
+    modal.querySelector?.(`.peb[data-block="${to}"]`)?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    return;
+  }
+  if (key === 'delete') {
+    const [removed] = postDraft.blocks.splice(index, 1);
+    if (removed?.preview) URL.revokeObjectURL(removed.preview);
+    postDraft.selected = -1;
+    renderPageEditor();
+    return;
+  }
+  if (key === 'weight') block.weight = Number(value);
+  else if (value) block[key] = value;
+  else delete block[key];
+  postDraft.selected = index;
+  rerenderBlock(index);
+}
+
+function draftPage() {
+  return (postDraft?.blocks || []).filter(block => !block.uploading).map(({ uploading, preview, ...block }) => block);
 }
 
 function openApplication() {
@@ -2055,7 +2380,24 @@ document.addEventListener('click', async event => {
       toast('Оценка убрана');
     } catch (error) { toast(error.message); }
   } else if (action === 'trust-info') openTrustInfo(target.dataset.handle);
-  else if (action === 'delete-project') {
+  else if (action === 'edit-project') openPublish(id);
+  else if (action === 'wizard-step') setWizardStep(target.dataset.step);
+  else if (action === 'pe-add') addBlock(target.dataset.type);
+  else if (action === 'pe-style') styleBlock(Number(target.dataset.index), target.dataset.key, target.dataset.value || '');
+  else if (action === 'pe-theme') {
+    if (!postDraft) return;
+    postDraft.theme[target.dataset.key] = target.dataset.value || (target.dataset.key === 'font' ? 'sans' : '');
+    renderPageEditor();
+  } else if (action === 'link-add' || action === 'link-remove') {
+    if (!postDraft) return;
+    if (action === 'link-add') postDraft.links.push(''); else postDraft.links.splice(Number(target.dataset.index), 1);
+    const rows = modal.querySelector?.('.link-rows');
+    if (rows) rows.innerHTML = linkRowsHtml();
+    if (action === 'link-add') rows?.querySelector?.('[data-link]:last-of-type, .link-row:last-of-type input')?.focus?.();
+  } else if (action === 'gallery') {
+    const gallery = target.closest?.('.store-media')?.querySelector?.('.store-gallery');
+    gallery?.scrollBy?.({ left: Number(target.dataset.direction) * gallery.clientWidth, behavior: 'smooth' });
+  } else if (action === 'delete-project') {
     if (!confirm('Удалить проект из ленты? Это нельзя отменить.')) return;
     try {
       await apiCall('DELETE', `/api/projects/${encodeURIComponent(id)}`);
@@ -2156,34 +2498,59 @@ document.addEventListener('submit', async event => {
     return;
   }
   if (form.id === 'publish-form') {
-    if (!value('title') || !value('summary')) return;
+    if (!postDraft) return;
+    if (postDraft.step < 3) { setWizardStep(postDraft.step + 1); return; }
+    if (!stepOneValid(form)) return;
+    if (postDraft.blocks.some(block => block.uploading)) { formError(form, 'Подожди, файлы ещё загружаются'); return; }
     const tags = value('tags').split(',').map(tag => tag.trim()).filter(Boolean).slice(0, 5);
-    const fields = { title: value('title'), summary: value('summary'), description: value('description'), category: data.get('category') || 'apps', url: safeUrl(value('url')), scene: data.get('scene') || 'board', tags };
+    const fields = {
+      title: value('title'), summary: value('summary'), category: data.get('category') || 'apps', tags,
+      stage: data.get('stage') || '', platforms: data.getAll('platforms'), pricing: data.get('pricing') || '', seeking: data.getAll('seeking'),
+      ai: data.get('ai') === 'on', madeWith: value('madeWith'), links: data.getAll('link').map(String), theme: { ...postDraft.theme }, page: draftPage()
+    };
+    const editing = postDraft.id;
+    const label = editing ? 'Сохранить' : 'Опубликовать';
+    let savedId = editing;
     if (online) {
-      if (submit) { submit.disabled = true; submit.textContent = 'Публикуем…'; }
+      if (submit) submit.disabled = true;
       try {
         const media = [];
         for (const [index, item] of publishMedia.entries()) {
-          if (submit) submit.textContent = `Загружаем ${index + 1} из ${publishMedia.length}…`;
+          if (submit && item.blob) submit.textContent = `Загружаем ${index + 1} из ${publishMedia.length}…`;
           const url = item.url || (item.url = await uploadBlob(item.blob));
-          const poster = item.type === 'video' && item.poster ? item.posterUrl || (item.posterUrl = await uploadBlob(item.poster)) : '';
+          const poster = item.type === 'video' ? item.posterUrl || (item.poster ? (item.posterUrl = await uploadBlob(item.poster)) : '') : '';
           media.push({ url, ...(poster ? { poster } : {}) });
         }
-        if (submit) submit.textContent = 'Публикуем…';
-        const { project } = await apiCall('POST', '/api/projects', { ...fields, media, video: value('video') });
-        remote.projects.unshift(project);
-        pinnedProjectId = project.id;
+        if (submit) submit.textContent = editing ? 'Сохраняем…' : 'Публикуем…';
+        const { project } = await apiCall(editing ? 'PATCH' : 'POST', editing ? `/api/projects/${encodeURIComponent(editing)}` : '/api/projects', { ...fields, media, video: value('video') });
+        replaceProject(project);
+        savedId = project.id;
       } catch (error) {
         formError(form, error.message);
-        if (submit) { submit.disabled = false; submit.textContent = 'Опубликовать'; }
+        if (submit) { submit.disabled = false; submit.textContent = label; }
         return;
       }
     } else {
-      state.projects.unshift({ id: newId('local'), ...fields, tags: tags.length ? tags : ['Новый проект'], author: 'Вы', initials: 'Я', handle: 'me', color: '#c4f56f', votes: 0, createdAt: Date.now(), slides: 1, comments: [] });
-      pinnedProjectId = state.projects[0].id;
+      const clean = cleanPostFields(fields);
+      const local = { ...fields, ...clean, url: clean.links[0] || '', scene: '', tags: tags.length ? tags : ['Новый проект'] };
+      const existing = state.projects.find(project => project.id === editing);
+      if (existing) Object.assign(existing, local);
+      else state.projects.unshift({ id: newId('local'), ...local, author: 'Вы', initials: 'Я', handle: 'me', color: '#c4f56f', votes: 0, createdAt: Date.now(), slides: 1, comments: [] });
+      savedId = existing ? existing.id : state.projects[0].id;
       persist();
     }
     clearPublishMedia();
+    postDraft = null;
+    if (editing) {
+      slides.delete(savedId);
+      const saved = projectById(savedId);
+      document.querySelectorAll?.(`.card-media[data-id="${savedId}"]`).forEach(media => { if (saved) media.innerHTML = mediaInner(saved, media.dataset.reason || ''); });
+      refresh();
+      openProject(savedId);
+      toast('Сохранено ✓');
+      return;
+    }
+    pinnedProjectId = savedId;
     feedCategory = 'all';
     feedOrder = null;
     feedScrollTop = 0;
@@ -2306,6 +2673,25 @@ document.addEventListener('submit', async event => {
 
 document.addEventListener('input', event => {
   const target = event.target;
+  if (target.dataset?.pe && postDraft) {
+    const block = postDraft.blocks[Number(target.dataset.index)];
+    if (block) block[target.dataset.pe] = target.dataset.pe === 'items' ? target.value.split('\n') : target.value;
+    if (target.tagName === 'TEXTAREA') autosize(target);
+    if (block?.type === 'button' && target.dataset.pe === 'url') {
+      const link = linkKind(target.value);
+      const shell = target.closest?.('.peb')?.querySelector?.('.pe-button');
+      if (shell?.firstElementChild) shell.firstElementChild.outerHTML = icon(link?.icon || 'external');
+    }
+    return;
+  }
+  if (target.dataset?.link !== undefined && postDraft) {
+    const index = Number(target.dataset.link);
+    postDraft.links[index] = target.value;
+    const link = linkKind(target.value);
+    const kind = modal.querySelector?.(`[data-kind-for="${index}"]`);
+    if (kind) kind.innerHTML = `${icon(link?.icon || 'globe')}<small>${escapeHtml(link?.label || 'Ссылка')}</small>`;
+    return;
+  }
   if (target.name === 'search') {
     search = target.value;
     const results = document.querySelector('#search-results');
@@ -2354,7 +2740,13 @@ document.addEventListener('change', async event => {
   else if (target.name === 'task-mode') ai.mode = target.value;
   else if (target.name === 'task-engine') { ai.engine[route().extra] = target.value; renderKeepingInput(); }
   else if (target.name === 'task-continue') ai.continueChat = target.checked;
-  else if (target.name === 'images' && target.files) await addPublishFiles(target.files);
+  else if (target.name === 'images' && target.files) { await addPublishFiles(target.files); target.value = ''; }
+  else if (target.dataset?.peFile && target.files?.[0]) { const file = target.files[0]; target.value = ''; await addPageMedia(file, target.dataset.peFile); }
+  else if (target.dataset?.peTheme && postDraft) { postDraft.theme[target.dataset.peTheme] = target.value; renderPageEditor(); }
+  else if (target.dataset?.peColor !== undefined && postDraft) styleBlock(Number(target.dataset.peColor), 'color', target.value);
+  else if (target.dataset?.single !== undefined && target.checked) {
+    target.closest?.('.chip-radio')?.querySelectorAll?.(`input[name="${target.name}"]`).forEach(input => { if (input !== target) input.checked = false; });
+  }
   else if (target.name === 'avatar-file' && target.files?.[0]) {
     try {
       const blob = await imageToBlob(target.files[0], 400, true);
@@ -2435,6 +2827,7 @@ document.addEventListener('keydown', event => {
 
 const SHEET_CLOSE_DISTANCE = 120;
 let sheetDrag = null;
+let sheetDetent = 'full';
 const sheetWheel = { amount: 0, last: 0, armed: false, timer: 0 };
 let feedWheelMuteUntil = 0;
 
@@ -2446,33 +2839,63 @@ function muteFeedWheel(ms) {
 }
 
 function sheetHasDraft() {
-  return Array.from(modal.querySelectorAll?.('input, textarea') || []).some(field => !['radio', 'checkbox', 'hidden', 'file'].includes(field.type) && field.value.trim() && field.value !== field.defaultValue);
+  if (dialogContext?.kind === 'publish' && (publishMedia.some(item => item.blob) || postDraft?.blocks.some(block => !block.url && (block.text || block.items?.some(Boolean))))) return true;
+  return Array.from(modal.querySelectorAll?.('input, textarea') || []).some(field => !['radio', 'checkbox', 'hidden', 'file', 'color'].includes(field.type) && field.value.trim() && field.value !== field.defaultValue);
+}
+
+function sheetBase() {
+  return sheetDetent === 'half' ? Math.round(innerHeight * 0.3) : 0;
 }
 
 function setSheetOffset(offset, animate = false) {
-  modal.style.transition = animate ? 'transform .24s var(--ease)' : 'none';
-  modal.style.transform = offset ? `translateY(${offset}px)` : '';
+  if (!modal.style) return;
+  const y = sheetBase() + offset;
+  modal.style.transition = animate ? 'transform .28s var(--ease)' : 'none';
+  modal.style.transform = y ? `translateY(${y}px)` : '';
   modal.style.setProperty('--sheet-fade', String(Math.max(0, 1 - offset / 500)));
+}
+
+function setDetent(detent) {
+  sheetDetent = detent;
+  modal.dataset.detent = detent;
+  setSheetOffset(0, true);
 }
 
 function resetSheet() {
   clearTimeout(sheetWheel.timer);
   sheetDrag = null;
+  sheetDetent = 'full';
   sheetWheel.amount = 0;
-  modal.classList.remove('sheet-closing');
+  modal.classList?.remove('sheet-closing');
+  if (!modal.style) return;
   modal.style.transition = '';
   modal.style.transform = '';
   modal.style.removeProperty('--sheet-fade');
 }
 
+// A full-height post first drops to 70%, a long or fast swipe closes it; other sheets close on a swipe.
 function releaseSheet(distance, fast = false) {
-  if (distance > SHEET_CLOSE_DISTANCE || (fast && distance > 30)) {
-    if (sheetHasDraft()) { setSheetOffset(0, true); toast('Сначала отправь или сотри текст'); return; }
-    modal.classList.add('sheet-closing');
-    muteFeedWheel(1000);
-    setSheetOffset(innerHeight, true);
-    setTimeout(() => { if (modal.classList.contains('sheet-closing')) closeDialog(); resetSheet(); }, 220);
-  } else setSheetOffset(0, true);
+  if (sheetDetent === 'full' && dialogContext?.kind === 'project' && isPhone()) {
+    if (distance > innerHeight * 0.5 || (fast && distance > 220)) dismissSheet();
+    else if (distance > 60 || (fast && distance > 20)) setDetent('half');
+    else setSheetOffset(0, true);
+    return;
+  }
+  if (distance > SHEET_CLOSE_DISTANCE || (fast && distance > 30)) dismissSheet();
+  else setSheetOffset(0, true);
+}
+
+function dismissSheet() {
+  if (sheetHasDraft()) { setSheetOffset(0, true); toast(dialogContext?.kind === 'publish' ? 'Черновик не сохранится — закрой крестиком' : 'Сначала отправь или сотри текст'); return; }
+  modal.classList.add('sheet-closing');
+  muteFeedWheel(1000);
+  modal.style.transition = 'transform .24s var(--ease)';
+  modal.style.transform = `translateY(${innerHeight}px)`;
+  setTimeout(() => {
+    if (!modal.classList.contains('sheet-closing')) return;
+    resetSheet();
+    closeDialog();
+  }, 230);
 }
 
 const sheetDragExcluded = 'input, textarea, select, [contenteditable="true"], .workspace';
@@ -2527,6 +2950,35 @@ modal.addEventListener('wheel', event => {
     releaseSheet(distance);
   }, 260);
 }, { passive: true });
+
+modal.addEventListener('scroll', () => {
+  if (sheetDetent === 'half' && modal.scrollTop > 2 && !sheetDrag?.active) setDetent('full');
+}, { passive: true });
+modal.addEventListener('focusin', event => {
+  const block = event.target.closest?.('.peb');
+  if (block) selectBlock(Number(block.dataset.block));
+  if (sheetDetent === 'half' && event.target.matches?.('input, textarea')) setDetent('full');
+});
+modal.addEventListener('click', event => {
+  const block = event.target.closest?.('.peb');
+  if (block && !event.target.closest?.('[data-action]')) selectBlock(Number(block.dataset.block));
+});
+// Desktop: files can be dropped onto the publish form.
+modal.addEventListener('dragover', event => {
+  if (!event.target.closest?.('#publish-form') || !event.dataTransfer?.types?.includes?.('Files')) return;
+  event.preventDefault();
+  modal.querySelector?.('.drop, .pick-add')?.classList.add('dragging');
+});
+modal.addEventListener('dragleave', event => { if (event.target.closest?.('.drop, .pick-add')) event.target.closest('.drop, .pick-add').classList.remove('dragging'); });
+modal.addEventListener('drop', event => {
+  if (!event.target.closest?.('#publish-form') || !event.dataTransfer?.files?.length) return;
+  event.preventDefault();
+  modal.querySelector?.('.dragging')?.classList.remove('dragging');
+  const host = event.target.closest('.pe-host');
+  const file = event.dataTransfer.files[0];
+  if (host && postDraft?.step === 3) addPageMedia(file, file.type.startsWith('video/') ? 'video' : 'image');
+  else addPublishFiles(event.dataTransfer.files);
+});
 
 modal.addEventListener('click', event => { if (event.target === modal) closeDialog(); });
 modal.addEventListener('close', () => {

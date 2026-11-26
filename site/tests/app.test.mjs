@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 
-const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
+const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
   .map(content => content.replace(/^import .*;\n/gm, '').replace(/^export /gm, ''))
   .join('\n');
 
@@ -136,4 +136,18 @@ test('slide dots sit in the bottom info block, above the title', () => {
   assert.doesNotMatch(html, /slide-bars/);
   const info = html.slice(html.indexOf('class="card-info"'));
   assert.ok(info.indexOf('slide-dots') > 0 && info.indexOf('slide-dots') < info.indexOf('card-title'), 'dots come before the title inside card-info');
+});
+
+test('a post opens as a themed store page; publishing has steps and no stock covers', () => {
+  const app = createApp();
+  app.navigate('#/project/forest-light');
+  const page = app.elements.get('#modal').innerHTML;
+  assert.match(page, /class="store pf-serif themed is-dark"/);
+  assert.match(page, /Лес, который помнит/);
+  assert.match(page, /Стадия<\/small><b>Прототип/);
+  runInContext('openPublish()', app.context);
+  const form = app.elements.get('#modal').innerHTML;
+  assert.match(form, /wizard-steps/);
+  assert.match(form, /data-pane="3"/);
+  assert.doesNotMatch(form, /cover-picker|Интерфейс/);
 });

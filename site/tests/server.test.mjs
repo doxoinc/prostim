@@ -157,3 +157,39 @@ test('feed events build post stats for everyone and a taste for the signed-in vi
   const reset = await viewer('DELETE', '/api/me/taste');
   assert.deepEqual(reset.body.taste.weights, {});
 });
+
+test('a post page keeps facts, links, theme and blocks; only the author edits it', async () => {
+  const author = client();
+  const other = client();
+  await author('POST', '/api/auth/register', { handle: 'pageauthor', name: 'Автор', password: 'secret12' });
+  await other('POST', '/api/auth/register', { handle: 'pageother', name: 'Другой', password: 'secret12' });
+  const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ handle: 'pageauthor', password: 'secret12' }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(40, 1)]);
+  const upload = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'image/gif', Cookie: cookie }, body: gif }).then(response => response.json());
+  assert.match(upload.url, /\.gif$/, 'GIFs are stored as GIFs, so they keep moving');
+  const served = await fetch(`${base}${upload.url}`);
+  assert.equal(served.headers.get('content-type'), 'image/gif');
+  const body = {
+    title: 'Ритм', summary: 'Раннер', category: 'games', stage: 'demo', platforms: ['web', 'ps9'], pricing: 'free', seeking: ['testers'], ai: true, madeWith: 'Godot, Claude Code',
+    links: ['https://store.steampowered.com/app/1', 'javascript:alert(1)'], theme: { bg: '#241631', accent: 'red', font: 'display' },
+    page: [{ type: 'heading', text: 'Привет', size: 'xl', color: '#ffd84d' }, { type: 'image', url: upload.url, caption: 'Геймплей' }, { type: 'script', text: 'x' }]
+  };
+  const created = await author('POST', '/api/projects', body);
+  assert.equal(created.status, 200);
+  const post = created.body.project;
+  assert.deepEqual([post.stage, post.platforms, post.pricing, post.ai, post.madeWith], ['demo', ['web'], 'free', true, ['Godot', 'Claude Code']]);
+  assert.deepEqual(post.links, ['https://store.steampowered.com/app/1']);
+  assert.deepEqual(post.theme, { bg: '#241631', accent: '', font: 'display' });
+  assert.deepEqual(post.page.map(block => block.type), ['heading', 'image']);
+  assert.equal(post.scene, '', 'a post without photos gets the title cover');
+  const foreign = await other('POST', '/api/projects', { ...body, page: [{ type: 'image', url: upload.url }] });
+  assert.equal(foreign.status, 400, 'page blocks cannot use someone else’s files');
+  const hijack = await other('PATCH', `/api/projects/${post.id}`, { title: 'Чужое', summary: 'x' });
+  assert.equal(hijack.status, 403);
+  const edited = await author('PATCH', `/api/projects/${post.id}`, { ...body, title: 'Ритм 2', theme: { bg: '#f5efe6', font: 'serif' }, page: [post.page[1], post.page[0]] });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.project.title, 'Ритм 2');
+  assert.equal(edited.body.project.theme.font, 'serif');
+  assert.deepEqual(edited.body.project.page.map(block => block.type), ['image', 'heading'], 'blocks keep the new order and existing files');
+});

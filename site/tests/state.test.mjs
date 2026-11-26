@@ -8,7 +8,7 @@ test('invalid persisted state recovers and removes malformed records', () => {
   const state = loadState({ getItem: () => JSON.stringify({ votes: ['a', 'a', 7], comments: { a: [null, { text: 'ok', name: 'Я' }, { text: 4 }] }, projects: [null, { id: 'x', title: 'Title', summary: 'Text', category: 'apps', scene: '<bad>', tags: 'broken', handle: '<bad>', color: 'red;display:none' }] }) });
   assert.deepEqual(state.votes, ['a']);
   assert.equal(state.comments.a.length, 1);
-  assert.equal(state.projects[0].scene, 'board');
+  assert.equal(state.projects[0].scene, '', 'an unknown scene falls back to the title cover');
   assert.deepEqual(state.projects[0].tags, []);
   assert.equal(state.projects[0].handle, 'me');
   assert.equal(state.projects[0].color, '#c4f56f');
