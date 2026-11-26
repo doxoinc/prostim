@@ -1324,7 +1324,7 @@ function wavesSvg(className = '') {
   const body = (y, amp) => `${crest(y, amp)} V 160 H 0 Z`;
   const gradient = (name, stops) => `<linearGradient id="${id}${name}" x1="0" x2="1" y1="0" y2="0">${stops.map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`).join('')}</linearGradient>`;
   const layer = (name, y, amp) => `<g class="wave ${name}"><path d="${body(y, amp)}" fill="url(#${id}${name})"/><path class="crest" d="${crest(y, amp)}"/></g>`;
-  return `<svg class="waves ${className}" viewBox="0 0 1440 160" preserveAspectRatio="none" aria-hidden="true"><defs>${gradient('w1', [[0, '#6cb8ff'], [0.25, '#b78cff'], [0.5, '#ff7aa2'], [0.75, '#6cb8ff'], [1, '#b78cff']])}${gradient('w2', [[0, '#c4f56f'], [0.3, '#3ddbb0'], [0.6, '#6cb8ff'], [1, '#c4f56f']])}${gradient('w3', [[0, '#5d6773'], [0.2, '#f4f7fb'], [0.45, '#7d8794'], [0.7, '#ffffff'], [1, '#5d6773']])}</defs>${layer('w1', 66, 34)}${layer('w2', 92, 26)}${layer('w3', 116, 18)}</svg>`;
+  return `<svg class="waves ${className}" viewBox="0 0 1440 160" preserveAspectRatio="none" aria-hidden="true"><defs>${gradient('w1', [[0, '#6cb8ff'], [0.25, '#b78cff'], [0.5, '#ff7aa2'], [0.75, '#6cb8ff'], [1, '#b78cff']])}${gradient('w2', [[0, '#9fcaff'], [0.3, '#3ddbb0'], [0.6, '#6cb8ff'], [1, '#9fcaff']])}${gradient('w3', [[0, '#5d6773'], [0.2, '#f4f7fb'], [0.45, '#7d8794'], [0.7, '#ffffff'], [1, '#5d6773']])}</defs>${layer('w1', 66, 34)}${layer('w2', 92, 26)}${layer('w3', 116, 18)}</svg>`;
 }
 
 // A drop of liquid chrome: a morphing silver body, an iridescent film and a highlight.
