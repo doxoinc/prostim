@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 
-const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'chat.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
+const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'chat.js', 'ads.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
   .map(content => content.replace(/^import .*;\n/gm, '').replace(/^export /gm, ''))
   .join('\n');
 
@@ -187,4 +187,21 @@ test('agent versions compare as numbers', () => {
   assert.equal(runInContext('versionAtLeast("0.10.0", "0.3.0")', app.context), true);
   assert.equal(runInContext('versionAtLeast("0.2.9", "0.3.0")', app.context), false);
   assert.equal(runInContext('versionAtLeast("", "0.3.0")', app.context), false);
+});
+
+test('ads go in after every five posts, rotate, and never sit next to the same post', () => {
+  const app = createApp();
+  const result = JSON.parse(runInContext(`(() => {
+    const entries = Array.from({ length: 12 }, (_, index) => ({ id: 'p' + index }));
+    const ids = list => list.map(entry => entry.ad || entry.id);
+    const rotation = ids(placeAds(entries, [{ id: 'a1', projectId: 'x' }, { id: 'a2', projectId: 'y' }]));
+    const state = { since: 0, next: 0 };
+    const nextTo = ids(placeAds(entries, [{ id: 'a1', projectId: 'x' }, { id: 'a2', projectId: 'p10' }], state));
+    const more = ids(placeAds([{ id: 'q0' }, { id: 'q1' }, { id: 'q2' }], [{ id: 'a1', projectId: 'x' }], state));
+    return JSON.stringify({ rotation, nextTo, more, none: placeAds(entries, []).length });
+  })()`, app.context));
+  assert.deepEqual(result.rotation, ['p0', 'p1', 'p2', 'p3', 'p4', 'a1', 'p5', 'p6', 'p7', 'p8', 'p9', 'a2', 'p10', 'p11']);
+  assert.deepEqual(result.nextTo, ['p0', 'p1', 'p2', 'p3', 'p4', 'a1', 'p5', 'p6', 'p7', 'p8', 'p9', 'a1', 'p10', 'p11'], 'the ad for p10 is not put right before p10');
+  assert.deepEqual(result.more, ['q0', 'q1', 'q2', 'a1'], 'the count carries over when the feed grows');
+  assert.equal(result.none, 12);
 });

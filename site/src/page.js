@@ -41,7 +41,7 @@ const HEX = /^#[0-9a-f]{6}$/i;
 
 const linkKinds = [
   ['steam', 'Steam', 'gamepad', ['store.steampowered.com', 'steamcommunity.com', 's.team']],
-  ['epic', 'Epic Games', 'gamepad', ['epicgames.com']],
+  ['vkplay', 'VK Play', 'gamepad', ['vkplay.ru', 'store.vkplay.ru', 'live.vkplay.ru']],
   ['itch', 'itch.io', 'gamepad', ['itch.io']],
   ['gog', 'GOG', 'gamepad', ['gog.com']],
   ['github', 'GitHub', 'branch', ['github.com']],

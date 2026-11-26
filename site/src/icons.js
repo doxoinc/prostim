@@ -60,7 +60,10 @@ const paths = {
   smile: '<circle cx="12" cy="12" r="8.5"/><path d="M8.3 14.2a4.6 4.6 0 0 0 7.4 0M9.2 9.6h.01M14.8 9.6h.01"/>',
   mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
   clip: '<path d="M20 11.4l-7.7 7.7a5 5 0 0 1-7.1-7.1l8.4-8.4a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/>',
-  music: '<path d="M9 18.5V5.5l10-2v13"/><circle cx="6.5" cy="18.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>'
+  music: '<path d="M9 18.5V5.5l10-2v13"/><circle cx="6.5" cy="18.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>',
+  megaphone: '<path d="M4 10v4a1 1 0 0 0 1 1h2l6 4.5v-15L7 9H5a1 1 0 0 0-1 1z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/>',
+  crown: '<path d="M4 17.5 3 7.5l5 4 4-6.5 4 6.5 5-4-1 10z"/><path d="M5 20.5h14"/>',
+  skip: '<path d="m6 6 6 6 6-6M6 12.5l6 6 6-6"/>'
 };
 
 export function icon(name, className = '') {

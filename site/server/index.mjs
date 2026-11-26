@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.mjs';
@@ -10,6 +10,10 @@ import { demoProjects, initialTopics } from '../src/data.js';
 import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
 import { cleanPostFields } from '../src/page.js';
 import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
+import { codeLetter, createMailer } from './mail.mjs';
+import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
+import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
+import { boostPlan, boostPrice, plusPlan } from '../src/ads.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -22,6 +26,9 @@ const MODES = ['read', 'edit', 'full'];
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json' };
 
 const db = await openDatabase({ directory: DATA_DIR, url: process.env.DATABASE_URL });
+const mailer = createMailer(process.env, DATA_DIR);
+// With a real mailbox every new account confirms its e-mail; REQUIRE_EMAIL=0 or 1 overrides that.
+const REQUIRE_EMAIL = process.env.REQUIRE_EMAIL ? process.env.REQUIRE_EMAIL === '1' : mailer.real;
 const D = db.data;
 seed();
 
@@ -87,7 +94,7 @@ function publicUser(user, stats = userStats()) {
   const entry = stats.get(user.id) || { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [] };
   return {
     id: user.id, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', bio: user.bio || '',
-    createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official),
+    createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official), plus: hasPlus(user),
     projects: entry.projects, followers: entry.followers, following: entry.following, votesReceived: entry.votesReceived,
     ...trustSummary(entry)
   };
@@ -338,27 +345,178 @@ async function startSession(request, user) {
   return { 'Set-Cookie': sessionCookie(request, raw, SESSION_DAYS * 86400) };
 }
 
-on('POST', '/api/auth/register', async ({ request, body }) => {
-  if (!authLimit(clientIp(request))) fail(429, 'Слишком много попыток, подожди немного');
-  const handle = String(body.handle || '').trim().toLowerCase();
+const reservedHandles = ['me', 'admin', 'api', 'root', 'support', 'prostim'];
+
+function newAccountFields(body) {
+  const handle = String(body.handle || '').trim().toLowerCase().replace(/^@/, '');
   const name = cleanText(body.name, 40);
   const password = String(body.password || '');
   if (!/^[a-z0-9_]{3,20}$/.test(handle)) fail(400, 'Ник: 3–20 символов, латиница, цифры или _');
-  if (['me', 'admin', 'api', 'root', 'support', 'prostim'].includes(handle) || userByHandle(handle)) fail(409, 'Этот ник уже занят');
+  if (reservedHandles.includes(handle) || userByHandle(handle)) fail(409, 'Этот ник уже занят');
   if (!name) fail(400, 'Укажи имя');
   if (password.length < 6 || password.length > 200) fail(400, 'Пароль: минимум 6 символов');
+  return { handle, name, password };
+}
+
+function createUser({ handle, name, passwordHash = '', email = '', oauth = null }) {
   const id = randomUUID();
-  const user = { id, handle, name, initials: initialsOf(name), color: colorFor(handle), bio: '', passwordHash: await hashPassword(password), createdAt: Date.now() };
+  const user = { id, handle, name, initials: initialsOf(name), color: colorFor(handle), bio: '', passwordHash, createdAt: Date.now() };
+  if (email) { user.email = email; user.emailVerified = true; }
+  if (oauth) user.oauth = oauth;
   D.users[id] = user;
   D.messages.push({ id: randomUUID(), from: 'prostim', to: id, text: 'Привет! Это про.стим. Покажи проект в ленте, подай игру в Steam или подключи свой компьютер в ИИ-мире — задачи для Claude Code и Codex можно ставить прямо с телефона.', createdAt: Date.now() });
+  return user;
+}
+
+const normalEmail = value => String(value || '').trim().toLowerCase();
+const validEmail = email => email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+const userByEmail = email => (email ? Object.values(D.users).find(user => user.email === email) : null) || null;
+
+on('POST', '/api/auth/register', async ({ request, body }) => {
+  if (!authLimit(clientIp(request))) fail(429, 'Слишком много попыток, подожди немного');
+  if (REQUIRE_EMAIL) fail(400, 'Подтверди почту: на неё придёт код');
+  const fields = newAccountFields(body);
+  const user = createUser({ handle: fields.handle, name: fields.name, passwordHash: await hashPassword(fields.password) });
   return { body: { ok: true }, headers: await startSession(request, user) };
 });
 
 on('POST', '/api/auth/login', async ({ request, body }) => {
   if (!authLimit(clientIp(request))) fail(429, 'Слишком много попыток, подожди немного');
-  const user = userByHandle(body.handle);
-  if (!user?.passwordHash || !(await verifyPassword(String(body.password || ''), user.passwordHash))) fail(401, 'Неверный ник или пароль');
+  const login = String(body.handle || '').trim().replace(/^@/, '');
+  const user = login.includes('@') ? userByEmail(normalEmail(login)) : userByHandle(login);
+  if (!user?.passwordHash || !(await verifyPassword(String(body.password || ''), user.passwordHash))) fail(401, user && !user.passwordHash ? 'У этого аккаунта нет пароля: войди через почту или соцсеть' : 'Неверный ник, почта или пароль');
   return { body: { ok: true }, headers: await startSession(request, user) };
+});
+
+/* E-mail codes: confirm the address at sign-up, sign in without a password, attach an address later */
+
+const CODE_TTL = 10 * 60 * 1000;
+const CODE_RESEND = 45 * 1000;
+const codeKey = email => sha256(`code:${email}`);
+
+on('POST', '/api/auth/email/start', async ({ request, body, user }) => {
+  if (!authLimit(clientIp(request))) fail(429, 'Слишком много попыток, подожди немного');
+  if (!mailer.configured) fail(503, 'Письма пока не отправляются — зарегистрируйся по нику и паролю');
+  const purpose = ['register', 'login', 'link'].includes(body.purpose) ? body.purpose : 'register';
+  const email = normalEmail(body.email);
+  if (!validEmail(email)) fail(400, 'Проверь адрес почты');
+  const owner = userByEmail(email);
+  let pending = null;
+  if (purpose === 'register') {
+    if (owner) fail(409, 'Эта почта уже привязана к аккаунту — войди по ней');
+    const fields = newAccountFields(body);
+    pending = { handle: fields.handle, name: fields.name, passwordHash: await hashPassword(fields.password) };
+  } else if (purpose === 'login') {
+    if (!owner) fail(404, 'Аккаунта с этой почтой нет — зарегистрируйся');
+  } else {
+    needUser(user);
+    if (owner && owner.id !== user.id) fail(409, 'Эта почта уже привязана к другому аккаунту');
+    pending = { userId: user.id };
+  }
+  const key = codeKey(email);
+  const previous = D.emailCodes[key];
+  if (previous && Date.now() - previous.sentAt < CODE_RESEND) fail(429, `Код уже отправлен. Новый можно запросить через ${Math.ceil((CODE_RESEND - (Date.now() - previous.sentAt)) / 1000)} с`);
+  for (const [entryKey, entry] of Object.entries(D.emailCodes)) if (entry.expiresAt < Date.now()) delete D.emailCodes[entryKey];
+  const code = String(randomInt(0, 1e6)).padStart(6, '0');
+  try {
+    await mailer.send({ to: email, ...codeLetter(code, purpose) });
+  } catch (error) {
+    console.error('Письмо не отправлено:', error.message);
+    fail(502, 'Не получилось отправить письмо. Попробуй ещё раз чуть позже');
+  }
+  D.emailCodes[key] = { email, purpose, codeHash: sha256(`${email}:${code}`), pending, tries: 0, sentAt: Date.now(), expiresAt: Date.now() + CODE_TTL };
+  db.save();
+  return { ok: true, email, resendIn: CODE_RESEND / 1000 };
+});
+
+on('POST', '/api/auth/email/verify', async ({ request, body, user }) => {
+  if (!authLimit(clientIp(request))) fail(429, 'Слишком много попыток, подожди немного');
+  const email = normalEmail(body.email);
+  const key = codeKey(email);
+  const entry = D.emailCodes[key];
+  if (!entry || entry.expiresAt < Date.now()) { delete D.emailCodes[key]; fail(400, 'Код устарел — запроси новый'); }
+  entry.tries += 1;
+  if (entry.codeHash !== sha256(`${email}:${String(body.code || '').replace(/\D/g, '')}`)) {
+    if (entry.tries >= 5) { delete D.emailCodes[key]; db.save(); fail(429, 'Слишком много неверных попыток — запроси новый код'); }
+    db.save();
+    fail(400, `Неверный код, осталось попыток: ${5 - entry.tries}`);
+  }
+  delete D.emailCodes[key];
+  if (entry.purpose === 'register') {
+    if (userByEmail(email)) fail(409, 'Эта почта уже привязана к аккаунту — войди по ней');
+    if (userByHandle(entry.pending.handle)) fail(409, 'Этот ник уже заняли, пока ты вводил код — выбери другой');
+    const created = createUser({ ...entry.pending, email });
+    return { body: { ok: true, created: true }, headers: await startSession(request, created) };
+  }
+  if (entry.purpose === 'login') {
+    const owner = userByEmail(email);
+    if (!owner) fail(404, 'Аккаунта с этой почтой нет');
+    return { body: { ok: true }, headers: await startSession(request, owner) };
+  }
+  needUser(user);
+  if (entry.pending?.userId !== user.id) fail(403, 'Код выписан для другого аккаунта');
+  user.email = email;
+  user.emailVerified = true;
+  db.save();
+  return { ok: true, email };
+});
+
+/* Google, Yandex, GitHub */
+
+function siteOrigin(request) {
+  return (process.env.PUBLIC_URL || `${isSecure(request) ? 'https' : 'http'}://${request.headers.host}`).replace(/\/$/, '');
+}
+
+function redirect(response, location, cookies = []) {
+  response.writeHead(302, { Location: location, 'Cache-Control': 'no-store', ...(cookies.length ? { 'Set-Cookie': cookies } : {}) });
+  response.end();
+  return null;
+}
+
+const oauthCookie = (request, value, maxAge) => `ps_oauth=${value}; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isSecure(request) ? '; Secure' : ''}`;
+const authError = message => `/?auth_error=${encodeURIComponent(message)}#/me`;
+
+function freeHandle(...candidates) {
+  for (const candidate of candidates) {
+    const base = String(candidate || '').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 16);
+    if (base.length < 3) continue;
+    if (!reservedHandles.includes(base) && !userByHandle(base)) return base;
+    for (let index = 2; index < 1000; index += 1) if (!userByHandle(`${base}${index}`)) return `${base}${index}`;
+  }
+  return `user_${randomUUID().slice(0, 8)}`;
+}
+
+on('GET', '/api/auth/oauth/:provider/start', async ({ request, response, params }) => {
+  if (!oauthProviders().includes(params.provider)) return redirect(response, authError('Этот способ входа пока не подключён'));
+  const state = token(18);
+  const url = authorizeUrl(params.provider, { redirectUri: `${siteOrigin(request)}/api/auth/oauth/${params.provider}/callback`, state });
+  return redirect(response, url, [oauthCookie(request, `${state}.${params.provider}`, 600)]);
+});
+
+on('GET', '/api/auth/oauth/:provider/callback', async ({ request, response, params, query, user }) => {
+  const provider = params.provider;
+  const clear = oauthCookie(request, '', 0);
+  const [state, expected] = String(parseCookies(request.headers.cookie).ps_oauth || '').split('.');
+  if (!oauthProviders().includes(provider) || !state || expected !== provider || query.get('state') !== state) return redirect(response, authError('Вход не удался: начни заново'), [clear]);
+  if (query.get('error') || !query.get('code')) return redirect(response, authError(`Вход через ${oauthLabel(provider)} отменён`), [clear]);
+  let profile;
+  try {
+    profile = await oauthProfile(provider, { code: query.get('code'), redirectUri: `${siteOrigin(request)}/api/auth/oauth/${provider}/callback` });
+  } catch (error) {
+    console.error(error.message);
+    return redirect(response, authError(`Вход через ${oauthLabel(provider)} не удался, попробуй ещё раз`), [clear]);
+  }
+  const email = profile.emailVerified && validEmail(profile.email) ? profile.email : '';
+  let account = Object.values(D.users).find(item => item.oauth?.[provider] === profile.id) || userByEmail(email) || user;
+  if (account) {
+    account.oauth = { ...(account.oauth || {}), [provider]: profile.id };
+    if (email && !account.email) { account.email = email; account.emailVerified = true; }
+  } else {
+    const name = cleanText(profile.name, 40) || profile.login || 'Без имени';
+    account = createUser({ handle: freeHandle(profile.login, email.split('@')[0], name), name, email, oauth: { [provider]: profile.id } });
+  }
+  const session = await startSession(request, account);
+  return redirect(response, '/#/me', [clear, session['Set-Cookie']]);
 });
 
 on('POST', '/api/auth/logout', async ({ request }) => {
@@ -366,6 +524,145 @@ on('POST', '/api/auth/logout', async ({ request }) => {
   if (raw) delete D.sessions[sha256(raw)];
   db.save();
   return { body: { ok: true }, headers: { 'Set-Cookie': sessionCookie(request, '', 0) } };
+});
+
+/* Paid reach: promoted posts shown as ads in the feed, and the Plus subscription */
+
+function hasPlus(user) {
+  return Boolean(user?.plus?.until > Date.now());
+}
+
+function promotionLive(item, now = Date.now()) {
+  if (item.status !== 'active') return false;
+  if (item.endsAt < now || item.shown >= item.impressions || !D.projects.some(project => project.id === item.projectId)) { item.status = 'done'; return false; }
+  return true;
+}
+
+function adsFor(user) {
+  if (hasPlus(user)) return [];
+  const now = Date.now();
+  return D.promotions.filter(item => promotionLive(item, now)).map(item => ({ id: item.id, projectId: item.projectId }));
+}
+
+function promotionView(item) {
+  promotionLive(item);
+  return { id: item.id, projectId: item.projectId, plan: item.plan, status: item.status, impressions: item.impressions, shown: item.shown, clicks: item.clicks, startsAt: item.startsAt || 0, endsAt: item.endsAt || 0, paymentId: item.paymentId, createdAt: item.createdAt };
+}
+
+function paymentView(payment) {
+  return { id: payment.id, kind: payment.kind, amount: payment.amount, status: payment.status, mode: payment.mode, description: payment.description, confirmationUrl: payment.confirmationUrl || '' };
+}
+
+// Money arrived: the post starts showing, or Plus is extended by a month on top of what is left.
+function activatePayment(payment) {
+  if (payment.status === 'succeeded') return;
+  payment.status = 'succeeded';
+  payment.paidAt = Date.now();
+  const now = Date.now();
+  if (payment.kind === 'promotion') {
+    const promotion = D.promotions.find(item => item.id === payment.ref);
+    if (promotion && promotion.status === 'pending') Object.assign(promotion, { status: 'active', startsAt: now, endsAt: now + promotion.days * 864e5 });
+  } else if (payment.kind === 'plus') {
+    const user = D.users[payment.userId];
+    if (user) user.plus = { until: Math.max(now, user.plus?.until || 0) + plusPlan.days * 864e5, since: user.plus?.since || now };
+  }
+  db.save();
+  pushTo([payment.userId], 'payment', { id: payment.id, status: payment.status });
+}
+
+async function startPayment(request, user, { kind, amount, description, ref }) {
+  const mode = paymentsMode();
+  if (!mode) fail(503, 'Оплата пока не подключена');
+  const payment = { id: `pay-${randomUUID().slice(0, 13)}`, userId: user.id, kind, amount, description, ref, mode, status: 'pending', createdAt: Date.now() };
+  if (mode === 'yookassa') {
+    try {
+      Object.assign(payment, await createYookassaPayment(payment, `${siteOrigin(request)}/?payment=${payment.id}#/me`));
+    } catch (error) {
+      console.error('ЮKassa:', error.message);
+      fail(502, 'Платёжный сервис не ответил, попробуй ещё раз');
+    }
+  }
+  D.payments[payment.id] = payment;
+  db.save();
+  return payment;
+}
+
+async function refreshPayment(payment) {
+  if (payment.mode !== 'yookassa' || payment.status !== 'pending' || !payment.providerId) return payment;
+  const remote = await yookassaStatus(payment.providerId).catch(() => null);
+  if (remote?.paid && remote.amount >= payment.amount) activatePayment(payment);
+  else if (remote?.status === 'canceled') {
+    payment.status = 'canceled';
+    const promotion = payment.kind === 'promotion' ? D.promotions.find(item => item.id === payment.ref) : null;
+    if (promotion?.status === 'pending') promotion.status = 'canceled';
+    db.save();
+  }
+  return payment;
+}
+
+on('POST', '/api/promotions', async ({ request, user, body }) => {
+  needUser(user);
+  const project = D.projects.find(item => item.id === body.projectId);
+  if (!project) fail(404, 'Проект не найден');
+  if (project.ownerId !== user.id) fail(403, 'Продвигать можно только свои проекты');
+  const plan = boostPlan(body.plan);
+  if (!plan) fail(400, 'Выбери пакет');
+  if (D.promotions.some(item => item.projectId === project.id && promotionLive(item))) fail(409, 'Этот проект уже продвигается');
+  for (const item of D.promotions) if (item.projectId === project.id && item.status === 'pending') item.status = 'canceled';
+  const promotion = { id: `ad-${randomUUID().slice(0, 12)}`, projectId: project.id, ownerId: user.id, plan: plan.id, days: plan.days, impressions: plan.impressions, shown: 0, clicks: 0, status: 'pending', createdAt: Date.now() };
+  D.promotions.push(promotion);
+  const payment = await startPayment(request, user, { kind: 'promotion', amount: boostPrice(plan, hasPlus(user)), description: `Продвижение «${clip(project.title, 60)}» · ${plan.title}`, ref: promotion.id });
+  promotion.paymentId = payment.id;
+  db.save();
+  return { promotion: promotionView(promotion), payment: paymentView(payment) };
+});
+
+on('POST', '/api/plus', async ({ request, user }) => {
+  needUser(user);
+  const payment = await startPayment(request, user, { kind: 'plus', amount: plusPlan.price, description: `${plusPlan.title} · ${plusPlan.days} дней`, ref: plusPlan.id });
+  return { payment: paymentView(payment) };
+});
+
+on('GET', '/api/payments/:id', async ({ user, params }) => {
+  needUser(user);
+  const payment = D.payments[params.id];
+  if (!payment || payment.userId !== user.id) fail(404, 'Платёж не найден');
+  return { payment: paymentView(await refreshPayment(payment)) };
+});
+
+// Test mode only: stands in for the bank page.
+on('POST', '/api/payments/:id/test', async ({ user, params }) => {
+  needUser(user);
+  const payment = D.payments[params.id];
+  if (!payment || payment.userId !== user.id) fail(404, 'Платёж не найден');
+  if (payment.mode !== 'test') fail(400, 'Это настоящий платёж — оплати его на странице банка');
+  if (payment.status === 'pending') activatePayment(payment);
+  return { payment: paymentView(payment) };
+});
+
+// ЮKassa notification. Its body is only a hint: the status is asked from ЮKassa directly.
+on('POST', '/api/payments/yookassa', async ({ body }) => {
+  const providerId = String(body?.object?.id || '');
+  const payment = providerId ? Object.values(D.payments).find(item => item.providerId === providerId) : null;
+  if (payment) await refreshPayment(payment);
+  return { ok: true };
+});
+
+// Impressions and taps on ads, counted once per viewer per promotion and half hour.
+const adEvents = new Map();
+on('POST', '/api/ads/:id/:event', async ({ request, user, params }) => {
+  if (!['seen', 'click'].includes(params.event)) fail(404, 'Не найдено');
+  const promotion = D.promotions.find(item => item.id === params.id);
+  if (!promotion || !promotionLive(promotion)) return { ok: true };
+  if (user?.id === promotion.ownerId) return { ok: true };
+  const key = `${params.event}:${promotion.id}:${user?.id || clientIp(request)}`;
+  if (Date.now() - (adEvents.get(key) || 0) < 30 * 60 * 1000) return { ok: true };
+  adEvents.set(key, Date.now());
+  if (adEvents.size > 50000) adEvents.clear();
+  if (params.event === 'seen') promotion.shown += 1; else promotion.clicks += 1;
+  promotionLive(promotion);
+  db.save();
+  return { ok: true };
 });
 
 on('PATCH', '/api/me', async ({ user, body }) => {
@@ -397,7 +694,11 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     saved: meId ? D.projects.filter(project => project.saves.includes(meId)).map(project => project.id) : [],
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
-    workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : []
+    workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0 } : null,
+    ads: adsFor(user),
+    promotions: meId ? D.promotions.filter(item => item.ownerId === meId && item.status !== 'canceled').map(promotionView) : [],
+    config: { email: mailer.configured, requireEmail: REQUIRE_EMAIL, providers: oauthProviders().map(id => ({ id, label: oauthLabel(id) })), payments: paymentsMode() }
   };
 });
 

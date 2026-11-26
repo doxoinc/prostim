@@ -18,7 +18,10 @@ const empty = () => ({
   pairCodes: {},
   uploads: {},
   tastes: {},
-  feedStats: {}
+  feedStats: {},
+  emailCodes: {},
+  promotions: [],
+  payments: {}
 });
 
 export const uploadTypes = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', mp4: 'video/mp4', webm: 'video/webm', mov: 'video/mp4' };

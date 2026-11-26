@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,10 +13,40 @@ const port = 4600 + Math.floor(Math.random() * 300);
 const base = `http://127.0.0.1:${port}`;
 let server;
 let dataDir;
+let oauthMock;
+
+// A stand-in for Google: it hands out one code, checks the secret, and returns a fixed profile.
+function startOauthMock() {
+  oauthMock = http.createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const json = data => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
+    if (url.pathname === '/google/token') {
+      const form = new URLSearchParams(body);
+      if (form.get('code') !== 'good-code' || form.get('client_secret') !== 'gsecret') { response.writeHead(400); return response.end('{}'); }
+      return json({ access_token: 'g-token' });
+    }
+    if (url.pathname === '/google/userinfo') {
+      if (request.headers.authorization !== 'Bearer g-token') { response.writeHead(401); return response.end('{}'); }
+      return json({ sub: 'g-123', email: 'Ivan.Petrov@gmail.com', email_verified: true, name: 'Иван Петров' });
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  return new Promise(resolve => oauthMock.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${oauthMock.address().port}`)));
+}
+
+async function lastCode(email) {
+  const lines = (await readFile(path.join(dataDir, 'outbox.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  const letter = lines.reverse().find(item => item.to === email);
+  return /\b(\d{6})\b/.exec(letter?.text || '')?.[1];
+}
 
 test.before(async () => {
   dataDir = await mkdtemp(path.join(os.tmpdir(), 'prostim-test-'));
-  server = spawn(process.execPath, [path.join(root, 'server/index.mjs')], { env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, DATABASE_URL: '' }, stdio: 'pipe' });
+  const mockUrl = await startOauthMock();
+  server = spawn(process.execPath, [path.join(root, 'server/index.mjs')], { env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, DATABASE_URL: '', MAIL_TRANSPORT: 'outbox', GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsecret', OAUTH_MOCK_URL: mockUrl, YOOKASSA_SHOP_ID: '', YOOKASSA_SECRET_KEY: '', PAYMENTS_TEST: '' }, stdio: 'pipe' });
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try { if ((await fetch(`${base}/healthz`)).ok) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -28,6 +59,7 @@ test.after(async () => {
     server.kill('SIGTERM');
     await once(server, 'exit');
   }
+  oauthMock?.close();
   await rm(dataDir, { recursive: true, force: true });
 });
 
@@ -247,4 +279,109 @@ test('AI task attachments: private files that only the task computer can fetch',
   assert.equal((await file.arrayBuffer()).byteLength, 43);
   assert.equal((await fetch(`${base}/api/agent/files/${upload.id}`)).status, 401, 'needs the device token');
   assert.equal((await owner('GET', `/api/workspaces/${workspaceId}`)).body.workspace.device.version, '0.3.0');
+});
+
+test('e-mail codes: sign-up confirms the address, then the address signs in with a password or a code', async () => {
+  const ip = { 'X-Forwarded-For': '10.9.1.1' };
+  const dana = client();
+  const start = await dana('POST', '/api/auth/email/start', { purpose: 'register', email: 'Dana@Example.com ', handle: 'dana', name: 'Дана', password: 'secret12' }, ip);
+  assert.equal(start.status, 200);
+  assert.equal(start.body.email, 'dana@example.com');
+  assert.equal((await dana('POST', '/api/auth/email/start', { purpose: 'register', email: 'dana@example.com', handle: 'dana', name: 'Дана', password: 'secret12' }, ip)).status, 429, 'no new letter within 45 s');
+  const code = await lastCode('dana@example.com');
+  assert.match(code, /^\d{6}$/);
+  const wrong = await dana('POST', '/api/auth/email/verify', { email: 'dana@example.com', code: code === '000000' ? '111111' : '000000' }, ip);
+  assert.equal(wrong.status, 400);
+  assert.match(wrong.body.error, /осталось попыток: 4/);
+  assert.equal((await dana('POST', '/api/auth/email/verify', { email: 'dana@example.com', code }, ip)).status, 200);
+  const boot = (await dana('GET', '/api/bootstrap')).body;
+  assert.equal(boot.me.handle, 'dana');
+  assert.equal(boot.account.email, 'dana@example.com');
+  assert.equal(boot.users.find(user => user.handle === 'dana').email, undefined, 'the address is not public');
+  assert.equal((await dana('POST', '/api/auth/email/verify', { email: 'dana@example.com', code }, ip)).status, 400, 'a code works once');
+  assert.equal((await client()('POST', '/api/auth/email/start', { purpose: 'register', email: 'dana@example.com', handle: 'dana2', name: 'Д', password: 'secret12' }, ip)).status, 409);
+  assert.equal((await client()('POST', '/api/auth/login', { handle: 'DANA@example.com', password: 'secret12' }, ip)).status, 200, 'the address works as a login');
+  const later = client();
+  assert.equal((await later('POST', '/api/auth/email/start', { purpose: 'login', email: 'nobody@example.com' }, ip)).status, 404);
+  assert.equal((await later('POST', '/api/auth/email/start', { purpose: 'login', email: 'dana@example.com' }, ip)).status, 200);
+  assert.equal((await later('POST', '/api/auth/email/verify', { email: 'dana@example.com', code: await lastCode('dana@example.com') }, ip)).status, 200);
+  assert.equal((await later('GET', '/api/bootstrap')).body.me.handle, 'dana');
+});
+
+test('Google sign-in checks the state, creates the account once and finds it again', async () => {
+  const startUrl = `${base}/api/auth/oauth/google/start`;
+  const started = await fetch(startUrl, { redirect: 'manual' });
+  assert.equal(started.status, 302);
+  const target = new URL(started.headers.get('location'));
+  assert.equal(target.pathname, '/google/authorize');
+  assert.equal(target.searchParams.get('client_id'), 'gid');
+  assert.equal(target.searchParams.get('redirect_uri'), `${base}/api/auth/oauth/google/callback`);
+  const state = target.searchParams.get('state');
+  const stateCookie = started.headers.get('set-cookie').split(';')[0];
+  const forged = await fetch(`${base}/api/auth/oauth/google/callback?code=good-code&state=other`, { redirect: 'manual', headers: { Cookie: stateCookie } });
+  assert.match(forged.headers.get('location'), /auth_error/, 'a state that does not match the cookie is refused');
+  const noCookie = await fetch(`${base}/api/auth/oauth/google/callback?code=good-code&state=${state}`, { redirect: 'manual' });
+  assert.match(noCookie.headers.get('location'), /auth_error/);
+  const signIn = async () => {
+    const first = await fetch(startUrl, { redirect: 'manual' });
+    const firstState = new URL(first.headers.get('location')).searchParams.get('state');
+    const back = await fetch(`${base}/api/auth/oauth/google/callback?code=good-code&state=${firstState}`, { redirect: 'manual', headers: { Cookie: first.headers.get('set-cookie').split(';')[0] } });
+    assert.equal(back.headers.get('location'), '/#/me');
+    const session = back.headers.getSetCookie().find(cookie => cookie.startsWith('ps_session='));
+    return (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: session.split(';')[0] } }).then(response => response.json()));
+  };
+  const once = await signIn();
+  assert.equal(once.me.name, 'Иван Петров');
+  assert.equal(once.me.handle, 'ivan_petrov');
+  assert.equal(once.account.email, 'ivan.petrov@gmail.com');
+  assert.deepEqual(once.account.providers, ['google']);
+  const twice = await signIn();
+  assert.equal(twice.me.id, once.me.id, 'the same Google account signs into the same profile');
+  const badCode = await fetch(startUrl, { redirect: 'manual' });
+  const badState = new URL(badCode.headers.get('location')).searchParams.get('state');
+  const refused = await fetch(`${base}/api/auth/oauth/google/callback?code=stolen&state=${badState}`, { redirect: 'manual', headers: { Cookie: badCode.headers.get('set-cookie').split(';')[0] } });
+  assert.match(refused.headers.get('location'), /auth_error/);
+  assert.match((await fetch(`${base}/api/auth/oauth/github/start`, { redirect: 'manual' })).headers.get('location'), /auth_error/, 'providers without keys are off');
+  assert.deepEqual((await client()('GET', '/api/bootstrap')).body.config.providers, [{ id: 'google', label: 'Google' }]);
+});
+
+test('promotion: paid in test mode, shown to others between posts, never to Plus subscribers', async () => {
+  const owner = client();
+  const viewer = client();
+  const other = client();
+  await owner('POST', '/api/auth/register', { handle: 'adowner', name: 'Рекламодатель', password: 'secret12' }, { 'X-Forwarded-For': '10.9.1.2' });
+  await viewer('POST', '/api/auth/register', { handle: 'adviewer', name: 'Зритель', password: 'secret12' }, { 'X-Forwarded-For': '10.9.1.3' });
+  await other('POST', '/api/auth/register', { handle: 'adother', name: 'Другой', password: 'secret12' }, { 'X-Forwarded-For': '10.9.1.4' });
+  const project = (await owner('POST', '/api/projects', { title: 'Неон', summary: 'Гонки', category: 'games', images: [] })).body.project;
+  assert.equal((await viewer('POST', '/api/promotions', { projectId: project.id, plan: 'week' })).status, 403, 'only the author promotes a post');
+  assert.equal((await owner('POST', '/api/promotions', { projectId: project.id, plan: 'forever' })).status, 400);
+  const bought = await owner('POST', '/api/promotions', { projectId: project.id, plan: 'week' });
+  assert.equal(bought.status, 200);
+  assert.equal(bought.body.payment.amount, 790);
+  assert.equal(bought.body.payment.mode, 'test');
+  assert.equal(bought.body.promotion.status, 'pending');
+  assert.deepEqual((await viewer('GET', '/api/bootstrap')).body.ads, [], 'nothing is shown before payment');
+  assert.equal((await viewer('POST', `/api/payments/${bought.body.payment.id}/test`)).status, 404, 'nobody else can settle the payment');
+  assert.equal((await owner('POST', `/api/payments/${bought.body.payment.id}/test`)).body.payment.status, 'succeeded');
+  const ads = (await viewer('GET', '/api/bootstrap')).body.ads;
+  assert.deepEqual(ads.map(ad => ad.projectId), [project.id]);
+  assert.equal((await owner('POST', '/api/promotions', { projectId: project.id, plan: 'day' })).status, 409, 'one campaign at a time');
+  await viewer('POST', `/api/ads/${ads[0].id}/seen`);
+  await viewer('POST', `/api/ads/${ads[0].id}/seen`);
+  await other('POST', `/api/ads/${ads[0].id}/seen`);
+  await owner('POST', `/api/ads/${ads[0].id}/seen`);
+  await viewer('POST', `/api/ads/${ads[0].id}/click`);
+  const stats = (await owner('GET', '/api/bootstrap')).body.promotions[0];
+  assert.equal(stats.status, 'active');
+  assert.equal(stats.shown, 2, 'each viewer counts once, the author not at all');
+  assert.equal(stats.clicks, 1);
+  const plus = await viewer('POST', '/api/plus');
+  assert.equal(plus.body.payment.amount, 299);
+  await viewer('POST', `/api/payments/${plus.body.payment.id}/test`);
+  const after = (await viewer('GET', '/api/bootstrap')).body;
+  assert.deepEqual(after.ads, [], 'Plus means no ads');
+  assert.ok(after.account.plusUntil > Date.now() + 29 * 864e5);
+  assert.equal(after.users.find(user => user.handle === 'adviewer').plus, true);
+  const discounted = await viewer('POST', '/api/projects', { title: 'Мой', summary: 'Тест', category: 'apps', images: [] });
+  assert.equal((await viewer('POST', '/api/promotions', { projectId: discounted.body.project.id, plan: 'week' })).body.payment.amount, 632, 'Plus takes 20% off');
 });

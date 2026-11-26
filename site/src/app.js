@@ -3,6 +3,7 @@ import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
+import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals } from './recommend.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
@@ -77,7 +78,7 @@ let tasteSaveTimer;
 let feedRefreshing = false;
 let pullState = null;
 let wheelPull = { amount: 0, armed: false, last: 0, timer: null };
-const reasonLabels = { new: ['sparkle', 'Новое'], taste: ['flame', 'Для тебя'], follow: ['users', 'Подписки'], popular: ['up', 'Популярное'], again: ['refresh', 'Снова'], discover: ['search', 'Открытие'], mine: ['user', 'Твой проект'] };
+const reasonLabels = { new: ['sparkle', 'Новое'], taste: ['flame', 'Для тебя'], follow: ['users', 'Подписки'], popular: ['up', 'Популярное'], again: ['refresh', 'Снова'], discover: ['search', 'Открытие'], mine: ['user', 'Твой проект'], ad: ['megaphone', 'Реклама'] };
 try {
   const savedTaste = JSON.parse(storage.getItem(TASTE_KEY) || '{}');
   localTaste = cleanTaste(savedTaste.taste);
@@ -548,11 +549,13 @@ function afterRender(view, changedPage, current) {
   feed.addEventListener('wheel', onFeedWheel, { passive: true });
   if (typeof IntersectionObserver === 'function' && feed.querySelectorAll) {
     feed.classList.add('io');
+    markNextAds(feed);
     feedObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
         entry.target.classList.toggle('in-view', entry.isIntersecting);
         syncFeedVideo(entry.target);
         if (entry.isIntersecting) {
+          if (entry.target.dataset?.ad) reportAd(entry.target.dataset.ad, 'seen');
           beginView(entry.target);
           extendFeedNear(entry.target);
         } else if (activeView?.item === entry.target) endView();
@@ -571,7 +574,12 @@ let feedResizeObserver = null;
 function sizeFeed(feed = document.querySelector('#feed')) {
   if (!feed?.style || !feed.getBoundingClientRect || getComputedStyle(feed).position !== 'fixed') return;
   const height = Math.ceil(feed.getBoundingClientRect().height);
-  if (height > 0 && feed.style.getPropertyValue('--item-h') !== `${height}px`) feed.style.setProperty('--item-h', `${height}px`);
+  const before = parseFloat(feed.style.getPropertyValue('--item-h')) || 0;
+  if (!(height > 0) || before === height) return;
+  // Keep the same card in place: without this a new height leaves the feed between two cards.
+  const index = before ? Math.round(feed.scrollTop / before) : -1;
+  feed.style.setProperty('--item-h', `${height}px`);
+  if (index >= 0) { feed.scrollTop = index * height; feedScrollTop = feed.scrollTop; }
 }
 
 function watchFeedSize(feed) {
@@ -710,7 +718,44 @@ function feedPool() {
 function buildFeedOrder() {
   const { list, empty } = feedPool();
   const ranked = rankFeed(list, rankOptions(feedSeed, pinnedProjectId));
-  feedOrder = { key: feedCategory, rounds: 1, done: false, entries: [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(item => ({ id: item.project.id, reason: item.reason }))] };
+  const adState = { since: 0, next: 0 };
+  const entries = [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(item => ({ id: item.project.id, reason: item.reason }))];
+  feedOrder = { key: feedCategory, rounds: 1, done: false, adState, entries: placeAds(entries, feedAds(), adState) };
+}
+
+// Promoted posts the server picked for this viewer (none for Plus subscribers).
+function feedAds() {
+  return online ? (remote?.ads || []).filter(ad => projectById(ad.projectId)) : [];
+}
+
+// The card before an ad gets a pearly wave along its bottom edge and a «skip» pill, so the ad never
+// comes as a surprise and can be jumped over in one tap.
+function markNextAds(feed = document.querySelector('#feed')) {
+  feed?.querySelectorAll?.('.feed-item.is-ad').forEach(ad => {
+    const before = ad.previousElementSibling;
+    if (!before?.classList?.contains('feed-item') || before.classList.contains('is-ad') || before.classList.contains('next-ad')) return;
+    before.classList.add('next-ad');
+    before.insertAdjacentHTML?.('beforeend', `<div class="ad-glow" aria-hidden="true"><i></i></div><button class="ad-next" data-action="ad-skip" aria-label="Дальше реклама — пропустить">${icon('megaphone')}<span>Дальше реклама</span><b>Пропустить ${icon('skip')}</b></button>`);
+  });
+}
+
+const adReported = new Set();
+function reportAd(id, event) {
+  const key = `${event}:${id}`;
+  if (!online || !id || adReported.has(key) || typeof fetch !== 'function') return;
+  adReported.add(key);
+  fetch(`/api/ads/${encodeURIComponent(id)}/${event}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+}
+
+function skipAd(from) {
+  const feed = document.querySelector('#feed');
+  const item = from?.closest?.('.feed-item');
+  if (!feed || !item) return;
+  const ad = item.classList.contains('is-ad') ? item : item.nextElementSibling;
+  // The ad may be the last card loaded so far: grow the feed first, then jump past it.
+  if (ad && !ad.nextElementSibling) extendFeedNear(ad);
+  const next = ad?.classList?.contains('is-ad') ? ad.nextElementSibling : item.nextElementSibling;
+  if (next) feed.scrollTo?.({ top: next.offsetTop, behavior: 'smooth' });
 }
 
 // The catalogue is small: after the last post another round starts, with what was just seen pushed back.
@@ -735,9 +780,11 @@ function extendFeedNear(item) {
     const lastId = [...feedOrder.entries].reverse().find(entry => entry.id)?.id;
     if (added.length > 1 && added[0].id === lastId) [added[0], added[1]] = [added[1], added[0]];
     if (feedOrder.rounds === 2) added.unshift({ sep: 'end' });
+    added = placeAds(added, feedAds(), feedOrder.adState ||= { since: 0, next: 0 });
   }
   feedOrder.entries.push(...added);
   feed.insertAdjacentHTML?.('beforeend', added.map(feedEntryHtml).join(''));
+  markNextAds(feed);
   observeFeedItems(feed);
 }
 
@@ -750,7 +797,7 @@ function feedEndHtml(kind) {
 function feedEntryHtml(entry) {
   if (entry.sep) return feedEndHtml(entry.sep);
   const project = projectById(entry.id);
-  return project ? feedItem(project, entry.reason) : '';
+  return project ? feedItem(project, entry.reason, entry.ad) : '';
 }
 
 function renderFeed() {
@@ -760,9 +807,10 @@ function renderFeed() {
   return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span><i class="ptr-mark">${logoMark}</i>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
 }
 
-function feedItem(project, reason = '') {
+function feedItem(project, reason = '', ad = '') {
   const id = escapeHtml(project.id);
-  return `<section class="feed-item" data-project="${id}" aria-label="${escapeHtml(project.title)}"><article class="card"><div class="card-media" data-action="media" data-id="${id}" data-reason="${escapeHtml(reason)}">${mediaInner(project, reason)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
+  const skip = ad ? `<button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button>` : '';
+  return `<section class="feed-item${ad ? ' is-ad' : ''}" data-project="${id}"${ad ? ` data-ad="${escapeHtml(ad)}"` : ''} aria-label="${ad ? 'Реклама: ' : ''}${escapeHtml(project.title)}"><article class="card">${skip}<div class="card-media" data-action="media" data-id="${id}" data-reason="${escapeHtml(reason)}">${mediaInner(project, reason)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
 }
 
 function reasonChip(reason) {
@@ -1193,13 +1241,52 @@ function toggleDictation(button) {
 
 /* Auth */
 
+// Sign-in: Google / Yandex / GitHub buttons when the server has them, then nick and password.
+// With mail set up, sign-up asks for an e-mail and confirms it with a 6-digit code, and there is
+// a password-free way in: a code to the e-mail.
+let authFlow = null; // { purpose, email, fields, sentAt } while a code is on its way
+let authResendTimer = 0;
+
+const providerIcons = {
+  google: '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2A11.9 11.9 0 0 1 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3a12 12 0 0 1-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>',
+  yandex: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="12" fill="#FC3F1D"/><path fill="#fff" d="M13.3 6.5h-1c-1.9 0-2.8.95-2.8 2.35 0 1.6.68 2.33 2.08 3.28l1.15.78-3.32 4.97H7.5l2.98-4.44C8.76 12.2 7.8 11 7.8 9c0-2.53 1.76-4.26 5.11-4.26h3.31V18.1H13.3V6.5z"/></svg>',
+  github: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>'
+};
+
+const emailSignIn = () => online && Boolean(remote?.config?.email);
+
+function authProvidersHtml(verb = 'Войти') {
+  const list = online ? remote?.config?.providers || [] : [];
+  if (!list.length) return '';
+  return `<div class="auth-social">${list.map(provider => `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || icon('user')}<span>${verb} через ${escapeHtml(provider.label)}</span></a>`).join('')}</div><div class="auth-or"><span>или</span></div>`;
+}
+
+function authCodeHtml() {
+  const wait = Math.max(0, Math.ceil((authFlow.sentAt + 45000 - Date.now()) / 1000));
+  const title = authFlow.purpose === 'register' ? 'Подтверди почту' : authFlow.purpose === 'link' ? 'Привяжи почту' : 'Код для входа';
+  return `<form id="auth-code-form" class="form auth-code"><span class="auth-mail">${icon('send')}</span><h3>${title}</h3><p class="fine">Отправили 6 цифр на <b>${escapeHtml(authFlow.email)}</b>. Письмо может попасть в «Спам».</p><input name="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" aria-label="Код из письма" required><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Подтвердить</button><div class="auth-code-links"><button type="button" class="link-btn auth-resend" data-action="auth-resend" ${wait ? 'disabled' : ''}>${wait ? `Новый код через ${wait} с` : 'Отправить код ещё раз'}</button><button type="button" class="link-btn" data-action="auth-back">Изменить почту</button></div></form>`;
+}
+
 function authFormHtml(mode) {
+  if (authFlow && authFlow.purpose !== 'link') return authCodeHtml();
   const register = mode === 'register';
-  return `<div class="auth-tabs" role="tablist"><button class="${register ? 'on' : ''}" data-action="auth-mode" data-id="register" role="tab" aria-selected="${register}">Регистрация</button><button class="${register ? '' : 'on'}" data-action="auth-mode" data-id="login" role="tab" aria-selected="${!register}">Вход</button></div><form id="auth-form" class="form" data-mode="${mode}">${register ? '<input name="name" maxlength="40" placeholder="Имя" aria-label="Имя" autocomplete="name" required>' : ''}<label class="handle-field"><span>@</span><input name="handle" maxlength="20" placeholder="ник" aria-label="Ник" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9_]{3,20}" required></label><input name="password" type="password" minlength="6" maxlength="200" placeholder="Пароль" aria-label="Пароль" autocomplete="${register ? 'new-password' : 'current-password'}" required><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${register ? 'Создать аккаунт' : 'Войти'}</button>${register ? '<p class="fine">Ник: латиница, цифры и _. Его видят другие люди.</p>' : ''}</form>`;
+  const withEmail = emailSignIn();
+  const tabs = `<div class="auth-tabs" role="tablist"><button class="${register ? 'on' : ''}" data-action="auth-mode" data-id="register" role="tab" aria-selected="${register}">Регистрация</button><button class="${register ? '' : 'on'}" data-action="auth-mode" data-id="login" role="tab" aria-selected="${!register}">Вход</button></div>`;
+  if (mode === 'code') {
+    return `${authProvidersHtml()}${tabs}<form id="auth-form" class="form" data-mode="code"><input name="email" type="email" maxlength="254" placeholder="Почта" aria-label="Почта" autocomplete="email" autocapitalize="none" spellcheck="false" required><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">Прислать код</button><button type="button" class="link-btn" data-action="auth-mode" data-id="login">Войти с паролем</button></form>`;
+  }
+  const fields = register
+    ? `<input name="name" maxlength="40" placeholder="Имя" aria-label="Имя" autocomplete="name" required><label class="handle-field"><span>@</span><input name="handle" maxlength="20" placeholder="ник" aria-label="Ник" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[A-Za-z0-9_]{3,20}" required></label>${withEmail ? '<input name="email" type="email" maxlength="254" placeholder="Почта" aria-label="Почта" autocomplete="email" autocapitalize="none" spellcheck="false" required>' : ''}`
+    : `<input name="handle" maxlength="254" placeholder="${withEmail ? 'Ник или почта' : 'Ник'}" aria-label="${withEmail ? 'Ник или почта' : 'Ник'}" autocomplete="username" autocapitalize="none" spellcheck="false" required>`;
+  const submit = register ? (withEmail ? 'Получить код на почту' : 'Создать аккаунт') : 'Войти';
+  const extra = register
+    ? `<p class="fine">Ник: латиница, цифры и _. Его видят другие люди.${withEmail ? ' На почту придёт код подтверждения.' : ''}</p>`
+    : withEmail ? '<button type="button" class="link-btn" data-action="auth-mode" data-id="code">Войти по коду из письма, без пароля</button>' : '';
+  return `${authProvidersHtml(register ? 'Продолжить' : 'Войти')}${tabs}<form id="auth-form" class="form" data-mode="${mode}">${fields}<input name="password" type="password" minlength="6" maxlength="200" placeholder="Пароль" aria-label="Пароль" autocomplete="${register ? 'new-password' : 'current-password'}" required><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${submit}</button>${extra}</form>`;
 }
 
 function loginCard(text) {
-  return `<section class="auth-card"><span class="brand-mark big">${logoMark}</span><h2>Войди в про.стим</h2><p class="lead">${escapeHtml(text)}</p>${authFormHtml(authMode)}</section>`;
+  return `<section class="auth-card"><span class="brand-mark big">${logoMark}</span><h2>Войди в про.стим</h2><p class="lead">${escapeHtml(text)}</p><div class="auth-body">${authFormHtml(authMode)}</div></section>`;
 }
 
 function renderAuthPage() {
@@ -1208,7 +1295,41 @@ function renderAuthPage() {
 
 function openAuth(mode = 'register', reason = '') {
   authMode = mode;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">${mode === 'register' ? 'Создай аккаунт' : 'Вход'}</h2>${reason ? `<p class="lead">${escapeHtml(reason)}</p>` : ''}${authFormHtml(mode)}</div>`, { kind: 'auth' });
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">${mode === 'register' ? 'Создай аккаунт' : 'Вход'}</h2>${reason ? `<p class="lead">${escapeHtml(reason)}</p>` : ''}<div class="auth-body">${authFormHtml(mode)}</div></div>`, { kind: 'auth' });
+}
+
+// Redraws only the sign-in block, wherever it is: the page or the sheet.
+function refreshAuth() {
+  const bodies = document.querySelectorAll?.('.auth-body') || [];
+  bodies.forEach(body => { body.innerHTML = authFormHtml(authMode); });
+  if (!bodies.length) render();
+  document.querySelector?.('.auth-body input:not([type="hidden"])')?.focus?.({ preventScroll: true });
+  clearInterval(authResendTimer);
+  if (authFlow) authResendTimer = setInterval(tickAuthResend, 1000);
+}
+
+function tickAuthResend() {
+  const button = document.querySelector?.('.auth-resend');
+  if (!button || !authFlow) { clearInterval(authResendTimer); return; }
+  const wait = Math.max(0, Math.ceil((authFlow.sentAt + 45000 - Date.now()) / 1000));
+  button.disabled = wait > 0;
+  button.textContent = wait ? `Новый код через ${wait} с` : 'Отправить код ещё раз';
+  if (!wait) clearInterval(authResendTimer);
+}
+
+async function startEmailCode(purpose, fields) {
+  const result = await apiCall('POST', '/api/auth/email/start', { purpose, ...fields });
+  authFlow = { purpose, email: result.email, fields, sentAt: Date.now() };
+}
+
+async function finishAuth(created) {
+  authFlow = null;
+  clearInterval(authResendTimer);
+  await reloadAll({ rerender: false });
+  if (modal.open && dialogContext?.kind === 'auth') { modal.close(); dialogContext = null; }
+  render();
+  window.scrollTo?.(0, 0);
+  toast(created ? `Добро пожаловать, ${me?.name || ''}!` : 'С возвращением!');
 }
 
 /* Profile and reputation */
@@ -1304,9 +1425,9 @@ function renderProfile(handle, tab) {
   }
   const base = mine ? '#/me' : `#/u/${encodeURIComponent(handle)}`;
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
-  const badges = `${levelChip(person)}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
+  const badges = `${levelChip(person)}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine && online ? plusCardHtml() : ''}${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1330,10 +1451,28 @@ function avatarEditInner() {
   return `<span class="avatar xl ${preview ? 'photo' : ''}" style="--avatar:${me?.color || '#e5e1d8'}">${preview ? `<img src="${preview}" alt="">` : escapeHtml(me?.initials || 'Я')}</span><div><label class="btn btn-ghost btn-sm">${icon('image')} ${preview ? 'Другое фото' : 'Загрузить фото'}<input type="file" name="avatar-file" accept="image/*" hidden></label>${preview ? `<button type="button" class="text-link" data-action="remove-avatar">Убрать фото</button>` : ''}<p class="fine">Настоящее фото помогает людям доверять тебе.</p></div>`;
 }
 
+// How the account signs in: its confirmed e-mail and the connected Google / Yandex / GitHub.
+function accountHtml() {
+  const account = remote?.account;
+  if (!online || !account) return '';
+  const providers = remote?.config?.providers || [];
+  let mail = '';
+  if (authFlow?.purpose === 'link') mail = authCodeHtml().replace('id="auth-code-form"', 'id="link-code-form"');
+  else if (account.email) mail = `<div class="account-row">${icon('send')}<span><b>${escapeHtml(account.email)}</b><small>Почта подтверждена, по ней можно войти</small></span>${icon('check')}</div>`;
+  else if (emailSignIn()) mail = `<form id="link-email-form" class="form"><p class="fine">Привяжи почту: по ней можно войти без пароля и восстановить доступ.</p><div class="inline-field"><input name="email" type="email" maxlength="254" placeholder="Почта" aria-label="Почта" autocomplete="email" autocapitalize="none" spellcheck="false" required><button class="btn btn-ghost" type="submit">Код</button></div><p class="form-error" role="alert"></p></form>`;
+  const linked = providers.map(provider => account.providers.includes(provider.id)
+    ? `<span class="social-btn linked ${escapeHtml(provider.id)}">${providerIcons[provider.id] || ''}<span>${escapeHtml(provider.label)} подключён</span>${icon('check')}</span>`
+    : `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || ''}<span>Подключить ${escapeHtml(provider.label)}</span></a>`).join('');
+  if (!mail && !linked) return '';
+  return `<section class="account-block"><h3>Вход и почта</h3>${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>`;
+}
+
 function openEditProfile() {
   if (!me) return;
   avatarDraft = null;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form></div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form>${accountHtml()}</div>`);
+  clearInterval(authResendTimer);
+  if (authFlow?.purpose === 'link') authResendTimer = setInterval(tickAuthResend, 1000);
 }
 
 /* Steam */
@@ -1441,7 +1580,7 @@ function wavesSvg(className = '') {
   const body = (y, amp) => `${crest(y, amp)} V 160 H 0 Z`;
   const gradient = (name, stops) => `<linearGradient id="${id}${name}" x1="0" x2="1" y1="0" y2="0">${stops.map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`).join('')}</linearGradient>`;
   const layer = (name, y, amp) => `<g class="wave ${name}"><path d="${body(y, amp)}" fill="url(#${id}${name})"/><path class="crest" d="${crest(y, amp)}"/></g>`;
-  return `<svg class="waves ${className}" viewBox="0 0 1440 160" preserveAspectRatio="none" aria-hidden="true"><defs>${gradient('w1', [[0, '#6cb8ff'], [0.25, '#b78cff'], [0.5, '#ff7aa2'], [0.75, '#6cb8ff'], [1, '#b78cff']])}${gradient('w2', [[0, '#9fcaff'], [0.3, '#3ddbb0'], [0.6, '#6cb8ff'], [1, '#9fcaff']])}${gradient('w3', [[0, '#5d6773'], [0.2, '#f4f7fb'], [0.45, '#7d8794'], [0.7, '#ffffff'], [1, '#5d6773']])}</defs>${layer('w1', 66, 34)}${layer('w2', 92, 26)}${layer('w3', 116, 18)}</svg>`;
+  return `<svg class="waves ${className}" viewBox="0 0 1440 160" preserveAspectRatio="none" aria-hidden="true"><defs>${gradient('w1', [[0, '#2c45c8'], [0.16, '#5b2aa8'], [0.3, '#8c2f6c'], [0.42, '#e3a64e'], [0.52, '#f6e2a4'], [0.64, '#6fd8ea'], [0.8, '#2a86e0'], [1, '#2c45c8']])}${gradient('w2', [[0, '#dccbff'], [0.25, '#ffc9e6'], [0.5, '#fff0c4'], [0.75, '#bfe6ff'], [1, '#dccbff']])}${gradient('w3', [[0, '#5d6773'], [0.18, '#f4f7fb'], [0.34, '#f6e2a4'], [0.48, '#7d8794'], [0.64, '#9fd6ff'], [0.8, '#ffffff'], [1, '#5d6773']])}</defs>${layer('w1', 66, 34)}${layer('w2', 92, 26)}${layer('w3', 116, 18)}</svg>`;
 }
 
 // A drop of liquid chrome: a morphing silver body, an iridescent film and a highlight.
@@ -2061,7 +2200,7 @@ function interestsCardHtml() {
   return `<section class="taste-card"><div class="taste-head"><span class="taste-title">${icon('sparkle')} Лента знает тебя</span><span class="taste-level"><i style="width:${confidence}%"></i></span><b>${confidence}%</b>${top.length ? `<button class="icon-btn" data-action="reset-taste" aria-label="Сбросить интересы" title="Сбросить">${icon('refresh')}</button>` : ''}</div>${chips}</section>`;
 }
 
-const linkCta = { steam: 'В Steam', epic: 'В Epic Games', itch: 'На itch.io', gog: 'В GOG', github: 'Код на GitHub', gitlab: 'Код на GitLab', appstore: 'В App Store', gplay: 'В Google Play', rustore: 'В RuStore', telegram: 'В Telegram', discord: 'В Discord', youtube: 'На YouTube', vk: 'Во VK', figma: 'В Figma' };
+const linkCta = { steam: 'В Steam', vkplay: 'В VK Play', itch: 'На itch.io', gog: 'В GOG', github: 'Код на GitHub', gitlab: 'Код на GitLab', appstore: 'В App Store', gplay: 'В Google Play', rustore: 'В RuStore', telegram: 'В Telegram', discord: 'В Discord', youtube: 'На YouTube', vk: 'Во VK', figma: 'В Figma' };
 
 function externalLink(url, className, inner) {
   return `<a class="${className}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer nofollow ugc">${inner}</a>`;
@@ -2110,12 +2249,102 @@ function openProject(id) {
   const write = mine ? '' : `<a class="btn btn-ghost" href="#/inbox/${encodeURIComponent(project.handle)}">${icon('inbox')} Написать</a>`;
   const edit = mine && (online || project.handle === 'me') ? `<button class="btn btn-ghost" data-action="edit-project" data-id="${projectId}">${icon('pen')} Редактировать</button>` : '';
   const remove = mine && online ? `<button class="btn btn-ghost btn-square" data-action="delete-project" data-id="${projectId}" aria-label="Удалить проект">${icon('trash')}</button>` : '';
+  const promotion = mine && online ? promotionHtml(project) : '';
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
+}
+
+/* Promotion and Plus: buying reach, and what it shows */
+
+const rub = value => `${Number(value).toLocaleString('ru-RU')} ₽`;
+const shortDate = time => new Date(time).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+const hasPlusNow = () => Boolean(remote?.account?.plusUntil > Date.now());
+
+function promotionFor(projectId) {
+  const list = (remote?.promotions || []).filter(item => item.projectId === projectId);
+  return list.find(item => item.status === 'active') || list.find(item => item.status === 'pending') || null;
+}
+
+// The owner sees the campaign on the post: impressions so far, taps, the end date — or an offer to start one.
+function promotionHtml(project) {
+  const promotion = promotionFor(project.id);
+  const id = escapeHtml(project.id);
+  if (promotion?.status === 'active') {
+    const share = Math.min(100, Math.round(promotion.shown / Math.max(1, promotion.impressions) * 100));
+    return `<div class="promo-status"><div class="promo-top"><span class="promo-live"><i></i>Продвигается</span><small>до ${shortDate(promotion.endsAt)}</small></div><div class="promo-bar"><i style="width:${share}%"></i></div><div class="promo-nums"><span><b>${promotion.shown.toLocaleString('ru-RU')}</b> из ${promotion.impressions.toLocaleString('ru-RU')} показов</span><span><b>${promotion.clicks}</b> переходов</span></div></div>`;
+  }
+  if (promotion?.status === 'pending') return `<div class="promo-status pending"><div class="promo-top"><span class="promo-live wait"><i></i>Ждёт оплаты</span><button class="link-btn" data-action="boost" data-id="${id}">Оплатить</button></div></div>`;
+  return `<button class="promo-offer" data-action="boost" data-id="${id}"><span class="promo-icon">${icon('megaphone')}</span><span><b>Продвинуть пост</b><small>Покажем его в ленте между постами — от ${rub(boostPrice(boostPlans[0], hasPlusNow()))}</small></span>${icon('chevronRight')}</button>`;
+}
+
+function openBoost(projectId) {
+  if (needLogin('Чтобы продвигать проекты, войди в аккаунт')) return;
+  const project = projectById(projectId);
+  if (!project) return;
+  const plus = hasPlusNow();
+  const plans = boostPlans.map(plan => `<label class="plan"><input type="radio" name="plan" value="${plan.id}" data-price="${boostPrice(plan, plus)}" ${plan.best ? 'checked' : ''}><span class="plan-card">${plan.best ? '<i class="plan-best">Выгодно</i>' : ''}<b>${plan.title}</b><em>до ${plan.impressions.toLocaleString('ru-RU')} показов</em><strong>${rub(boostPrice(plan, plus))}</strong>${plus ? `<s>${rub(plan.price)}</s>` : ''}</span></label>`).join('');
+  const chosen = boostPlans.find(plan => plan.best) || boostPlans[0];
+  const mode = remote?.config?.payments;
+  showDialog(`<div class="sheet-body boost"><span class="boost-mark">${icon('megaphone')}</span><h2 id="modal-title">Продвинуть «${escapeHtml(project.title)}»</h2><p class="lead">Пост будет появляться в ленте у других людей после каждых ${AD_EVERY} постов, с пометкой «Реклама». Перед ним край ленты подсвечивается и рекламу можно пропустить — смотрят те, кому интересно.</p><form id="boost-form" class="form" data-id="${escapeHtml(project.id)}"><div class="plan-grid">${plans}</div><p class="fine">Показ засчитывается один раз на человека за полчаса. Подписчики Плюс рекламу не видят.${plus ? ' Твоя скидка Плюс уже учтена.' : ''}</p>${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit" ${mode ? '' : 'disabled'}>${mode ? `Оплатить <span data-boost-price>${rub(boostPrice(chosen, plus))}</span>` : 'Оплата скоро появится'}</button></form></div>`, { kind: 'boost', id: projectId });
+}
+
+function plusCardHtml() {
+  if (hasPlusNow()) return `<div class="plus-card on"><span class="plus-mark">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Активен до ${shortDate(remote.account.plusUntil)} · лента без рекламы</small></span><button class="btn btn-ghost btn-sm" data-action="plus">Продлить</button></div>`;
+  return `<button class="plus-card" data-action="plus"><span class="plus-mark">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Без рекламы, значок и скидка на продвижение · ${rub(plusPlan.price)} в месяц</small></span>${icon('chevronRight')}</button>`;
+}
+
+function openPlus() {
+  if (needLogin('Чтобы оформить Плюс, войди в аккаунт')) return;
+  const mode = remote?.config?.payments;
+  const until = hasPlusNow() ? `<p class="fine">Сейчас Плюс действует до ${shortDate(remote.account.plusUntil)} — новый месяц добавится сверху.</p>` : '';
+  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Оформить за ${rub(plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
+}
+
+// Real payments leave for the bank page; in test mode a stand-in step confirms without money.
+function handlePayment(payment) {
+  if (payment.status === 'succeeded') { afterPayment(payment); return; }
+  if (payment.mode === 'yookassa' && payment.confirmationUrl) { location.href = payment.confirmationUrl; return; }
+  showDialog(`<div class="sheet-body pay-test"><span class="boost-mark">${icon('lock')}</span><h2 id="modal-title">Оплата ${rub(payment.amount)}</h2><p class="lead">${escapeHtml(payment.description)}</p><p class="test-note">${icon('lock')} Тестовый режим: ЮKassa ещё не подключена, деньги не списываются.</p><button class="btn btn-grad btn-block" data-action="pay-test" data-id="${escapeHtml(payment.id)}">Оплатить (тест)</button><button class="link-btn" data-action="close-modal">Отмена</button></div>`, { kind: 'payment' });
+}
+
+async function payTest(paymentId, button) {
+  if (button) button.disabled = true;
+  try {
+    const { payment } = await apiCall('POST', `/api/payments/${encodeURIComponent(paymentId)}/test`);
+    await afterPayment(payment);
+  } catch (error) {
+    if (button) button.disabled = false;
+    toast(error.message);
+  }
+}
+
+async function afterPayment(payment) {
+  await reloadAll({ rerender: false });
+  if (modal.open) { modal.close(); dialogContext = null; }
+  feedOrder = null;
+  render();
+  if (payment.kind === 'promotion') {
+    const promotion = (remote?.promotions || []).find(item => item.paymentId === payment.id);
+    if (promotion) openProject(promotion.projectId);
+    toast('Готово: пост продвигается в ленте');
+  } else toast('Плюс подключён — лента без рекламы');
+}
+
+// Back from the bank page: ask the server (it asks ЮKassa) until the payment settles.
+async function checkReturnedPayment(paymentId) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      const { payment } = await apiCall('GET', `/api/payments/${encodeURIComponent(paymentId)}`);
+      if (payment.status === 'succeeded') { await afterPayment(payment); return; }
+      if (payment.status === 'canceled') { toast('Оплата отменена'); return; }
+    } catch { return; }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  toast('Оплата ещё обрабатывается — статус обновится сам');
 }
 
 /* Full-screen viewer: swipe sideways between photos, swipe up or down to go back to the post */
@@ -2439,7 +2668,7 @@ function chipChoice(name, options, values = [], single = false) {
 function linkRowsHtml() {
   const rows = postDraft.links.map((value, index) => {
     const link = linkKind(value);
-    return `<div class="link-row"><span class="link-kind" data-kind-for="${index}">${icon(link?.icon || 'globe')}<small>${escapeHtml(link?.label || 'Ссылка')}</small></span><input name="link" type="url" inputmode="url" autocomplete="off" value="${escapeHtml(value)}" data-link="${index}" placeholder="${index ? 'Ещё ссылка' : 'Steam, Epic, itch.io, GitHub, App Store, сайт'}" aria-label="Ссылка ${index + 1}">${postDraft.links.length > 1 ? `<button type="button" class="icon-btn" data-action="link-remove" data-index="${index}" aria-label="Убрать ссылку">${icon('close')}</button>` : ''}</div>`;
+    return `<div class="link-row"><span class="link-kind" data-kind-for="${index}">${icon(link?.icon || 'globe')}<small>${escapeHtml(link?.label || 'Ссылка')}</small></span><input name="link" type="url" inputmode="url" autocomplete="off" value="${escapeHtml(value)}" data-link="${index}" placeholder="${index ? 'Ещё ссылка' : 'Steam, VK Play, RuStore, itch.io, GitHub, сайт'}" aria-label="Ссылка ${index + 1}">${postDraft.links.length > 1 ? `<button type="button" class="icon-btn" data-action="link-remove" data-index="${index}" aria-label="Убрать ссылку">${icon('close')}</button>` : ''}</div>`;
   }).join('');
   return `${rows}${postDraft.links.length < POST_LINK_LIMIT ? `<button type="button" class="add-link" data-action="link-add">${icon('plus')} Ещё ссылка</button>` : ''}`;
 }
@@ -2825,7 +3054,17 @@ document.addEventListener('click', async event => {
   if (!target) return;
   const action = target.dataset.action;
   const id = target.dataset.id;
+  const adItem = ['open-project', 'media'].includes(action) ? target.closest?.('.feed-item.is-ad') : null;
+  if (adItem) reportAd(adItem.dataset.ad, 'click');
   if (action === 'close-modal') closeAnimated();
+  else if (action === 'ad-skip') skipAd(target);
+  else if (action === 'boost') openBoost(id);
+  else if (action === 'plus') openPlus();
+  else if (action === 'pay-test') payTest(id, target);
+  else if (action === 'plus-pay') {
+    target.disabled = true;
+    apiCall('POST', '/api/plus').then(({ payment }) => handlePayment(payment)).catch(error => { target.disabled = false; toast(error.message); });
+  }
   else if (action === 'home') {
     const feed = document.querySelector('#feed');
     if (route().section === 'feed' && feed) {
@@ -2973,7 +3212,22 @@ document.addEventListener('click', async event => {
     openDemo();
   } else if (action === 'auth-mode') {
     authMode = id;
-    if (target.closest?.('dialog')) openAuth(id); else render();
+    authFlow = null;
+    refreshAuth();
+  } else if (action === 'auth-back') {
+    const link = authFlow?.purpose === 'link';
+    authFlow = null;
+    if (link) openEditProfile(); else refreshAuth();
+  } else if (action === 'auth-resend') {
+    if (!authFlow) return;
+    target.disabled = true;
+    try {
+      await startEmailCode(authFlow.purpose, authFlow.fields);
+      toast('Отправили новый код');
+    } catch (error) { toast(error.message); }
+    tickAuthResend();
+    clearInterval(authResendTimer);
+    authResendTimer = setInterval(tickAuthResend, 1000);
   } else if (action === 'logout') {
     await apiCall('POST', '/api/auth/logout').catch(() => {});
     me = null;
@@ -3142,15 +3396,59 @@ document.addEventListener('submit', async event => {
   const value = name => String(data.get(name) || '').trim();
   const submit = form.querySelector?.('button[type="submit"]');
   if (form.id === 'auth-form') {
-    const register = form.dataset.mode === 'register';
+    const mode = form.dataset.mode;
+    const register = mode === 'register';
+    const fields = { name: value('name'), handle: value('handle').replace(/^@/, ''), password: String(data.get('password') || ''), email: value('email') };
     if (submit) submit.disabled = true;
     try {
-      await apiCall('POST', register ? '/api/auth/register' : '/api/auth/login', { name: value('name'), handle: value('handle').replace(/^@/, ''), password: String(data.get('password') || '') });
-      await reloadAll({ rerender: false });
-      if (modal.open && dialogContext?.kind === 'auth') { modal.close(); dialogContext = null; }
-      render();
-      window.scrollTo?.(0, 0);
-      toast(register ? `Добро пожаловать, ${me?.name || ''}!` : 'С возвращением!');
+      if (mode === 'code' || (register && emailSignIn())) {
+        await startEmailCode(register ? 'register' : 'login', register ? fields : { email: fields.email });
+        refreshAuth();
+        return;
+      }
+      await apiCall('POST', register ? '/api/auth/register' : '/api/auth/login', fields);
+      await finishAuth(register);
+    } catch (error) {
+      formError(form, error.message);
+      if (submit) submit.disabled = false;
+    }
+    return;
+  }
+  if (form.id === 'auth-code-form' || form.id === 'link-code-form') {
+    if (!authFlow) return;
+    if (submit) submit.disabled = true;
+    try {
+      await apiCall('POST', '/api/auth/email/verify', { email: authFlow.email, code: value('code') });
+      if (authFlow.purpose === 'link') {
+        authFlow = null;
+        await reloadAll({ rerender: false });
+        openEditProfile();
+        toast('Почта привязана');
+      } else await finishAuth(authFlow.purpose === 'register');
+    } catch (error) {
+      formError(form, error.message);
+      if (submit) submit.disabled = false;
+      const input = form.querySelector?.('[name="code"]');
+      if (input) { input.value = ''; input.focus?.(); }
+    }
+    return;
+  }
+  if (form.id === 'boost-form') {
+    if (submit) submit.disabled = true;
+    try {
+      const { payment } = await apiCall('POST', '/api/promotions', { projectId: form.dataset.id, plan: data.get('plan') });
+      handlePayment(payment);
+    } catch (error) {
+      formError(form, error.message);
+      if (submit) submit.disabled = false;
+    }
+    return;
+  }
+  if (form.id === 'link-email-form') {
+    if (submit) submit.disabled = true;
+    try {
+      await startEmailCode('link', { email: value('email') });
+      openEditProfile();
     } catch (error) {
       formError(form, error.message);
       if (submit) submit.disabled = false;
@@ -3327,6 +3625,18 @@ document.addEventListener('submit', async event => {
 });
 
 document.addEventListener('input', event => {
+  if (event.target.name === 'plan' && event.target.form?.id === 'boost-form') {
+    const price = event.target.form.querySelector?.('[data-boost-price]');
+    if (price) price.textContent = rub(event.target.dataset.price);
+    return;
+  }
+  // The code field keeps digits only and sends itself once all six are in (also when pasted or autofilled).
+  if (event.target.matches?.('.code-input')) {
+    const digits = event.target.value.replace(/\D/g, '').slice(0, 6);
+    if (digits !== event.target.value) event.target.value = digits;
+    if (digits.length === 6) event.target.form?.requestSubmit?.();
+    return;
+  }
   const target = event.target;
   if (target.dataset?.pe && postDraft) {
     const block = postDraft.blocks[Number(target.dataset.index)];
@@ -3513,11 +3823,14 @@ const sheetWheel = { amount: 0, last: 0, armed: false, timer: 0 };
 let feedWheelMuteUntil = 0;
 
 // The rest of a trackpad swipe that closed a sheet must not scroll or refresh the feed underneath.
+// Only wheel events are swallowed: touch scrolling is never blocked, and the feed keeps its overflow,
+// because switching a snapping scroller to overflow: hidden and back makes Safari lose its place.
 function muteFeedWheel(ms) {
   feedWheelMuteUntil = Date.now() + ms;
-  document.body.classList.add('wheel-mute');
-  setTimeout(() => { if (Date.now() >= feedWheelMuteUntil) document.body.classList.remove('wheel-mute'); }, ms);
 }
+document.addEventListener('wheel', event => {
+  if (Date.now() < feedWheelMuteUntil && event.target.closest?.('#feed') && event.cancelable) event.preventDefault();
+}, { passive: false });
 
 function sheetHasDraft() {
   if (dialogContext?.kind === 'publish' && (publishMedia.some(item => item.blob) || postDraft?.blocks.some(block => !block.url && (block.text || block.items?.some(Boolean))))) return true;
@@ -3760,6 +4073,11 @@ async function boot() {
   }
   render();
   if (online) connectEvents();
+  // Back from Google / Yandex / GitHub: show what went wrong, or greet, and tidy the address.
+  const params = typeof URLSearchParams === 'function' ? new URLSearchParams(location.search || '') : null;
+  if (params?.has('auth_error')) toast(params.get('auth_error'));
+  if (params?.has('payment') && online) checkReturnedPayment(params.get('payment'));
+  if (params?.has('auth_error') || params?.has('payment')) history.replaceState?.(null, '', `${location.pathname}${location.hash}`);
 }
 
 boot();
