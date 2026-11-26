@@ -151,3 +151,14 @@ test('a post opens as a themed store page; publishing has steps and no stock cov
   assert.match(form, /data-pane="3"/);
   assert.doesNotMatch(form, /cover-picker|Интерфейс/);
 });
+
+test('profiles show the level as a ring around the avatar, not an XP bar', () => {
+  const app = createApp();
+  app.navigate('#/me');
+  const html = app.elements.get('main').innerHTML;
+  assert.match(html, /class="lvl lvl-profile/);
+  assert.match(html, /class="lvl-badge">1</);
+  assert.doesNotMatch(html, /class="level"/);
+  const items = runInContext('viewerItemsFor(projectById("forest-light"))', app.context);
+  assert.equal(items.length, 3, 'every slide of a post can be opened full screen');
+});

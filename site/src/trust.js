@@ -13,6 +13,27 @@ export const trustLevels = {
 
 const levelNames = ['Новичок', 'Исследователь', 'Создатель', 'Мастер', 'Легенда'];
 
+// Avatar ring colour by level: ten tiers from white to an animated rainbow. From the fifth tier the ring glows.
+export const levelTiers = [
+  { from: 1, color: '#eef1e8', name: 'Белое' },
+  { from: 2, color: '#7ee081', name: 'Зелёное' },
+  { from: 3, color: '#3ddbb0', name: 'Бирюзовое' },
+  { from: 5, color: '#6cb8ff', name: 'Синее' },
+  { from: 7, color: '#b78cff', name: 'Фиолетовое' },
+  { from: 10, color: '#ff6fb5', name: 'Розовое' },
+  { from: 14, color: '#ff5d5d', name: 'Красное' },
+  { from: 19, color: '#ff9a3d', name: 'Оранжевое' },
+  { from: 25, color: '#ffd84d', name: 'Золотое' },
+  { from: 35, color: '#ffffff', name: 'Радужное' }
+];
+
+export function levelTier(level) {
+  const value = Math.max(1, Number(level) || 1);
+  const index = levelTiers.reduce((found, tier, position) => value >= tier.from ? position : found, 0);
+  const next = levelTiers[index + 1];
+  return { ...levelTiers[index], tier: index + 1, to: next ? next.from - 1 : 50, aura: index >= 4, legend: index === levelTiers.length - 1 };
+}
+
 export function trustSummary({ scores = [], projects = 0, votesReceived = 0, followers = 0, comments = 0 } = {}) {
   const valid = scores.filter(score => Number.isInteger(score) && score >= 1 && score <= 5);
   const count = valid.length;

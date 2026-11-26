@@ -1,7 +1,7 @@
 import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq, PUBLISHER_FEE, publisherPerks } from './data.js';
 import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
-import { trustLevels } from './trust.js';
+import { trustLevels, levelTier, levelTiers } from './trust.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals } from './recommend.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
@@ -240,6 +240,17 @@ function avatar(person, className = '') {
   const color = /^#[0-9a-f]{6}$/i.test(person?.color || '') ? person.color : '#cfd9c4';
   const photo = uploadUrl(person?.avatar);
   return `<span class="avatar ${className} ${photo ? 'photo' : ''}" style="--avatar:${color}">${photo ? `<img src="${photo}" alt="" loading="lazy">` : escapeHtml(person?.initials || (person?.name || 'Я').slice(0, 1))}</span>`;
+}
+
+// Avatar with a ring in the colour of the person's level (see levelTiers in trust.js).
+function ringAvatar(person, className = '', level = person?.level) {
+  if (!Number(level)) return avatar(person, className);
+  const tier = levelTier(level);
+  return `<span class="lvl ${tier.aura ? 'aura' : ''} ${tier.legend ? 'legend' : ''}" style="--ring:${tier.color}" title="Уровень ${Number(level)}">${avatar(person, className)}</span>`;
+}
+
+function levelOf(handle) {
+  return userByHandle(handle)?.level || 0;
 }
 
 function stars(value) {
@@ -488,6 +499,7 @@ function mediaHtml(item, title, mode) {
     const poster = uploadUrl(item.poster);
     if (mode === 'still') return poster ? `<div class="scene photo upload"><img src="${poster}" alt="${escapeHtml(title)}" loading="lazy" draggable="false"><span class="play-mark">${icon('play')}</span></div>` : `<div class="scene photo upload"><video src="${item.url}#t=0.5" muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
     if (mode === 'player') return `<div class="scene photo upload player"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} controls playsinline preload="metadata"></video></div>`;
+    if (mode === 'preview') return `<div class="scene photo upload"><video src="${item.url}#t=0.1" ${poster ? `poster="${poster}"` : ''} muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
     return `<div class="scene photo upload video"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} muted loop playsinline preload="metadata" data-feed-video></video><button class="sound-btn" data-action="toggle-sound" aria-label="${feedMuted ? 'Включить звук' : 'Выключить звук'}">${feedMuted ? '🔇' : '🔊'}</button></div>`;
   }
   return `<div class="scene photo upload"><img src="${item.url}" alt="${escapeHtml(title || 'Скриншот проекта')}" loading="lazy" draggable="false"></div>`;
@@ -767,7 +779,7 @@ function railInner(project, pop = '') {
   const saved = state.saved.includes(project.id);
   const followed = state.follows.includes(project.handle);
   const follow = isMine(project.handle) ? '' : `<button class="rail-follow ${followed ? 'on' : ''}" data-action="follow" data-handle="${handle}" aria-pressed="${followed}" aria-label="${followed ? 'Отписаться' : 'Подписаться'}">${icon(followed ? 'check' : 'plus')}</button>`;
-  return `<div class="rail-author"><button class="rail-avatar" data-action="profile" data-handle="${handle}" aria-label="Автор: ${escapeHtml(project.author)}">${avatar(project)}</button>${follow}</div>${railButton('vote', id, 'up', voteCount(project), voted, 'Поддержать', pop === 'vote')}${railButton('comments', id, 'comment', commentCount(project), false, 'Комментарии')}${railButton('save', id, 'bookmark', '', saved, saved ? 'Убрать из сохранённого' : 'Сохранить', pop === 'save')}${railButton('share', id, 'share', '', false, 'Поделиться')}`;
+  return `<div class="rail-author"><button class="rail-avatar" data-action="profile" data-handle="${handle}" aria-label="Автор: ${escapeHtml(project.author)}">${ringAvatar(project, '', levelOf(project.handle))}</button>${follow}</div>${railButton('vote', id, 'up', voteCount(project), voted, 'Поддержать', pop === 'vote')}${railButton('comments', id, 'comment', commentCount(project), false, 'Комментарии')}${railButton('save', id, 'bookmark', '', saved, saved ? 'Убрать из сохранённого' : 'Сохранить', pop === 'save')}${railButton('share', id, 'share', '', false, 'Поделиться')}`;
 }
 
 function syncRails(pop = {}) {
@@ -909,7 +921,7 @@ function renderSearch() {
 function creatorsHtml() {
   const authors = authorsList();
   if (!authors.length) return `<p class="muted-line">Авторов не нашли</p>`;
-  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project, 'lg')}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
+  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', levelOf(project.handle))}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
 }
 
 /* Inbox */
@@ -962,9 +974,20 @@ function personFor(handle) {
   return project ? { handle, name: project.author, initials: project.initials, color: project.color } : null;
 }
 
-function levelHtml(person) {
-  if (!online || person.official) return '';
-  return `<div class="level" title="Опыт за проекты, поддержки, подписчиков и отзывы"><span>Ур. ${person.level} · ${escapeHtml(person.levelName)}</span><i style="--p:${Math.round(person.levelProgress * 100)}%"></i><small>${person.xp} XP</small></div>`;
+function levelLegendHtml(level) {
+  const current = levelTier(level).tier;
+  return `<div class="level-legend">${levelTiers.map((tier, index) => {
+    const info = levelTier(tier.from);
+    const range = info.to >= 50 ? `${tier.from}+` : info.to > tier.from ? `${tier.from}–${info.to}` : `${tier.from}`;
+    return `<span class="legend-item ${index + 1 === current ? 'on' : ''}"><span class="lvl ${info.aura ? 'aura' : ''} ${info.legend ? 'legend' : ''}" style="--ring:${tier.color}"><i class="legend-dot"></i></span><small>${range}</small></span>`;
+  }).join('')}</div>`;
+}
+
+function profileAvatarHtml(person, handle) {
+  const level = Number(person.level) || 1;
+  const tier = levelTier(level);
+  const progress = Math.round((Number(person.levelProgress) || 0) * 100);
+  return `<button class="lvl lvl-profile ${tier.aura ? 'aura' : ''} ${tier.legend ? 'legend' : ''}" style="--ring:${tier.color};--p:${progress}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="Уровень ${level}${person.xp !== undefined ? `, ${person.xp} XP` : ''}. Подробнее">${avatar(person, 'xxl')}<span class="lvl-badge">${level}</span></button>`;
 }
 
 function reviewsHtml(handle) {
@@ -1030,7 +1053,7 @@ function renderProfile(handle, tab) {
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
   const badges = `${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${avatar(person, 'xxl')}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div>${levelHtml(person)}<div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1046,7 +1069,7 @@ function openTrustInfo(handle) {
   const person = userByHandle(handle);
   if (!person) return;
   const level = trustLevels[person.trust] || trustLevels.new;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp} XP, уровень ${person.level}.</li></ul>${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Доверие и уровень</h2><div class="trust-explain"><div class="trust-big trust-${escapeHtml(person.trust)}">${person.ratingCount ? `<b>${String(person.ratingAverage).replace('.', ',')}</b>${stars(person.ratingAverage)}` : '<b>—</b>'}<span>${level.label}</span></div><p class="lead">${escapeHtml(level.hint)}.</p></div><ul class="explain-list"><li><b>Рейтинг</b> — средняя оценка от других людей, от 1 до 5. Одна оценка от каждого, себя оценить нельзя.</li><li><b>Статус</b> учитывает число отзывов: одна случайная оценка мало что меняет.</li><li><b>Уровень</b> растёт за проекты, поддержки, подписчиков, комментарии и отзывы. Сейчас ${person.xp ?? 0} XP, уровень ${person.level || 1}. Цвет кольца вокруг аватарки показывает уровень, с пятого цвета кольцо светится.</li></ul>${levelLegendHtml(person.level || 1)}${!isMine(handle) && !person.official ? `<button class="btn btn-primary btn-block" data-action="rate" data-handle="${escapeHtml(handle)}">★ Оценить</button>` : ''}</div>`);
 }
 
 function avatarEditInner() {
@@ -1625,7 +1648,7 @@ function navigateToProject(id) {
 function commentsHtml(project) {
   const comments = projectComments(project);
   const list = comments.length
-    ? comments.map(comment => `<div class="comment">${avatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#c4f56f' : '#cfd9c4') })}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
+    ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#c4f56f' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? levelOf(comment.handle) : 0)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
     : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
   return `<div class="comments">${list}</div><form id="comment-form" data-id="${escapeHtml(project.id)}" class="composer sticky"><input name="text" maxlength="1200" placeholder="${online && !me ? 'Войди, чтобы комментировать' : 'Комментарий…'}" aria-label="Комментарий" autocomplete="off" required><button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
 }
@@ -1665,7 +1688,7 @@ function externalLink(url, className, inner) {
 
 function storeGalleryHtml(project) {
   const count = slideKinds(project).length;
-  const slidesHtml = Array.from({ length: count }, (_, index) => `<div class="store-slide">${scene(project, index, 'player')}</div>`).join('');
+  const slidesHtml = Array.from({ length: count }, (_, index) => `<div class="store-slide" data-action="view-media" data-id="${escapeHtml(project.id)}" data-index="${index}" role="button" aria-label="Открыть на весь экран">${scene(project, index, 'preview')}</div>`).join('');
   const controls = count > 1
     ? `<button class="gallery-arrow prev" data-action="gallery" data-direction="-1" aria-label="Назад">${icon('chevronLeft')}</button><button class="gallery-arrow next" data-action="gallery" data-direction="1" aria-label="Дальше">${icon('chevronRight')}</button><div class="store-dots" aria-hidden="true">${Array.from({ length: count }, (_, index) => `<i class="${index ? '' : 'on'}"></i>`).join('')}</div>`
     : '';
@@ -1709,9 +1732,110 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}<div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', levelOf(project.handle))}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}<div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
+}
+
+/* Full-screen viewer: swipe sideways between photos, swipe up or down to go back to the post */
+
+function viewerItemsFor(project) {
+  const media = projectMedia(project);
+  if (media.length) return media.map(item => item.type === 'video'
+    ? `<video src="${item.url}" ${uploadUrl(item.poster) ? `poster="${item.poster}"` : ''} controls playsinline preload="metadata"></video>`
+    : `<img src="${item.url}" alt="${escapeHtml(project.title)}" draggable="false">`);
+  return slideKinds(project).map((_, index) => `<div class="viewer-scene">${scene(project, index, 'player')}</div>`);
+}
+
+function openViewer(items, index = 0) {
+  if (!items.length || typeof document.createElement !== 'function') return;
+  let viewer = document.querySelector('#viewer');
+  if (!viewer || !viewer.showModal) {
+    viewer = document.createElement('dialog');
+    viewer.id = 'viewer';
+    viewer.className = 'viewer';
+    viewer.setAttribute('aria-label', 'Просмотр');
+    document.body.appendChild(viewer);
+    bindViewer(viewer);
+  }
+  const arrows = items.length > 1 ? `<button class="viewer-arrow prev" data-action="viewer-step" data-direction="-1" aria-label="Предыдущее">${icon('chevronLeft')}</button><button class="viewer-arrow next" data-action="viewer-step" data-direction="1" aria-label="Следующее">${icon('chevronRight')}</button>` : '';
+  viewer.innerHTML = `<div class="viewer-top"><span class="viewer-count">${index + 1} / ${items.length}</span><button class="viewer-close" data-action="viewer-close" aria-label="Закрыть">${icon('close')}</button></div><div class="viewer-track">${items.map((item, position) => `<div class="viewer-slide" data-index="${position}">${item}</div>`).join('')}</div>${arrows}<p class="viewer-hint">${window.matchMedia?.('(hover: none)').matches ? 'Свайп вверх или вниз — назад к посту' : 'Esc или клик мимо фото — назад к посту'}</p>`;
+  modal.querySelectorAll?.('video').forEach(video => video.pause?.());
+  viewer.style.removeProperty('--fade');
+  viewer.showModal();
+  const track = viewer.querySelector('.viewer-track');
+  track.scrollLeft = index * track.clientWidth;
+  syncViewer(viewer);
+}
+
+function syncViewer(viewer) {
+  const track = viewer.querySelector('.viewer-track');
+  if (!track) return;
+  const index = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+  const slidesList = track.querySelectorAll('.viewer-slide');
+  const count = viewer.querySelector('.viewer-count');
+  if (count) count.textContent = `${index + 1} / ${slidesList.length}`;
+  viewer.querySelector('.viewer-arrow.prev')?.toggleAttribute('disabled', index === 0);
+  viewer.querySelector('.viewer-arrow.next')?.toggleAttribute('disabled', index >= slidesList.length - 1);
+  slidesList.forEach((slide, position) => { if (position !== index) slide.querySelector('video')?.pause(); });
+}
+
+function stepViewer(direction) {
+  const track = document.querySelector('#viewer .viewer-track');
+  track?.scrollBy({ left: direction * track.clientWidth, behavior: 'smooth' });
+}
+
+function closeViewer(direction = 0) {
+  const viewer = document.querySelector('#viewer');
+  if (!viewer?.open) return;
+  const slide = viewer.querySelector('.viewer-drag');
+  viewer.classList.add('closing');
+  if (slide) slide.style.transform = `translateY(${direction * innerHeight}px)`;
+  setTimeout(() => {
+    viewer.querySelectorAll('video').forEach(video => video.pause());
+    viewer.close();
+    viewer.classList.remove('closing');
+  }, direction ? 200 : 0);
+}
+
+function bindViewer(viewer) {
+  let drag = null;
+  viewer.addEventListener('scroll', () => syncViewer(viewer), { capture: true, passive: true });
+  viewer.addEventListener('cancel', event => { event.preventDefault(); closeViewer(); });
+  viewer.addEventListener('click', event => {
+    if (event.target.classList?.contains('viewer-slide') || event.target === viewer) closeViewer();
+  });
+  viewer.addEventListener('touchstart', event => {
+    const slide = event.target.closest('.viewer-slide');
+    drag = event.touches.length === 1 && slide && !event.target.closest('video') ? { slide, x: event.touches[0].clientX, y: event.touches[0].clientY, dy: 0, vertical: null, time: event.timeStamp } : null;
+  }, { passive: true });
+  viewer.addEventListener('touchmove', event => {
+    if (!drag) return;
+    const dx = event.touches[0].clientX - drag.x;
+    const dy = event.touches[0].clientY - drag.y;
+    if (drag.vertical === null) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      drag.vertical = Math.abs(dy) > Math.abs(dx);
+      if (!drag.vertical) { drag = null; return; }
+      drag.slide.classList.add('viewer-drag');
+    }
+    if (event.cancelable) event.preventDefault();
+    drag.dy = dy;
+    drag.slide.style.transform = `translateY(${dy}px) scale(${1 - Math.min(0.15, Math.abs(dy) / 2400)})`;
+    viewer.style.setProperty('--fade', String(Math.max(0.2, 1 - Math.abs(dy) / 500)));
+  }, { passive: false });
+  viewer.addEventListener('touchend', event => {
+    if (!drag?.vertical) { drag = null; return; }
+    const { dy, slide, time } = drag;
+    drag = null;
+    const fast = Math.abs(dy) / Math.max(1, event.timeStamp - time) > 0.5;
+    if (Math.abs(dy) > 90 || (fast && Math.abs(dy) > 30)) closeViewer(Math.sign(dy));
+    else {
+      slide.style.transform = '';
+      viewer.style.removeProperty('--fade');
+      setTimeout(() => slide.classList.remove('viewer-drag'), 250);
+    }
+  });
 }
 
 function syncGalleryDots(gallery) {
@@ -1730,8 +1854,17 @@ function chipRadio(name, options, checked) {
 
 const MEDIA_ACCEPT = 'image/*,video/mp4,video/quicktime,video/webm';
 
-function thumbMedia(item) {
-  return item.type === 'video' ? `<video src="${escapeHtml(item.preview)}" muted playsinline preload="metadata"></video><span class="play-mark small">${icon('play')}</span>` : `<img src="${escapeHtml(item.preview)}" alt="">`;
+function mediaVisual(item) {
+  const poster = item.posterPreview || item.posterUrl;
+  if (item.type === 'video') return `${poster ? `<img src="${escapeHtml(poster)}" alt="">` : `<video src="${escapeHtml(item.preview)}#t=0.1" muted playsinline preload="metadata"></video>`}<span class="play-mark small">${icon('play')}</span>`;
+  return `<img src="${escapeHtml(item.preview)}" alt="">`;
+}
+
+function mediaStateHtml(item, big = false) {
+  if (item.status === 'error') return `<span class="tile-state error" data-action="media-error" data-id="${item.id}">${icon('close')}${big ? `<small>${escapeHtml(item.error || 'Не загрузилось')}</small>${item.retry ? `<button type="button" class="tile-retry" data-action="media-retry" data-id="${item.id}">Повторить</button>` : ''}` : ''}</span>`;
+  if (item.status === 'done') return item.url && item.file ? `<span class="tile-state done" aria-label="Загружено">${icon('check')}</span>` : '';
+  const percent = Math.round((item.progress || 0) * 100);
+  return `<span class="tile-state busy ${item.status === 'processing' ? 'spin' : ''}" style="--p:${item.status === 'processing' ? 25 : percent}"><i></i><small>${item.status === 'processing' ? 'Готовим' : `${percent}%`}</small></span>`;
 }
 
 function imagePickerHtml() {
@@ -1739,7 +1872,25 @@ function imagePickerHtml() {
   if (!online) return `<div class="drop offline"><span class="drop-icon">${icon('image')}</span><b>Обложкой станет название</b><small>Фото и видео можно загрузить на сайте с аккаунтом</small></div>`;
   if (!publishMedia.length) return `<label class="drop">${input}<span class="drop-icon">${icon('upload')}</span><b>Добавь фото, GIF или видео</b><small>${isCompact() ? 'Нажми, чтобы выбрать' : 'Перетащи сюда или нажми'} · до 8 файлов</small><span class="drop-hint">Первое станет обложкой. Без файлов обложкой будет название на цвете страницы</span></label>`;
   const [cover, ...rest] = publishMedia;
-  return `<div class="pick-cover">${thumbMedia(cover)}<em>${icon('image')} Обложка</em><button type="button" class="pick-remove" data-action="remove-image" data-index="0" aria-label="Убрать">${icon('close')}</button></div><div class="pick-strip">${rest.map((item, index) => `<span class="pick-thumb">${thumbMedia(item)}<button type="button" class="pick-make-cover" data-action="media-cover" data-index="${index + 1}" aria-label="Сделать обложкой"></button><button type="button" class="pick-remove" data-action="remove-image" data-index="${index + 1}" aria-label="Убрать">${icon('close')}</button></span>`).join('')}${publishMedia.length < 8 ? `<label class="pick-add">${input}${icon('plus')}<small>Ещё</small></label>` : ''}</div>${rest.length ? '<p class="fine">Нажми на миниатюру — она станет обложкой</p>' : ''}`;
+  const busy = publishMedia.filter(item => item.status === 'processing' || item.status === 'uploading').length;
+  const failed = publishMedia.filter(item => item.status === 'error').length;
+  const summary = failed
+    ? `<span class="pick-summary error">${icon('close')} Не загрузилось: ${failed}</span>`
+    : busy ? `<span class="pick-summary">${icon('refresh')} Загружаем: ${busy} из ${publishMedia.length}</span>`
+    : `<span class="pick-summary done">${icon('check')} Готово: ${publishMedia.length} ${plural(publishMedia.length, 'файл', 'файла', 'файлов')}</span>`;
+  const thumbs = rest.map((item, index) => `<span class="pick-thumb" data-media="${item.id}">${mediaVisual(item)}${mediaStateHtml(item)}<button type="button" class="pick-make-cover" data-action="media-cover" data-index="${index + 1}" aria-label="Сделать обложкой"></button><button type="button" class="pick-remove" data-action="remove-image" data-index="${index + 1}" aria-label="Убрать">${icon('close')}</button></span>`).join('');
+  return `<div class="pick-cover" data-media="${cover.id}">${mediaVisual(cover)}<em>${icon('image')} Обложка</em>${mediaStateHtml(cover, true)}<button type="button" class="pick-remove" data-action="remove-image" data-index="0" aria-label="Убрать">${icon('close')}</button></div><div class="pick-strip">${thumbs}${publishMedia.length < 8 ? `<label class="pick-add">${input}${icon('plus')}<small>Ещё</small></label>` : ''}</div><p class="pick-status">${summary}${rest.length ? '<span>Нажми на миниатюру — она станет обложкой</span>' : ''}</p>`;
+}
+
+function plural(count, one, few, many) {
+  const tens = count % 100;
+  const ones = count % 10;
+  return tens > 10 && tens < 20 ? many : ones === 1 ? one : ones > 1 && ones < 5 ? few : many;
+}
+
+function renderPicker() {
+  const wrap = modal.querySelector?.('.image-pick-wrap');
+  if (wrap) wrap.innerHTML = imagePickerHtml();
 }
 
 async function imageToBlob(file, maxSide = 1600, square = false) {
@@ -1769,7 +1920,10 @@ async function videoPoster(file) {
     video.playsInline = true;
     video.preload = 'auto';
     video.src = url;
-    await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = () => reject(new Error('no preview')); setTimeout(resolve, 5000); });
+    // iOS loads nothing until asked: load() plus a muted play() makes the first frame available.
+    video.load?.();
+    video.play?.().then(() => video.pause(), () => {});
+    await new Promise((resolve, reject) => { video.onloadeddata = resolve; video.onerror = () => reject(new Error('no preview')); setTimeout(resolve, 4000); });
     video.currentTime = Math.min(0.5, (video.duration || 1) / 3);
     await new Promise(resolve => { video.onseeked = resolve; setTimeout(resolve, 2500); });
     if (!video.videoWidth) return null;
@@ -1786,36 +1940,111 @@ async function videoPoster(file) {
   }
 }
 
-async function addPublishFiles(fileList) {
-  for (const file of Array.from(fileList).slice(0, 8 - publishMedia.length)) {
-    try {
-      if (file.type.startsWith('video/')) {
-        if (file.size > 40 * 1024 * 1024) { toast('Видео больше 40 МБ — сожми его или дай ссылку на YouTube'); continue; }
-        publishMedia.push({ type: 'video', blob: file, preview: URL.createObjectURL(file), poster: await videoPoster(file) });
-      } else if (file.type === 'image/gif') {
-        if (file.size > 8 * 1024 * 1024) { toast('GIF больше 8 МБ'); continue; }
-        publishMedia.push({ type: 'image', blob: file, preview: URL.createObjectURL(file) });
-      } else {
-        const blob = await imageToBlob(file);
-        publishMedia.push({ type: 'image', blob, preview: URL.createObjectURL(blob) });
-      }
-    } catch (error) {
-      toast(error.message);
-    }
-  }
-  const wrap = modal.querySelector?.('.image-pick-wrap');
-  if (wrap) wrap.innerHTML = imagePickerHtml();
+const MB = 1024 * 1024;
+let mediaSeq = 0;
+let mediaQueue = Promise.resolve();
+
+function mediaKind(file) {
+  if (file.type.startsWith('video/') || /\.(mov|mp4|m4v|webm)$/i.test(file.name || '')) return 'video';
+  if (file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|heic|heif|avif)$/i.test(file.name || '')) return 'image';
+  return '';
 }
 
-async function uploadBlob(blob) {
-  const response = await fetch('/api/uploads', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Ошибка загрузки ${response.status}`);
-  return data.url;
+function sizeText(bytes) {
+  return `${(bytes / MB).toFixed(bytes < 10 * MB ? 1 : 0).replace('.', ',')} МБ`;
+}
+
+// Tiles appear at once; each file is then prepared and uploaded in the background, one after another.
+function addPublishFiles(fileList) {
+  const files = Array.from(fileList || []);
+  const room = Math.max(0, 8 - publishMedia.length);
+  if (files.length > room) toast(`Можно до 8 файлов — добавлено ${room}`);
+  const added = files.slice(0, room).map(file => ({ id: `m${++mediaSeq}`, type: mediaKind(file) || 'image', kind: mediaKind(file), file, preview: URL.createObjectURL(file), status: 'processing', progress: 0 }));
+  if (!added.length) return;
+  publishMedia.push(...added);
+  renderPicker();
+  for (const item of added) item.task = mediaQueue = mediaQueue.then(() => prepareMedia(item));
+}
+
+async function prepareMedia(item) {
+  if (!publishMedia.includes(item)) return;
+  item.status = 'processing';
+  item.error = '';
+  item.retry = false;
+  item.progress = 0;
+  renderPicker();
+  try {
+    if (!item.kind) throw new Error('Это не фото и не видео');
+    if (item.kind === 'video') {
+      if (item.file.size > 40 * MB) throw new Error(`Видео ${sizeText(item.file.size)}, можно до 40 МБ. Обрежь его или вставь ссылку на YouTube`);
+      item.blob = item.file;
+      if (!item.poster) videoPoster(item.file).then(poster => {
+        if (!poster || !publishMedia.includes(item)) return;
+        item.poster = poster;
+        item.posterPreview = URL.createObjectURL(poster);
+        renderPicker();
+      });
+    } else if (item.file.type === 'image/gif') {
+      if (item.file.size > 8 * MB) throw new Error(`GIF ${sizeText(item.file.size)}, можно до 8 МБ`);
+      item.blob = item.file;
+    } else if (!item.blob) {
+      item.blob = await imageToBlob(item.file);
+      URL.revokeObjectURL(item.preview);
+      item.preview = URL.createObjectURL(item.blob);
+    }
+    if (!publishMedia.includes(item)) return;
+    item.status = 'uploading';
+    renderPicker();
+    item.url = await uploadBlob(item.blob, item.kind, progress => {
+      item.progress = progress;
+      const state = modal.querySelector?.(`[data-media="${item.id}"] .tile-state`);
+      if (state) state.outerHTML = mediaStateHtml(item, item === publishMedia[0]);
+    }, item);
+    item.status = 'done';
+  } catch (error) {
+    if (!publishMedia.includes(item)) return;
+    item.status = 'error';
+    item.error = error.message || 'Не загрузилось';
+    item.retry = !/можно до|не фото|не похож|Нужн/i.test(item.error);
+    toast(item.error);
+  }
+  renderPicker();
+}
+
+// Upload with progress (fetch cannot report it). The server checks the real file type.
+function uploadBlob(blob, kind = '', onProgress = null, holder = null) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    if (holder) holder.request = request;
+    request.open('POST', '/api/uploads');
+    request.withCredentials = true;
+    request.setRequestHeader('Content-Type', blob.type || (kind === 'video' ? 'video/mp4' : 'image/jpeg'));
+    request.upload.onprogress = event => { if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
+    request.onload = () => {
+      let data = {};
+      try { data = JSON.parse(request.responseText || '{}'); } catch { data = {}; }
+      if (request.status >= 200 && request.status < 300 && data.url) resolve(data.url);
+      else reject(new Error(data.error || (request.status === 413 ? 'Файл слишком большой' : `Ошибка загрузки ${request.status}`)));
+    };
+    request.onerror = () => reject(new Error('Нет связи — нажми «Повторить»'));
+    request.onabort = () => reject(new Error('Загрузка отменена'));
+    request.send(blob);
+  });
+}
+
+async function waitForMedia(submit) {
+  const pending = publishMedia.filter(item => item.task && (item.status === 'processing' || item.status === 'uploading'));
+  if (!pending.length) return;
+  if (submit) submit.textContent = 'Дожидаемся загрузки файлов…';
+  await Promise.all(pending.map(item => item.task));
 }
 
 function clearPublishMedia() {
-  for (const item of publishMedia) if (item.blob) URL.revokeObjectURL(item.preview);
+  for (const item of publishMedia) {
+    item.request?.abort?.();
+    if (item.file) URL.revokeObjectURL(item.preview);
+    if (item.posterPreview) URL.revokeObjectURL(item.posterPreview);
+  }
   publishMedia = [];
 }
 
@@ -1839,7 +2068,7 @@ function openPublish(projectId = '') {
   const project = projectId ? projectById(projectId) : null;
   if (projectId && (!project || !isMine(project.handle))) return;
   clearPublishMedia();
-  if (project) publishMedia = projectMedia(project).map(item => ({ type: item.type, url: item.url, preview: item.url, posterUrl: uploadUrl(item.poster) }));
+  if (project) publishMedia = projectMedia(project).map(item => ({ id: `m${++mediaSeq}`, type: item.type, kind: item.type, url: item.url, preview: item.url, posterUrl: uploadUrl(item.poster), status: 'done' }));
   postDraft = {
     id: project?.id || '', step: 1, selected: -1,
     theme: cleanTheme(project?.theme),
@@ -1926,7 +2155,8 @@ function editBlockHtml(block, index) {
   else if (block.type === 'image' || block.type === 'video') {
     const source = block.preview || uploadUrl(block.url);
     const media = block.type === 'video' ? `<video src="${escapeHtml(source)}" muted playsinline controls preload="metadata"></video>` : `<img src="${escapeHtml(source)}" alt="">`;
-    body = `<figure class="pb pb-media ${block.uploading ? 'uploading' : ''}">${media}${block.uploading ? `<span class="pe-uploading">${icon('refresh')} Загружаем…</span>` : ''}</figure>${input('caption', 'Подпись · необязательно')}`;
+    const state = block.uploading ? `<span class="pe-uploading">${icon('refresh')} Загружаем… ${Math.round((block.progress || 0) * 100)}%</span>` : block.error ? `<span class="pe-upload-error">${icon('close')} ${escapeHtml(block.error)} — удали блок и попробуй снова</span>` : '';
+    body = `<figure class="pb pb-media ${block.uploading ? 'uploading' : ''} ${block.error ? 'failed' : ''}">${media}${state}</figure>${block.error ? '' : input('caption', 'Подпись · необязательно')}`;
   } else if (block.type === 'button') {
     const link = linkKind(block.url);
     body = `<div class="pb pb-button pe-button">${icon(link?.icon || 'external')}${input('label', link ? link.label : 'Текст кнопки')}</div>${input('url', 'https://… — куда ведёт кнопка', 'type="url" inputmode="url"')}`;
@@ -1983,26 +2213,31 @@ function addBlock(type) {
   postDraft.blocks.push(block);
   postDraft.selected = postDraft.blocks.length - 1;
   renderPageEditor();
-  modal.querySelector?.(`.peb[data-block="${postDraft.selected}"] [data-pe]`)?.focus?.({ preventScroll: false });
+  if (!['image', 'video'].includes(type)) modal.querySelector?.(`.peb[data-block="${postDraft.selected}"] [data-pe]`)?.focus?.({ preventScroll: false });
   return block;
 }
 
 async function addPageMedia(file, type) {
   if (!file || !postDraft) return;
-  const limit = type === 'video' ? 40 : file.type === 'image/gif' ? 8 : 25;
-  if (file.size > limit * 1024 * 1024) { toast(`Файл больше ${limit} МБ`); return; }
-  const block = addBlock(type);
+  const kind = mediaKind(file) || type;
+  const limit = kind === 'video' ? 40 : file.type === 'image/gif' ? 8 : 25;
+  if (file.size > limit * MB) { toast(`${kind === 'video' ? 'Видео' : 'Файл'} ${sizeText(file.size)}, можно до ${limit} МБ`); return; }
+  const block = addBlock(kind === 'video' ? 'video' : 'image');
   if (!block) return;
   block.uploading = true;
+  block.progress = 0;
   block.preview = URL.createObjectURL(file);
   renderPageEditor();
   try {
-    const blob = type === 'image' && file.type !== 'image/gif' ? await imageToBlob(file, 2000) : file;
-    block.url = await uploadBlob(blob);
+    const blob = kind === 'image' && file.type !== 'image/gif' ? await imageToBlob(file, 2000) : file;
+    block.url = await uploadBlob(blob, kind, progress => {
+      block.progress = progress;
+      const label = modal.querySelector?.(`.peb[data-block="${postDraft?.blocks.indexOf(block)}"] .pe-uploading`);
+      if (label) label.innerHTML = `${icon('refresh')} Загружаем… ${Math.round(progress * 100)}%`;
+    });
   } catch (error) {
+    block.error = error.message;
     toast(error.message);
-    postDraft.blocks.splice(postDraft.blocks.indexOf(block), 1);
-    postDraft.selected = -1;
   }
   delete block.uploading;
   renderPageEditor();
@@ -2035,7 +2270,7 @@ function styleBlock(index, key, value) {
 }
 
 function draftPage() {
-  return (postDraft?.blocks || []).filter(block => !block.uploading).map(({ uploading, preview, ...block }) => block);
+  return (postDraft?.blocks || []).filter(block => !block.uploading && !block.error && (!['image', 'video'].includes(block.type) || block.url)).map(({ uploading, preview, progress, error, ...block }) => block);
 }
 
 function openApplication() {
@@ -2381,6 +2616,11 @@ document.addEventListener('click', async event => {
     } catch (error) { toast(error.message); }
   } else if (action === 'trust-info') openTrustInfo(target.dataset.handle);
   else if (action === 'edit-project') openPublish(id);
+  else if (action === 'view-media') {
+    const project = projectById(id);
+    if (project) openViewer(viewerItemsFor(project), Number(target.dataset.index) || 0);
+  } else if (action === 'viewer-close') closeViewer();
+  else if (action === 'viewer-step') stepViewer(Number(target.dataset.direction));
   else if (action === 'wizard-step') setWizardStep(target.dataset.step);
   else if (action === 'pe-add') addBlock(target.dataset.type);
   else if (action === 'pe-style') styleBlock(Number(target.dataset.index), target.dataset.key, target.dataset.value || '');
@@ -2419,11 +2659,16 @@ document.addEventListener('click', async event => {
     avatarDraft = { url: '' };
     const holder = modal.querySelector?.('.avatar-edit');
     if (holder) holder.innerHTML = avatarEditInner();
+  } else if (action === 'media-error') {
+    if (!event.target.closest('.tile-retry')) toast(publishMedia.find(entry => entry.id === id)?.error || 'Не загрузилось');
+  } else if (action === 'media-retry') {
+    const item = publishMedia.find(entry => entry.id === id);
+    if (item) item.task = mediaQueue = mediaQueue.then(() => prepareMedia(item));
   } else if (action === 'remove-image') {
     const [removed] = publishMedia.splice(Number(target.dataset.index), 1);
-    if (removed) URL.revokeObjectURL(removed.preview);
-    const wrap = modal.querySelector?.('.image-pick-wrap');
-    if (wrap) wrap.innerHTML = imagePickerHtml();
+    removed?.request?.abort?.();
+    if (removed?.file) URL.revokeObjectURL(removed.preview);
+    renderPicker();
   } else if (action === 'copy') copyText(target.dataset.copy || '');
   else if (action === 'new-code') ensurePairCode(true);
   else if (action === 'share-command') navigator.share?.({ title: 'Команда для агента про.стим', text: agentCommand() }).catch(() => {});
@@ -2514,12 +2759,15 @@ document.addEventListener('submit', async event => {
     if (online) {
       if (submit) submit.disabled = true;
       try {
+        await waitForMedia(submit);
+        if (publishMedia.some(item => item.status === 'error' || !item.url)) {
+          showWizardStep(1);
+          throw new Error('Убери файлы с ошибкой или нажми «Повторить»');
+        }
         const media = [];
-        for (const [index, item] of publishMedia.entries()) {
-          if (submit && item.blob) submit.textContent = `Загружаем ${index + 1} из ${publishMedia.length}…`;
-          const url = item.url || (item.url = await uploadBlob(item.blob));
-          const poster = item.type === 'video' ? item.posterUrl || (item.poster ? (item.posterUrl = await uploadBlob(item.poster)) : '') : '';
-          media.push({ url, ...(poster ? { poster } : {}) });
+        for (const item of publishMedia) {
+          const poster = item.type === 'video' ? item.posterUrl || (item.poster ? (item.posterUrl = await uploadBlob(item.poster, 'image').catch(() => '')) : '') : '';
+          media.push({ url: item.url, ...(poster ? { poster } : {}) });
         }
         if (submit) submit.textContent = editing ? 'Сохраняем…' : 'Публикуем…';
         const { project } = await apiCall(editing ? 'PATCH' : 'POST', editing ? `/api/projects/${encodeURIComponent(editing)}` : '/api/projects', { ...fields, media, video: value('video') });
@@ -2740,7 +2988,7 @@ document.addEventListener('change', async event => {
   else if (target.name === 'task-mode') ai.mode = target.value;
   else if (target.name === 'task-engine') { ai.engine[route().extra] = target.value; renderKeepingInput(); }
   else if (target.name === 'task-continue') ai.continueChat = target.checked;
-  else if (target.name === 'images' && target.files) { await addPublishFiles(target.files); target.value = ''; }
+  else if (target.name === 'images' && target.files) { addPublishFiles(target.files); target.value = ''; }
   else if (target.dataset?.peFile && target.files?.[0]) { const file = target.files[0]; target.value = ''; await addPageMedia(file, target.dataset.peFile); }
   else if (target.dataset?.peTheme && postDraft) { postDraft.theme[target.dataset.peTheme] = target.value; renderPageEditor(); }
   else if (target.dataset?.peColor !== undefined && postDraft) styleBlock(Number(target.dataset.peColor), 'color', target.value);
@@ -2816,6 +3064,7 @@ document.addEventListener('keydown', event => {
     target.form?.requestSubmit?.();
     return;
   }
+  if (document.querySelector('#viewer')?.open && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) { stepViewer(event.key === 'ArrowRight' ? 1 : -1); return; }
   if (modal.open || document.body.dataset.view !== 'feed') return;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName) || target?.isContentEditable) return;
   if (['ArrowDown', 'PageDown', 'j'].includes(event.key)) { event.preventDefault(); stepFeed(1); }
@@ -2960,6 +3209,12 @@ modal.addEventListener('focusin', event => {
   if (sheetDetent === 'half' && event.target.matches?.('input, textarea')) setDetent('full');
 });
 modal.addEventListener('click', event => {
+  const media = event.target.closest?.('.store-page .pb-media img');
+  if (media) {
+    const images = Array.from(modal.querySelectorAll('.store-page .pb-media img'));
+    openViewer(images.map(image => `<img src="${escapeHtml(image.getAttribute('src'))}" alt="" draggable="false">`), images.indexOf(media));
+    return;
+  }
   const block = event.target.closest?.('.peb');
   if (block && !event.target.closest?.('[data-action]')) selectBlock(Number(block.dataset.block));
 });
