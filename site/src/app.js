@@ -2,6 +2,7 @@ import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, rea
 import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers } from './trust.js';
+import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals } from './recommend.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
@@ -82,7 +83,7 @@ try {
   localTaste = cleanTaste(savedTaste.taste);
   localStats = Object.fromEntries(Object.entries(savedTaste.stats || {}).map(([id, value]) => [id, cleanStats(value)]));
 } catch {}
-const ai = { workspaces: [], details: new Map(), trees: new Map(), git: new Map(), errors: new Map(), loading: new Set(), file: null, pair: null, pairAllow: 'edit', pairOs: /Win/.test(globalThis.navigator?.userAgent || '') ? 'win' : 'unix', paired: null, draft: '', mode: 'edit', engine: {}, continueChat: true, expanded: new Set(), treeFilter: '', sending: false };
+const ai = { attachments: {}, workspaces: [], details: new Map(), trees: new Map(), git: new Map(), errors: new Map(), loading: new Set(), file: null, pair: null, pairAllow: 'edit', pairOs: /Win/.test(globalThis.navigator?.userAgent || '') ? 'win' : 'unix', paired: null, draft: '', mode: 'edit', engine: {}, continueChat: true, expanded: new Set(), treeFilter: '', sending: false };
 
 const photos = {
   forest: 'https://images.squarespace-cdn.com/content/v1/616632df4479e534656ecf49/294a683d-1d98-44ae-8cf9-1ad265169dea/marita-kavelashvili-ugnrXk1129g-unsplash.jpg',
@@ -529,7 +530,7 @@ function afterRender(view, changedPage, current) {
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
   if (view !== 'feed') {
-    if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) window.scrollTo?.(0, view === 'inbox' && route().page ? document.body.scrollHeight || 0 : 0);
+    if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) { if (view === 'inbox' && route().page) scrollChatEnd(); else window.scrollTo?.(0, 0); }
     return;
   }
   const feed = document.querySelector('#feed');
@@ -893,8 +894,10 @@ function visibleTags(project) {
 
 // Feed design code "Cinema": facts and tags are one quiet line of text, not coloured pills.
 function tagline(project) {
-  const parts = [labelOf(postStages, project.stage), project.ai ? 'Сделано с ИИ' : '', ...visibleTags(project)].filter(Boolean).slice(0, 4);
-  return parts.length ? `<p class="card-tagline">${parts.map(escapeHtml).join(' · ')}</p>` : '';
+  const stage = labelOf(postStages, project.stage);
+  const parts = [project.ai ? 'Сделано с ИИ' : '', ...visibleTags(project)].filter(Boolean).slice(0, stage ? 3 : 4).map(escapeHtml);
+  if (stage) parts.unshift(`<span class="stage">${escapeHtml(stage)}</span>`);
+  return parts.length ? `<p class="card-tagline">${parts.join(' · ')}</p>` : '';
 }
 
 
@@ -1062,9 +1065,9 @@ function renderInbox(id) {
   if (id) {
     const thread = threadById(id);
     if (!thread) return `<div class="page">${emptyState('inbox', 'Чат не найден', '<a class="btn btn-ghost" href="#/inbox">Все чаты</a>')}</div>`;
-    const log = thread.all.map(message => `<div class="bubble ${message.from === 'me' ? 'me' : 'them'}">${escapeHtml(message.text)}${message.time ? `<small>${escapeHtml(message.time)}</small>` : ''}</div>`).join('');
+    const log = thread.all.map(message => bubbleHtml(message, thread)).join('');
     const profile = thread.handle && !thread.official ? `<button class="text-link" data-action="profile" data-handle="${escapeHtml(thread.handle)}">Профиль</button>` : '';
-    const composer = thread.official ? '<p class="chat-hint">Это служебный чат: сюда приходят ответы про заявки</p>' : `<div class="chat-composer"><form id="dm-form" class="composer" data-id="${escapeHtml(thread.id)}"><input name="text" placeholder="Сообщение…" aria-label="Сообщение" maxlength="2000" autocomplete="off" required><button type="submit" aria-label="Отправить">${icon('send')}</button></form></div>`;
+    const composer = thread.official ? '<p class="chat-hint">Это служебный чат: сюда приходят ответы про заявки</p>' : chatComposerHtml(thread);
     return `<div class="page chat-page"><h1 class="sr-only">Чат: ${escapeHtml(thread.name)}</h1><div class="chat-head">${avatar(thread, 'xl')}<b>${escapeHtml(thread.name)}</b>${profile}</div><div class="chat-log">${log || '<p class="chat-hint">Напиши первое сообщение 👋</p>'}</div>${composer}</div>`;
   }
   const list = threads();
@@ -1074,6 +1077,118 @@ function renderInbox(id) {
     return `<a class="thread-row ${unread ? 'unread' : ''}" href="#/inbox/${encodeURIComponent(thread.id)}">${avatar(thread, 'lg')}<span class="thread-text"><b>${escapeHtml(thread.name)}${thread.official ? ` <span class="verified">${icon('check')}</span>` : ''}</b><small>${last ? `${last.from === 'me' ? 'Вы: ' : ''}${escapeHtml(last.text)}` : 'Нет сообщений'}</small></span><span class="thread-meta"><small>${escapeHtml(last?.time || '')}</small>${unread ? '<i class="dot-badge" aria-label="Новое"></i>' : ''}</span></a>`;
   }).join('');
   return `<div class="page narrow"><h1 class="sr-only">Входящие</h1><div class="thread-list">${rows || emptyState('inbox', 'Пока нет переписок', '<a class="btn btn-ghost" href="#/search">Найти авторов</a>', 'Напиши автору из его профиля')}</div></div>`;
+}
+
+/* Chat: bubbles with pictures, stickers and reactions; a composer with emoji, stickers, screenshots and voice */
+
+const onlyEmoji = text => /^[\p{Extended_Pictographic}\p{Emoji_Component}‍️\s]{1,16}$/u.test(text || '') && /\p{Extended_Pictographic}/u.test(text) && [...(text || '').matchAll(/\p{Extended_Pictographic}/gu)].length <= 3;
+
+function stickerHtml(sticker) {
+  return `<span class="sticker" style="--s1:${sticker.colors[0]};--s2:${sticker.colors[1]}"><span class="sticker-emoji">${sticker.emoji}</span><b>${escapeHtml(sticker.label)}</b></span>`;
+}
+
+function bubbleHtml(message, thread) {
+  const mine = message.from === 'me';
+  const sticker = stickerById(message.sticker);
+  const image = uploadUrl(message.image);
+  const counts = Object.entries(message.reactions?.counts || {});
+  const kind = sticker ? 'is-sticker' : image && !message.text ? 'is-image' : onlyEmoji(message.text) ? 'is-emoji' : '';
+  const body = sticker ? stickerHtml(sticker) : `${image ? `<button class="bubble-image" data-action="view-chat-image" data-src="${image}" aria-label="Открыть картинку"><img src="${image}" alt="Скриншот" loading="lazy"></button>` : ''}${message.text ? `<span class="bubble-text">${escapeHtml(message.text)}</span>` : ''}`;
+  const reactions = counts.length ? `<div class="reactions">${counts.map(([emoji, count]) => `<button class="reaction ${message.reactions.mine === emoji ? 'on' : ''}" data-action="react" data-id="${escapeHtml(message.id)}" data-emoji="${emoji}" aria-label="Реакция ${emoji}">${emoji}${count > 1 ? `<b>${count}</b>` : ''}</button>`).join('')}</div>` : '';
+  const reactable = online && message.id && !thread.official;
+  return `<div class="msg-row ${mine ? 'me' : 'them'}" ${reactable ? `data-msg="${escapeHtml(message.id)}"` : ''}><div class="bubble ${mine ? 'me' : 'them'} ${kind}">${body}${message.time ? `<small>${escapeHtml(message.time)}</small>` : ''}</div>${reactions}</div>`;
+}
+
+function chatComposerHtml(thread) {
+  const emoji = chatEmoji.map(item => `<button type="button" data-action="insert-emoji" data-emoji="${item}">${item}</button>`).join('');
+  const stickers = chatStickers.map(sticker => `<button type="button" data-action="send-sticker" data-id="${sticker.id}" aria-label="Стикер ${escapeHtml(sticker.label)}">${stickerHtml(sticker)}</button>`).join('');
+  const panel = `<div class="chat-panel" data-tab="emoji" hidden><div class="panel-tabs"><button type="button" class="on" data-action="chat-tab" data-tab="emoji">Эмодзи</button><button type="button" data-action="chat-tab" data-tab="stickers">Стикеры</button></div><div class="emoji-grid">${emoji}</div><div class="sticker-grid">${stickers}</div></div>`;
+  const picture = online ? `<label class="cbtn" aria-label="Отправить скриншот" title="Скриншот или фото">${icon('image')}<input class="file-cover" type="file" accept="image/*" data-chat-image="${escapeHtml(thread.id)}"></label>` : '';
+  return `<div class="chat-composer">${panel}<form id="dm-form" class="composer chat-form" data-id="${escapeHtml(thread.id)}"><button type="button" class="cbtn" data-action="chat-panel" aria-label="Эмодзи и стикеры">${icon('smile')}</button><input name="text" placeholder="Сообщение…" aria-label="Сообщение" maxlength="2000" autocomplete="off">${picture}${voiceButton()}<button type="submit" aria-label="Отправить">${icon('send')}</button></form></div>`;
+}
+
+async function sendChat(threadId, payload) {
+  if (online) {
+    remote.threads = (await apiCall('POST', `/api/messages/${encodeURIComponent(threadId)}`, payload)).threads;
+  } else {
+    state.dms[threadId] ||= [];
+    state.dms[threadId].push({ text: payload.text || '', sticker: payload.sticker || '', time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) });
+    persist();
+  }
+  render();
+  scrollChatEnd();
+}
+
+// Keep the chat pinned to the newest message, also once pictures finish loading,
+// unless the person has scrolled away in the meantime.
+function scrollChatEnd() {
+  let pinned = 0;
+  const end = () => { window.scrollTo?.(0, document.body.scrollHeight || 0); pinned = window.scrollY || 0; };
+  end();
+  document.querySelectorAll?.('.chat-log img').forEach(img => {
+    if (!img.complete) img.addEventListener?.('load', () => { if (Math.abs((window.scrollY || 0) - pinned) < 4) end(); }, { once: true });
+  });
+}
+
+async function reactTo(threadId, messageId, emoji) {
+  if (!online || !messageId) return;
+  const y = window.scrollY || 0;
+  try {
+    remote.threads = (await apiCall('POST', `/api/messages/${encodeURIComponent(threadId)}/react`, { id: messageId, emoji })).threads;
+    render();
+    window.scrollTo?.(0, y);
+  } catch (error) { toast(error.message); }
+}
+
+function closeReactBar() {
+  document.querySelectorAll?.('.react-bar').forEach(bar => bar.remove?.());
+}
+
+function openReactBar(row) {
+  closeReactBar();
+  if (!row?.dataset?.msg) return;
+  const bar = document.createElement('div');
+  bar.className = 'react-bar';
+  bar.innerHTML = chatReactions.map(emoji => `<button data-action="react" data-id="${escapeHtml(row.dataset.msg)}" data-emoji="${emoji}" aria-label="Реакция ${emoji}">${emoji}</button>`).join('');
+  row.appendChild(bar);
+  navigator.vibrate?.(10);
+}
+
+/* Voice input: the browser's speech recognition types what you say into the field */
+
+const SpeechRecognitionApi = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
+let dictation = null;
+
+function voiceButton() {
+  return SpeechRecognitionApi ? `<button type="button" class="cbtn mic" data-action="dictate" aria-label="Голосовой ввод" title="Голосовой ввод">${icon('mic')}</button>` : '';
+}
+
+function toggleDictation(button) {
+  if (dictation) { dictation.stop(); return; }
+  const field = button.closest('form')?.querySelector('input[name="text"], textarea');
+  if (!field || !SpeechRecognitionApi) return;
+  const recognition = new SpeechRecognitionApi();
+  recognition.lang = 'ru-RU';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  const base = field.value ? `${field.value.replace(/\s+$/, '')} ` : '';
+  recognition.onresult = event => {
+    field.value = base + Array.from(event.results).map(result => result[0].transcript).join('');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    if (field.tagName === 'TEXTAREA') autosize(field);
+  };
+  recognition.onerror = event => {
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') toast('Разреши доступ к микрофону в настройках браузера');
+    else if (!['aborted', 'no-speech'].includes(event.error)) toast('Голосовой ввод сейчас недоступен');
+  };
+  recognition.onend = () => {
+    dictation = null;
+    document.querySelectorAll?.('.mic.on').forEach(item => item.classList.remove('on'));
+    field.focus?.();
+  };
+  dictation = recognition;
+  button.classList.add('on');
+  try { recognition.start(); } catch { dictation = null; button.classList.remove('on'); }
 }
 
 /* Auth */
@@ -1638,7 +1753,7 @@ function composerHtml(detail) {
   const engine = ai.engine[detail.id] || engines[0]?.id || 'demo';
   const hasSession = (detail.tasks || []).some(task => task.engine === engine && task.events?.some(event => event.sessionId));
   const notReady = (detail.device?.engines || []).filter(item => !item.ok && item.note);
-  return `<form id="task-form" class="task-composer" data-id="${escapeHtml(detail.id)}"><textarea name="task-prompt" rows="1" maxlength="8000" placeholder="Что сделать в проекте?" aria-label="Задача для ИИ" required>${escapeHtml(ai.draft)}</textarea><div class="composer-row"><div class="mode-pick" role="radiogroup" aria-label="Режим">${modes.map(mode => `<label title="${escapeHtml(modeHints[mode])}"><input type="radio" name="task-mode" value="${mode}" ${mode === ai.mode ? 'checked' : ''}><span>${modeNames[mode]}</span></label>`).join('')}</div>${engines.length > 1 ? `<select name="task-engine" aria-label="Движок">${engines.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === engine ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>` : `<span class="engine-name">${escapeHtml(engines[0]?.label || 'Демо')}</span>`}${hasSession ? `<label class="continue"><input type="checkbox" name="task-continue" ${ai.continueChat ? 'checked' : ''}><span>продолжить диалог</span></label>` : ''}<button class="send" type="submit" aria-label="Отправить задачу" ${ai.sending ? 'disabled' : ''}>${icon('send')}</button></div>${notReady.length && engine === 'demo' ? `<p class="composer-note">${icon('lock')} ${escapeHtml(notReady[0].note)}</p>` : ''}</form>`;
+  return `<form id="task-form" class="task-composer" data-id="${escapeHtml(detail.id)}">${taskFilesHtml(detail)}<textarea name="task-prompt" rows="1" maxlength="8000" placeholder="Что сделать в проекте?" aria-label="Задача для ИИ" required>${escapeHtml(ai.draft)}</textarea><div class="composer-row"><div class="mode-pick" role="radiogroup" aria-label="Режим">${modes.map(mode => `<label title="${escapeHtml(modeHints[mode])}"><input type="radio" name="task-mode" value="${mode}" ${mode === ai.mode ? 'checked' : ''}><span>${modeNames[mode]}</span></label>`).join('')}</div>${engines.length > 1 ? `<select name="task-engine" aria-label="Движок">${engines.map(item => `<option value="${escapeHtml(item.id)}" ${item.id === engine ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}</select>` : `<span class="engine-name">${escapeHtml(engines[0]?.label || 'Демо')}</span>`}${hasSession ? `<label class="continue"><input type="checkbox" name="task-continue" ${ai.continueChat ? 'checked' : ''}><span>продолжить диалог</span></label>` : ''}<span class="composer-tools"><label class="cbtn" aria-label="Прикрепить файлы" title="Файлы, фото, видео, аудио">${icon('clip')}<input class="file-cover" type="file" multiple data-task-files="${escapeHtml(detail.id)}"></label>${voiceButton()}</span><button class="send" type="submit" aria-label="Отправить задачу" ${ai.sending ? 'disabled' : ''}>${icon('send')}</button></div>${notReady.length && engine === 'demo' ? `<p class="composer-note">${icon('lock')} ${escapeHtml(notReady[0].note)}</p>` : ''}</form>`;
 }
 
 function runsHtml(detail) {
@@ -1647,7 +1762,7 @@ function runsHtml(detail) {
     const suggestions = ['Объясни структуру проекта', 'Найди возможные ошибки', 'Напиши README для проекта', 'Что изменилось в последних коммитах?'];
     return `<div class="runs-empty"><span class="ai-orb">${icon('sparkle')}</span><h2>Что сделаем?</h2><p>Агент выполнит задачу на компьютере «${escapeHtml(detail.device?.name || '')}», а шаги появятся здесь.</p><div class="suggestions">${suggestions.map(text => `<button class="suggestion" data-action="prompt-chip" data-text="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join('')}</div></div>`;
   }
-  return tasks.map(task => `<div class="turn"><div class="turn-prompt"><p>${escapeHtml(task.prompt)}</p><small>${task.handle && !isMine(task.handle) ? `@${escapeHtml(task.handle)} · ` : ''}${escapeHtml(modeNames[task.mode] || '')} · ${clockTime(task.createdAt)}</small></div>${renderRun(task, { canCancel: detail.role === 'owner' || isMine(task.handle) })}</div>`).join('');
+  return tasks.map(task => `<div class="turn"><div class="turn-prompt"><p>${escapeHtml(task.prompt)}</p>${attachmentsHtml(task.attachments)}<small>${task.handle && !isMine(task.handle) ? `@${escapeHtml(task.handle)} · ` : ''}${escapeHtml(modeNames[task.mode] || '')} · ${clockTime(task.createdAt)}</small></div>${renderRun(task, { canCancel: detail.role === 'owner' || isMine(task.handle) })}</div>`).join('');
 }
 
 function renderWorkspace(id, tab = '') {
@@ -1741,6 +1856,85 @@ if (typeof setInterval === 'function') setInterval(() => {
   }
 }, 1000);
 
+/* Task attachments: picked files upload right away (with progress), then go with the task to the computer */
+
+const TASK_FILE_LIMIT = 25 * 1024 * 1024;
+const fileKindIcons = { image: 'image', video: 'film', audio: 'music', file: 'file' };
+
+function localFileKind(file) {
+  if (file.type.startsWith('image/')) return 'image';
+  if (file.type.startsWith('video/')) return 'video';
+  if (file.type.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|flac|opus)$/i.test(file.name)) return 'audio';
+  return 'file';
+}
+
+function fileSize(bytes) {
+  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} КБ` : `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} МБ`;
+}
+
+// Compares dotted versions as numbers, so 0.10.0 counts as newer than 0.3.0.
+function versionAtLeast(version, minimum) {
+  const have = String(version || '').split('.').map(part => Number.parseInt(part, 10) || 0);
+  const need = minimum.split('.').map(Number);
+  for (let index = 0; index < need.length; index += 1) if ((have[index] || 0) !== need[index]) return (have[index] || 0) > need[index];
+  return true;
+}
+
+function taskFilesHtml(detail) {
+  const list = ai.attachments[detail.id] || [];
+  if (!list.length) return '';
+  const old = detail.device && !versionAtLeast(detail.device.version, '0.3.0');
+  return `<div class="task-files">${list.map(item => `<span class="task-file ${item.status}" data-file="${item.localId}">${item.kind === 'image' && item.preview ? `<img src="${escapeHtml(item.preview)}" alt="">` : `<i>${icon(fileKindIcons[item.kind] || 'file')}</i>`}<span><b>${escapeHtml(item.name)}</b><small>${item.status === 'error' ? escapeHtml(item.error) : item.status === 'uploading' ? `${Math.round(item.progress * 100)}%` : fileSize(item.size)}</small></span><button type="button" data-action="remove-task-file" data-id="${escapeHtml(detail.id)}" data-file="${item.localId}" aria-label="Убрать файл">${icon('close')}</button></span>`).join('')}</div>${old ? `<p class="composer-note">${icon('download')} Чтобы компьютер получал файлы, обнови агента: запусти команду подключения ещё раз.</p>` : ''}`;
+}
+
+function refreshTaskFiles(workspaceId) {
+  const form = document.querySelector('#task-form');
+  if (!form || form.dataset.id !== workspaceId) return;
+  const detail = ai.details.get(workspaceId);
+  form.querySelectorAll('.task-files, .task-files + .composer-note').forEach(element => element.remove());
+  form.insertAdjacentHTML('afterbegin', taskFilesHtml(detail));
+}
+
+function uploadTaskFile(file, onProgress, holder) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    holder.request = request;
+    request.open('POST', '/api/files');
+    request.withCredentials = true;
+    request.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    request.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+    request.upload.onprogress = event => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+    request.onload = () => {
+      let data = {};
+      try { data = JSON.parse(request.responseText || '{}'); } catch { data = {}; }
+      if (request.status >= 200 && request.status < 300 && data.id) resolve(data); else reject(new Error(data.error || `Ошибка загрузки ${request.status}`));
+    };
+    request.onerror = () => reject(new Error('Нет связи'));
+    request.onabort = () => reject(new Error('Отменено'));
+    request.send(file);
+  });
+}
+
+function addTaskFiles(workspaceId, fileList) {
+  const list = (ai.attachments[workspaceId] ||= []);
+  for (const file of Array.from(fileList).slice(0, Math.max(0, 8 - list.length))) {
+    const item = { localId: `t${++mediaSeq}`, name: file.name, size: file.size, kind: localFileKind(file), status: 'uploading', progress: 0, preview: file.type.startsWith('image/') ? URL.createObjectURL(file) : '' };
+    list.push(item);
+    if (file.size > TASK_FILE_LIMIT) { item.status = 'error'; item.error = 'больше 25 МБ'; continue; }
+    item.task = uploadTaskFile(file, progress => {
+      item.progress = progress;
+      const small = document.querySelector(`[data-file="${item.localId}"] small`);
+      if (small) small.textContent = `${Math.round(progress * 100)}%`;
+    }, item).then(data => { item.id = data.id; item.status = 'done'; }, error => { item.status = 'error'; item.error = error.message; }).finally(() => refreshTaskFiles(workspaceId));
+  }
+  if (fileList.length > 8) toast('К задаче — до 8 файлов');
+  refreshTaskFiles(workspaceId);
+}
+
+function attachmentsHtml(attachments) {
+  return attachments?.length ? `<div class="run-files">${attachments.map(item => `<span>${icon(fileKindIcons[item.kind] || 'file')}${escapeHtml(item.filename)}</span>`).join('')}</div>` : '';
+}
+
 async function submitTask(form) {
   const id = form.dataset.id;
   const detail = ai.details.get(id);
@@ -1753,9 +1947,15 @@ async function submitTask(form) {
   const engine = String(data.get('task-engine') || ai.engine[id] || engines[0]?.id || 'demo');
   ai.engine[id] = engine;
   const continueChat = data.has('task-continue') ? data.get('task-continue') === 'on' : false;
+  dictation?.stop();
   try {
-    const { task } = await apiCall('POST', `/api/workspaces/${encodeURIComponent(id)}/tasks`, { prompt, mode: ai.mode, engine, continue: continueChat });
+    const files = ai.attachments[id] || [];
+    await Promise.all(files.filter(item => item.task).map(item => item.task));
+    if (files.some(item => item.status === 'error')) throw new Error('Убери файлы с ошибкой');
+    const { task } = await apiCall('POST', `/api/workspaces/${encodeURIComponent(id)}/tasks`, { prompt, mode: ai.mode, engine, continue: continueChat, attachments: files.map(item => item.id) });
     if (!detail.tasks.some(item => item.id === task.id)) detail.tasks.push(task);
+    for (const item of files) if (item.preview) URL.revokeObjectURL(item.preview);
+    ai.attachments[id] = [];
     ai.draft = '';
     ai.sending = false;
     render();
@@ -2797,6 +2997,37 @@ document.addEventListener('click', async event => {
     } catch (error) { toast(error.message); }
   } else if (action === 'trust-info') openTrustInfo(target.dataset.handle);
   else if (action === 'edit-project') openPublish(id);
+  else if (action === 'remove-task-file') {
+    const list = ai.attachments[id] || [];
+    const index = list.findIndex(item => item.localId === target.dataset.file);
+    if (index >= 0) { const [item] = list.splice(index, 1); item.request?.abort?.(); if (item.preview) URL.revokeObjectURL(item.preview); }
+    refreshTaskFiles(id);
+  } else if (action === 'chat-panel') {
+    const panel = document.querySelector('.chat-panel');
+    if (panel) panel.hidden = !panel.hidden;
+  } else if (action === 'chat-tab') {
+    const panel = target.closest('.chat-panel');
+    if (panel) {
+      panel.dataset.tab = target.dataset.tab;
+      panel.querySelectorAll('.panel-tabs button').forEach(button => button.classList.toggle('on', button === target));
+    }
+  } else if (action === 'insert-emoji') {
+    const field = document.querySelector('#dm-form input[name="text"]');
+    if (field) {
+      const start = field.selectionStart ?? field.value.length;
+      const end = field.selectionEnd ?? field.value.length;
+      field.value = `${field.value.slice(0, start)}${target.dataset.emoji}${field.value.slice(end)}`;
+      const caret = start + target.dataset.emoji.length;
+      field.setSelectionRange?.(caret, caret);
+    }
+  } else if (action === 'send-sticker') {
+    const form = document.querySelector('#dm-form');
+    if (form) try { await sendChat(form.dataset.id, { sticker: id }); } catch (error) { toast(error.message); }
+  } else if (action === 'react') {
+    closeReactBar();
+    await reactTo(route().page, id, target.dataset.emoji);
+  } else if (action === 'view-chat-image') openViewer([`<img src="${escapeHtml(target.dataset.src)}" alt="" draggable="false">`], 0);
+  else if (action === 'dictate') toggleDictation(target);
   else if (action === 'view-media') {
     const project = projectById(id);
     if (project) openViewer(viewerItemsFor(project), Number(target.dataset.index) || 0);
@@ -3048,16 +3279,8 @@ document.addEventListener('submit', async event => {
     openTopic(id);
   } else if (form.id === 'dm-form') {
     if (!value('text')) return;
-    const id = form.dataset.id;
-    if (online) {
-      try { remote.threads = (await apiCall('POST', `/api/messages/${encodeURIComponent(id)}`, { text: value('text') })).threads; } catch (error) { toast(error.message); return; }
-    } else {
-      state.dms[id] ||= [];
-      state.dms[id].push({ text: value('text'), time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) });
-      persist();
-    }
-    render();
-    window.scrollTo?.(0, document.body.scrollHeight || 0);
+    dictation?.stop();
+    try { await sendChat(form.dataset.id, { text: value('text') }); } catch (error) { toast(error.message); return; }
     document.querySelector('#dm-form input')?.focus?.();
   } else if (form.id === 'github-form') await openGitHub(form);
   else if (form.id === 'prompt-form') {
@@ -3173,6 +3396,18 @@ document.addEventListener('change', async event => {
   else if (target.name === 'task-engine') { ai.engine[route().extra] = target.value; renderKeepingInput(); }
   else if (target.name === 'task-continue') ai.continueChat = target.checked;
   else if (target.name === 'images' && target.files) { addPublishFiles(target.files); target.value = ''; }
+  else if (target.dataset?.chatImage && target.files?.[0]) {
+    const file = target.files[0];
+    target.value = '';
+    toast('Отправляем картинку…');
+    try {
+      const blob = file.type === 'image/gif' ? file : await imageToBlob(file, 1800);
+      const url = await uploadBlob(blob, 'image');
+      const field = document.querySelector('#dm-form input[name="text"]');
+      await sendChat(target.dataset.chatImage, { image: url, text: field?.value.trim() || '' });
+    } catch (error) { toast(error.message); }
+  }
+  else if (target.dataset?.taskFiles && target.files?.length) { addTaskFiles(target.dataset.taskFiles, target.files); target.value = ''; }
   else if (target.dataset?.peFile && target.files?.[0]) { const file = target.files[0]; target.value = ''; await addPageMedia(file, target.dataset.peFile); }
   else if (target.dataset?.peTheme && postDraft) { postDraft.theme[target.dataset.peTheme] = target.value; renderPageEditor(); }
   else if (target.dataset?.peColor !== undefined && postDraft) styleBlock(Number(target.dataset.peColor), 'color', target.value);
@@ -3456,6 +3691,32 @@ modal.addEventListener('drop', event => {
 });
 
 modal.addEventListener('click', event => { if (event.target === modal) closeAnimated(); });
+
+// Chat gestures: double tap a message for ❤️, hold it (or right-click) for the reaction bar.
+let chatTap = { id: '', time: 0 };
+let chatHold = null;
+document.addEventListener('click', event => {
+  if (!event.target.closest?.('.react-bar')) closeReactBar();
+  if (!event.target.closest?.('.chat-composer')) { const panel = document.querySelector('.chat-panel'); if (panel && !panel.hidden) panel.hidden = true; }
+  const row = event.target.closest?.('.msg-row[data-msg]');
+  if (!row || event.target.closest('[data-action]')) return;
+  const now = Date.now();
+  if (chatTap.id === row.dataset.msg && now - chatTap.time < 320) {
+    chatTap = { id: '', time: 0 };
+    row.querySelector('.bubble')?.classList.add('liked');
+    reactTo(route().page, row.dataset.msg, '❤️');
+  } else chatTap = { id: row.dataset.msg, time: now };
+});
+document.addEventListener('pointerdown', event => {
+  const row = event.target.closest?.('.msg-row[data-msg]');
+  clearTimeout(chatHold);
+  if (row && !event.target.closest('[data-action]')) chatHold = setTimeout(() => openReactBar(row), 450);
+});
+['pointerup', 'pointercancel', 'pointermove'].forEach(name => document.addEventListener(name, event => { if (name !== 'pointermove' || Math.abs(event.movementY || 0) > 2) clearTimeout(chatHold); }));
+document.addEventListener('contextmenu', event => {
+  const row = event.target.closest?.('.msg-row[data-msg]');
+  if (row) { event.preventDefault(); openReactBar(row); }
+});
 modal.addEventListener('close', () => {
   resetSheet();
   modal.querySelectorAll?.('video').forEach(video => video.pause?.());

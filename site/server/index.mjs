@@ -9,6 +9,7 @@ import { trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
 import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
 import { cleanPostFields } from '../src/page.js';
+import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -141,7 +142,7 @@ function threadsFor(meId) {
       id: user.handle, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', official: Boolean(user.official),
       unread: list.filter(message => message.to === meId && message.createdAt > (reads[other] || 0)).length,
       lastAt: list[list.length - 1].createdAt,
-      messages: list.map(message => ({ from: message.from === meId ? 'me' : 'them', text: message.text, createdAt: message.createdAt }))
+      messages: list.map(message => ({ id: message.id, from: message.from === meId ? 'me' : 'them', text: message.text, image: message.image || '', sticker: message.sticker || '', reactions: reactionSummary(message.reactions, meId), createdAt: message.createdAt }))
     };
   }).sort((left, right) => right.lastAt - left.lastAt);
 }
@@ -165,7 +166,7 @@ function workspaceAudience(workspace) {
 
 function taskSummary(task) {
   const author = D.users[task.userId];
-  return { id: task.id, prompt: task.prompt, mode: task.mode, status: task.status, engine: task.engine, createdAt: task.createdAt, finishedAt: task.finishedAt || null, costUsd: task.costUsd ?? null, handle: author?.handle || '', author: author?.name || '' };
+  return { id: task.id, prompt: task.prompt, attachments: task.attachments || [], mode: task.mode, status: task.status, engine: task.engine, createdAt: task.createdAt, finishedAt: task.finishedAt || null, costUsd: task.costUsd ?? null, handle: author?.handle || '', author: author?.name || '' };
 }
 
 function workspaceView(workspace, userId, detailed = false) {
@@ -175,7 +176,7 @@ function workspaceView(workspace, userId, detailed = false) {
   const view = {
     id: workspace.id, name: workspace.name, present: workspace.present !== false, branch: workspace.branch || '', dirty: workspace.dirty || 0, isGit: Boolean(workspace.isGit),
     role: roleFor(workspace, userId), ownerHandle: owner?.handle || '', ownerName: owner?.name || '',
-    device: device ? { id: device.id, name: device.name, platform: device.platform, online: agentStreams.has(device.id), lastSeen: device.lastSeen || null, allow: device.allow || 'edit', engines: device.engines || [] } : null,
+    device: device ? { id: device.id, name: device.name, version: device.version || '', platform: device.platform, online: agentStreams.has(device.id), lastSeen: device.lastSeen || null, allow: device.allow || 'edit', engines: device.engines || [] } : null,
     lastTask: tasks.length ? taskSummary(tasks[tasks.length - 1]) : null,
     taskCount: tasks.length
   };
@@ -238,7 +239,7 @@ function deliverTask(task) {
   const device = workspace && D.devices[workspace.deviceId];
   const stream = device && agentStreams.get(device.id);
   if (!stream) return false;
-  sse(stream, 'cmd', { id: randomUUID(), type: 'task', taskId: task.id, workspaceKey: workspace.key, prompt: task.prompt, mode: task.mode, engine: task.engine, sessionId: task.resumeSessionId || null });
+  sse(stream, 'cmd', { id: randomUUID(), type: 'task', taskId: task.id, workspaceKey: workspace.key, prompt: task.prompt, mode: task.mode, engine: task.engine, sessionId: task.resumeSessionId || null, attachments: task.attachments || [] });
   return true;
 }
 
@@ -465,6 +466,58 @@ on('POST', '/api/uploads', async ({ user, request }) => {
   D.uploads[name] = { userId: user.id, type: sniffed[0], size: bytes.length, createdAt: Date.now() };
   db.save();
   return { url: `/uploads/${name}`, type: sniffed[0] };
+});
+
+// Attachments for AI tasks: any file up to 25 MB, private to its owner and to the computer that runs the task.
+const FILE_LIMIT = 25 * 1024 * 1024;
+const audioExtensions = /\.(mp3|m4a|wav|ogg|oga|aac|flac|opus|webm)$/i;
+const videoExtensions = /\.(mp4|mov|m4v|webm|mkv|avi)$/i;
+
+function fileKind(bytes, declared, filename) {
+  const sniffed = sniffMedia(bytes)?.[0];
+  if (sniffed === 'image' || sniffed === 'video') return sniffed;
+  if (bytes.subarray(0, 6).toString() === 'GIF87a' || bytes.subarray(0, 6).toString() === 'GIF89a') return 'image';
+  if (declared.startsWith('video/') || (!declared.startsWith('audio/') && videoExtensions.test(filename))) return 'video';
+  if (declared.startsWith('audio/') || bytes.subarray(0, 3).toString() === 'ID3' || bytes.subarray(0, 4).toString() === 'OggS' || bytes.subarray(8, 12).toString() === 'WAVE' || audioExtensions.test(filename)) return 'audio';
+  return 'file';
+}
+
+on('POST', '/api/files', async ({ user, request }) => {
+  needUser(user);
+  if (!uploadLimit(user.id)) fail(429, 'Слишком много загрузок, подожди немного');
+  let filename = 'file';
+  try { filename = decodeURIComponent(String(request.headers['x-file-name'] || 'file')); } catch { filename = 'file'; }
+  filename = cleanText(filename.replace(/[\\/]/g, '_'), 120) || 'file';
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > FILE_LIMIT) fail(413, 'Файл больше 25 МБ');
+    chunks.push(chunk);
+  }
+  if (!size) fail(400, 'Пустой файл');
+  const bytes = Buffer.concat(chunks);
+  const extension = (/\.([a-z0-9]{1,8})$/i.exec(filename)?.[1] || 'bin').toLowerCase();
+  const name = `f-${randomUUID().slice(0, 18)}.${extension}`;
+  const kind = fileKind(bytes, String(request.headers['content-type'] || ''), filename);
+  await db.putUpload(name, bytes);
+  D.uploads[name] = { userId: user.id, type: 'file', kind, filename, size, createdAt: Date.now() };
+  db.save();
+  return { id: name, filename, size, kind };
+});
+
+// The computer picks up a task's attachments here before running it.
+on('GET', '/api/agent/files/:name', async ({ device, params, response }) => {
+  if (!device) fail(401, 'Устройство не привязано');
+  const meta = D.uploads[params.name];
+  if (!meta || meta.type !== 'file') fail(404, 'Файл не найден');
+  const allowed = Object.values(D.tasks).some(task => task.attachments?.some(item => item.id === params.name) && D.workspaces[task.workspaceId]?.deviceId === device.id);
+  if (!allowed) fail(403, 'Этот файл не относится к задачам этого компьютера');
+  const upload = await db.getUpload(params.name);
+  if (!upload) fail(404, 'Файл не найден');
+  response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': upload.bytes.length, 'Cache-Control': 'no-store' });
+  response.end(upload.bytes);
+  return null;
 });
 
 on('POST', '/api/projects', async ({ user, request }) => {
@@ -704,9 +757,24 @@ on('POST', '/api/messages/:handle', async ({ user, params, body }) => {
   const target = userByHandle(params.handle) || fail(404, 'Пользователь не найден');
   if (target.id === user.id) fail(400, 'Нельзя написать себе');
   const text = cleanText(body.text, 2000);
-  if (!text) fail(400, 'Пустое сообщение');
-  D.messages.push({ id: randomUUID(), from: user.id, to: target.id, text, createdAt: Date.now() });
+  const sticker = stickerById(body.sticker)?.id || '';
+  const image = body.image ? ownedUpload(body.image, user, 'image').url : '';
+  if (!text && !sticker && !image) fail(400, 'Пустое сообщение');
+  D.messages.push({ id: randomUUID(), from: user.id, to: target.id, text, ...(image ? { image } : {}), ...(sticker ? { sticker } : {}), createdAt: Date.now() });
   D.reads[user.id] = { ...(D.reads[user.id] || {}), [target.id]: Date.now() };
+  db.save();
+  pushTo([target.id], 'dm', { from: user.handle });
+  return { threads: threadsFor(user.id) };
+});
+
+// One reaction per person per message; the same emoji again takes it back.
+on('POST', '/api/messages/:handle/react', async ({ user, params, body }) => {
+  needUser(user);
+  const target = userByHandle(params.handle) || fail(404, 'Пользователь не найден');
+  const message = D.messages.find(item => item.id === body.id && ((item.from === user.id && item.to === target.id) || (item.from === target.id && item.to === user.id))) || fail(404, 'Сообщение не найдено');
+  const emoji = chatReactions.includes(body.emoji) ? body.emoji : fail(400, 'Такой реакции нет');
+  message.reactions ||= {};
+  if (message.reactions[user.id] === emoji) delete message.reactions[user.id]; else message.reactions[user.id] = emoji;
   db.save();
   pushTo([target.id], 'dm', { from: user.handle });
   return { threads: threadsFor(user.id) };
@@ -759,7 +827,12 @@ on('POST', '/api/workspaces/:id/tasks', async ({ user, params, body }) => {
     const previous = Object.values(D.tasks).filter(task => task.workspaceId === workspace.id && task.engine === engine && task.sessionId).sort((left, right) => right.createdAt - left.createdAt)[0];
     resumeSessionId = previous?.sessionId || null;
   }
-  const task = { id: `k-${randomUUID().slice(0, 12)}`, workspaceId: workspace.id, userId: user.id, prompt, mode, engine, resumeSessionId, status: 'waiting', createdAt: Date.now(), events: [] };
+  const attachments = (Array.isArray(body.attachments) ? body.attachments.slice(0, 8) : []).map(id => {
+    const meta = D.uploads[String(id)];
+    if (!meta || meta.type !== 'file' || meta.userId !== user.id) fail(400, 'Вложение не найдено, загрузи его ещё раз');
+    return { id: String(id), filename: meta.filename, size: meta.size, kind: meta.kind };
+  });
+  const task = { id: `k-${randomUUID().slice(0, 12)}`, workspaceId: workspace.id, userId: user.id, prompt, attachments, mode, engine, resumeSessionId, status: 'waiting', createdAt: Date.now(), events: [] };
   D.tasks[task.id] = task;
   const delivered = deliverTask(task);
   updateTask(task, { status: delivered ? 'sent' : 'waiting' });
@@ -884,6 +957,7 @@ on('POST', '/api/agent/hello', async ({ device, body }) => {
   device.allow = MODES.includes(body.allow) ? body.allow : device.allow;
   device.engines = (Array.isArray(body.engines) ? body.engines : []).slice(0, 4).map(engine => ({ id: cleanText(engine.id, 20), label: cleanText(engine.label, 60), version: cleanText(engine.version, 40), ok: Boolean(engine.ok), note: cleanText(engine.note, 200) }));
   if (body.name) device.name = cleanText(body.name, 60);
+  device.version = cleanText(body.version, 20);
   const reported = Array.isArray(body.workspaces) ? body.workspaces.slice(0, 30) : [];
   const mapping = {};
   const changed = [];
@@ -979,9 +1053,9 @@ const server = http.createServer(async (request, response) => {
     if (!route) return sendJson(response, 404, { error: 'Не найдено' });
     try {
       const isAgent = pathname.startsWith('/api/agent/');
-      if (!isAgent && pathname !== '/api/uploads' && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
+      if (!isAgent && !['/api/uploads', '/api/files'].includes(pathname) && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
       const params = route.regex.exec(pathname).groups || {};
-      const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/uploads', '/api/agent/reply', '/api/agent/events'].includes(pathname) && !(request.method === 'PATCH' && /^\/api\/projects\/[^/]+$/.test(pathname));
+      const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/uploads', '/api/files', '/api/agent/reply', '/api/agent/events'].includes(pathname) && !(request.method === 'PATCH' && /^\/api\/projects\/[^/]+$/.test(pathname));
       const body = needsBody ? await readJson(request) : {};
       const result = await route.handler({ request, response, params, query: url.searchParams, body, user: isAgent ? null : currentUser(request), device: isAgent ? currentDevice(request) : null });
       if (result === null) return;
@@ -997,7 +1071,7 @@ const server = http.createServer(async (request, response) => {
   if (pathname === '/agent.mjs') return serveFile(response, agentFile);
   if (pathname.startsWith('/uploads/')) {
     const name = pathname.slice('/uploads/'.length);
-    const upload = /^[\w.-]+$/.test(name) ? await db.getUpload(name).catch(() => null) : null;
+    const upload = /^[\w.-]+$/.test(name) && !name.startsWith('f-') ? await db.getUpload(name).catch(() => null) : null;
     if (!upload) return sendJson(response, 404, { error: 'Файл не найден' });
     const total = upload.bytes.length;
     const headers = { 'Content-Type': upload.type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Accept-Ranges': 'bytes' };

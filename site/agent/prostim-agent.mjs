@@ -9,11 +9,11 @@ import { promises as fs, existsSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const MODES = ['read', 'edit', 'full'];
 const configDir = path.join(os.homedir(), '.prostim');
 const configFile = process.env.PROSTIM_AGENT_CONFIG || path.join(configDir, 'agent.json');
-const SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv', '__pycache__', 'target', '.idea', '.vscode', '.DS_Store', 'Library', 'Temp', 'obj', '.gradle', 'Pods', 'DerivedData']);
+const SKIP = new Set(['.git', '.prostim', 'node_modules', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv', '__pycache__', 'target', '.idea', '.vscode', '.DS_Store', 'Library', 'Temp', 'obj', '.gradle', 'Pods', 'DerivedData']);
 
 if (Number(process.versions.node.split('.')[0]) < 18) {
   console.error('Нужен Node.js 18 или новее: https://nodejs.org');
@@ -445,6 +445,33 @@ function createEmitter(taskId) {
   return emitter;
 }
 
+// Files attached on the site go to .prostim/inbox inside the project; git ignores that folder.
+const attachmentKinds = { image: 'изображение', video: 'видео', audio: 'аудио', file: 'файл' };
+
+async function fetchAttachments(command, workspace, emitter) {
+  const list = Array.isArray(command.attachments) ? command.attachments.slice(0, 8) : [];
+  if (!list.length) return command.prompt;
+  const inbox = path.join(workspace.dir, '.prostim', 'inbox');
+  await fs.mkdir(inbox, { recursive: true });
+  await fs.writeFile(path.join(workspace.dir, '.prostim', '.gitignore'), '*\n').catch(() => {});
+  const saved = [];
+  for (const item of list) {
+    try {
+      const response = await fetch(`${config.server}/api/agent/files/${encodeURIComponent(item.id)}`, { headers: authHeaders });
+      if (!response.ok) throw new Error(`код ${response.status}`);
+      const safe = path.basename(String(item.filename || item.id)).replace(/[^\p{L}\p{N}._ -]/gu, '_').slice(0, 100) || item.id;
+      const file = path.join(inbox, `${Date.now().toString(36)}-${safe}`);
+      await fs.writeFile(file, Buffer.from(await response.arrayBuffer()));
+      saved.push({ rel: path.relative(workspace.dir, file).split(path.sep).join('/'), kind: item.kind });
+    } catch (error) {
+      emitter.push({ kind: 'error', text: `Не удалось скачать вложение ${item.filename || ''}: ${error.message}` });
+    }
+  }
+  if (!saved.length) return command.prompt;
+  emitter.push({ kind: 'notice', text: `Вложения сохранены в проект: ${saved.map(entry => entry.rel).join(', ')}` });
+  return `${command.prompt}\n\nК задаче приложены файлы, они лежат в папке проекта:\n${saved.map(entry => `- ${entry.rel} (${attachmentKinds[entry.kind] || 'файл'})`).join('\n')}`;
+}
+
 function engineFor(id) {
   const available = orderedEngines();
   return available.find(engine => engine.id === id && engine.ok) || available.find(engine => engine.ok) || available.find(engine => engine.id === 'demo');
@@ -456,6 +483,7 @@ async function runTask(command, workspace, emitter) {
   console.log(`▶ [${workspace.name}] ${engine.label} · ${mode}: ${command.prompt.slice(0, 100)}`);
   emitter.status('running');
   const started = Date.now();
+  command = { ...command, prompt: await fetchAttachments(command, workspace, emitter) };
   const before = await folderSnapshot(workspace.dir);
   let status;
   if (engine.id === 'claude') status = await runClaude(command, workspace, mode, engine, emitter);

@@ -37,7 +37,7 @@ export function loadState(storage) {
     result.topics = Array.isArray(parsed.topics) ? parsed.topics.filter(topic => topic && typeof topic.id === 'string' && typeof topic.title === 'string').map(topic => ({ ...topic, replies: Array.isArray(topic.replies) ? topic.replies.filter(reply => typeof reply === 'string') : [] })) : [];
     result.applications = Array.isArray(parsed.applications) ? parsed.applications.filter(item => item && typeof item.title === 'string') : [];
     result.dms = parsed.dms && typeof parsed.dms === 'object' && !Array.isArray(parsed.dms)
-      ? Object.fromEntries(Object.entries(parsed.dms).filter(([id, items]) => /^[a-zA-Z0-9-]+$/.test(id) && Array.isArray(items)).map(([id, items]) => [id, items.filter(item => item && typeof item.text === 'string').map(item => ({ text: item.text, time: typeof item.time === 'string' ? item.time : '' }))]))
+      ? Object.fromEntries(Object.entries(parsed.dms).filter(([id, items]) => /^[a-zA-Z0-9-]+$/.test(id) && Array.isArray(items)).map(([id, items]) => [id, items.filter(item => item && (typeof item.text === 'string' || typeof item.sticker === 'string')).map(item => ({ text: typeof item.text === 'string' ? item.text : '', ...(typeof item.sticker === 'string' && /^[a-z]{2,12}$/.test(item.sticker) ? { sticker: item.sticker } : {}), time: typeof item.time === 'string' ? item.time : '' }))]))
       : {};
     return result;
   } catch {

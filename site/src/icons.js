@@ -56,11 +56,16 @@ const paths = {
   alignCenter: '<path d="M4 6h16M7 10h10M4 14h16M7 18h10"/>',
   monitor: '<rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/>',
   flag: '<path d="M5.5 20.5v-16M5.5 4.5h11l-2 4 2 4h-11"/>',
-  upload: '<path d="M12 15.5V4.5M7.5 9 12 4.5 16.5 9M4.5 15v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/>'
+  upload: '<path d="M12 15.5V4.5M7.5 9 12 4.5 16.5 9M4.5 15v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/>',
+  smile: '<circle cx="12" cy="12" r="8.5"/><path d="M8.3 14.2a4.6 4.6 0 0 0 7.4 0M9.2 9.6h.01M14.8 9.6h.01"/>',
+  mic: '<rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.5"/>',
+  clip: '<path d="M20 11.4l-7.7 7.7a5 5 0 0 1-7.1-7.1l8.4-8.4a3.3 3.3 0 0 1 4.7 4.7l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/>',
+  music: '<path d="M9 18.5V5.5l10-2v13"/><circle cx="6.5" cy="18.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/>'
 };
 
 export function icon(name, className = '') {
   return `<svg class="i${className ? ` ${className}` : ''}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || ''}</svg>`;
 }
 
-export const logoMark = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M17 18h30v28H36V29h-8v17H17z" fill="currentColor"/></svg>';
+// The mark: an arch — the letter П and a gate a project goes through — with the dot of про.стим inside.
+export const logoMark = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M19 47V29a13 13 0 0 1 26 0v18" fill="none" stroke="currentColor" stroke-width="8.5" stroke-linecap="round"/><circle cx="32" cy="43" r="5" fill="currentColor"/></svg>';

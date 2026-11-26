@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 
-const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
+const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'chat.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
   .map(content => content.replace(/^import .*;\n/gm, '').replace(/^export /gm, ''))
   .join('\n');
 
@@ -169,4 +169,22 @@ test('profiles show a rating gauge of rounded segments and the level as a chip, 
   assert.doesNotMatch(html, /class="level"/);
   const items = runInContext('viewerItemsFor(projectById("forest-light"))', app.context);
   assert.equal(items.length, 3, 'every slide of a post can be opened full screen');
+});
+
+test('chat bubbles: emoji-only text is big, stickers come from the pack, reactions show counts', () => {
+  const app = createApp();
+  assert.equal(runInContext('onlyEmoji("😍🎮")', app.context), true);
+  assert.equal(runInContext('onlyEmoji("ок 👍")', app.context), false);
+  const html = runInContext(`bubbleHtml({ id: 'm1', from: 'me', sticker: 'release', reactions: { counts: { '🔥': 2 }, mine: '🔥' }, time: '12:00' }, { id: 'markv', online: true })`, app.context);
+  assert.match(html, /is-sticker/);
+  assert.match(html, /Релиз!/);
+  assert.match(html, /class="reaction on"[^>]*>🔥<b>2<\/b>/);
+});
+
+test('agent versions compare as numbers', () => {
+  const app = createApp();
+  assert.equal(runInContext('versionAtLeast("0.3.0", "0.3.0")', app.context), true);
+  assert.equal(runInContext('versionAtLeast("0.10.0", "0.3.0")', app.context), true);
+  assert.equal(runInContext('versionAtLeast("0.2.9", "0.3.0")', app.context), false);
+  assert.equal(runInContext('versionAtLeast("", "0.3.0")', app.context), false);
 });

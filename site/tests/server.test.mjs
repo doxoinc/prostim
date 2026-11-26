@@ -193,3 +193,58 @@ test('a post page keeps facts, links, theme and blocks; only the author edits it
   assert.equal(edited.body.project.theme.font, 'serif');
   assert.deepEqual(edited.body.project.page.map(block => block.type), ['image', 'heading'], 'blocks keep the new order and existing files');
 });
+
+test('chat: stickers, pictures and one reaction per person', async () => {
+  const ann = client();
+  const bob = client();
+  await ann('POST', '/api/auth/register', { handle: 'chatann', name: 'Аня', password: 'secret12' }, { 'X-Forwarded-For': '10.9.0.1' });
+  await bob('POST', '/api/auth/register', { handle: 'chatbob', name: 'Боб', password: 'secret12' }, { 'X-Forwarded-For': '10.9.0.2' });
+  assert.equal((await ann('POST', '/api/messages/chatbob', { sticker: 'nope' })).status, 400, 'unknown stickers and empty messages are refused');
+  let threads = (await ann('POST', '/api/messages/chatbob', { sticker: 'gg' })).body.threads;
+  const login = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.9.0.3' }, body: JSON.stringify({ handle: 'chatann', password: 'secret12' }) });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
+  const picture = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'image/png', Cookie: cookie }, body: png }).then(response => response.json());
+  assert.equal((await bob('POST', '/api/messages/chatann', { image: picture.url })).status, 400, 'cannot send someone else’s upload');
+  threads = (await ann('POST', '/api/messages/chatbob', { image: picture.url, text: 'Скрин' })).body.threads;
+  const messages = threads.find(thread => thread.handle === 'chatbob').messages;
+  assert.deepEqual(messages.map(message => [message.sticker, message.image, message.text]), [['gg', '', ''], ['', picture.url, 'Скрин']]);
+  const id = messages[0].id;
+  assert.equal((await bob('POST', '/api/messages/chatann/react', { id, emoji: '💩' })).status, 400, 'only the offered reactions');
+  await bob('POST', '/api/messages/chatann/react', { id, emoji: '❤️' });
+  let seen = (await ann('GET', '/api/bootstrap')).body.threads.find(thread => thread.handle === 'chatbob').messages[0].reactions;
+  assert.deepEqual(seen, { counts: { '❤️': 1 }, mine: '' });
+  await bob('POST', '/api/messages/chatann/react', { id, emoji: '❤️' });
+  seen = (await ann('GET', '/api/bootstrap')).body.threads.find(thread => thread.handle === 'chatbob').messages[0].reactions;
+  assert.deepEqual(seen.counts, {}, 'the same reaction again takes it back');
+  const stranger = client();
+  await stranger('POST', '/api/auth/register', { handle: 'chatcarl', name: 'Карл', password: 'secret12' }, { 'X-Forwarded-For': '10.9.0.4' });
+  assert.equal((await stranger('POST', '/api/messages/chatann/react', { id, emoji: '👍' })).status, 404, 'outsiders cannot react to a private chat');
+});
+
+test('AI task attachments: private files that only the task computer can fetch', async () => {
+  const registered = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.9.0.5' }, body: JSON.stringify({ handle: 'fileowner', name: 'Файлы', password: 'secret12' }) });
+  const cookie = registered.headers.get('set-cookie').split(';')[0];
+  const owner = (method, url, body) => fetch(`${base}${url}`, { method, headers: { Cookie: cookie, ...(method === 'GET' ? {} : { 'Content-Type': 'application/json' }) }, body: method === 'GET' ? undefined : JSON.stringify(body ?? {}) }).then(async response => ({ status: response.status, body: await response.json().catch(() => ({})) }));
+  const upload = await fetch(`${base}/api/files`, { method: 'POST', headers: { 'Content-Type': 'audio/mpeg', 'X-File-Name': encodeURIComponent('голос заметка.mp3'), Cookie: cookie }, body: Buffer.concat([Buffer.from('ID3'), Buffer.alloc(40, 2)]) }).then(response => response.json());
+  assert.match(upload.id, /^f-[\w-]+\.mp3$/);
+  assert.equal(upload.kind, 'audio');
+  assert.equal(upload.filename, 'голос заметка.mp3');
+  assert.equal((await fetch(`${base}/uploads/${upload.id}`)).status, 404, 'attachments are not public');
+  const clip = await fetch(`${base}/api/files`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': 'gameplay.mp4', Cookie: cookie }, body: Buffer.alloc(64) }).then(response => response.json());
+  assert.equal(clip.kind, 'video', 'a video is recognised by its extension too');
+  const { code } = (await owner('POST', '/api/devices/pair-code')).body;
+  const claim = await fetch(`${base}/api/agent/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.9.0.6' }, body: JSON.stringify({ code, name: 'Mac', allow: 'edit' }) }).then(response => response.json());
+  const hello = await fetch(`${base}/api/agent/hello`, { method: 'POST', headers: { Authorization: `Bearer ${claim.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ version: '0.3.0', engines: [{ id: 'demo', label: 'Демо', ok: true }], workspaces: [{ key: 'kf', name: 'app' }], allow: 'edit' }) }).then(response => response.json());
+  const workspaceId = hello.workspaces.kf;
+  const fetchFile = () => fetch(`${base}/api/agent/files/${upload.id}`, { headers: { Authorization: `Bearer ${claim.token}` } });
+  assert.equal((await fetchFile()).status, 403, 'not attached to any task yet');
+  assert.equal((await owner('POST', `/api/workspaces/${workspaceId}/tasks`, { prompt: 'Послушай', mode: 'read', attachments: ['f-missing.bin'] })).status, 400);
+  const created = await owner('POST', `/api/workspaces/${workspaceId}/tasks`, { prompt: 'Послушай', mode: 'read', attachments: [upload.id] });
+  assert.deepEqual(created.body.task.attachments, [{ id: upload.id, filename: 'голос заметка.mp3', size: 43, kind: 'audio' }]);
+  const file = await fetchFile();
+  assert.equal(file.status, 200);
+  assert.equal((await file.arrayBuffer()).byteLength, 43);
+  assert.equal((await fetch(`${base}/api/agent/files/${upload.id}`)).status, 401, 'needs the device token');
+  assert.equal((await owner('GET', `/api/workspaces/${workspaceId}`)).body.workspace.device.version, '0.3.0');
+});
