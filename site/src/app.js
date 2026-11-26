@@ -18,6 +18,11 @@ try {
   storage = { getItem: () => null, setItem: () => { throw new Error('Storage unavailable'); } };
 }
 let state = loadState(storage);
+
+// iPhone Safari zooms into small text fields and keeps the zoom, which pushes the app past the screen edges.
+// A maximum scale stops that automatic zoom; pinch-to-zoom still works on iOS.
+const viewportMeta = document.querySelector?.('meta[name="viewport"]');
+if (viewportMeta && /iP(hone|ad|od)/.test(globalThis.navigator?.userAgent || '') && !viewportMeta.content.includes('maximum-scale')) viewportMeta.content += ', maximum-scale=1';
 state.projects = state.projects.map(project => ({ ...project, ...cleanPostFields(project) }));
 let online = false;
 let remote = null;
@@ -503,7 +508,7 @@ function mediaHtml(item, title, mode) {
     const poster = uploadUrl(item.poster);
     if (mode === 'still') return poster ? `<div class="scene photo upload"><img src="${poster}" alt="${escapeHtml(title)}" loading="lazy" draggable="false"><span class="play-mark">${icon('play')}</span></div>` : `<div class="scene photo upload"><video src="${item.url}#t=0.5" muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
     if (mode === 'player') return `<div class="scene photo upload player"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} controls playsinline preload="metadata"></video></div>`;
-    if (mode === 'preview') return `<div class="scene photo upload"><video src="${item.url}#t=0.1" ${poster ? `poster="${poster}"` : ''} muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
+    if (mode === 'preview') return `<div class="scene photo upload">${poster ? `<img src="${poster}" alt="${escapeHtml(title)}" draggable="false">` : `<video src="${item.url}#t=0.1" muted playsinline preload="metadata"></video>`}<span class="play-mark">${icon('play')}</span></div>`;
     return `<div class="scene photo upload video"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} muted loop playsinline preload="metadata" data-feed-video></video><button class="sound-btn" data-action="toggle-sound" aria-label="${feedMuted ? 'Включить звук' : 'Выключить звук'}">${feedMuted ? '🔇' : '🔊'}</button></div>`;
   }
   return `<div class="scene photo upload"><img src="${item.url}" alt="${escapeHtml(title || 'Скриншот проекта')}" loading="lazy" draggable="false"></div>`;
@@ -763,7 +768,11 @@ function mediaInner(project, reason = '') {
     : '';
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${postBadges(project)}${(project.tags || []).slice(0, 3).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${postBadges(project)}${visibleTags(project).slice(0, 3).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+}
+
+function visibleTags(project) {
+  return (project.tags || []).filter(tag => tag !== 'Новый проект');
 }
 
 function postBadges(project) {
@@ -1612,6 +1621,7 @@ function showDialog(content, context = null) {
     sheetDetent = detent;
     if (detent === 'half') setSheetOffset(0);
     modal.showModal();
+    modal.focus?.({ preventScroll: true });
     modal.scrollTop = 0;
   } else if (detent !== sheetDetent) {
     sheetDetent = detent;
@@ -1736,7 +1746,7 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', levelOf(project.handle))}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}<div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', levelOf(project.handle))}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
 }
@@ -2448,7 +2458,7 @@ document.addEventListener('click', async event => {
   if (!target) return;
   const action = target.dataset.action;
   const id = target.dataset.id;
-  if (action === 'close-modal') closeDialog();
+  if (action === 'close-modal') closeAnimated();
   else if (action === 'home') {
     const feed = document.querySelector('#feed');
     if (route().section === 'feed' && feed) {
@@ -3123,6 +3133,7 @@ function resetSheet() {
   if (!modal.style) return;
   modal.style.transition = '';
   modal.style.transform = '';
+  modal.style.opacity = '';
   modal.style.removeProperty('--sheet-fade');
 }
 
@@ -3140,15 +3151,25 @@ function releaseSheet(distance, fast = false) {
 
 function dismissSheet() {
   if (sheetHasDraft()) { setSheetOffset(0, true); toast(dialogContext?.kind === 'publish' ? 'Черновик не сохранится — закрой крестиком' : 'Сначала отправь или сотри текст'); return; }
+  closeAnimated();
+}
+
+// The X, the backdrop and swipes close with motion: the sheet slides down on phones, the card fades on computers.
+function closeAnimated() {
+  const backToPost = dialogContext?.kind === 'publish' && dialogContext.id;
+  if (!modal.open || backToPost || modal.classList.contains('sheet-closing') || !modal.style) { if (!modal.classList?.contains('sheet-closing')) closeDialog(); return; }
   modal.classList.add('sheet-closing');
   muteFeedWheel(1000);
-  modal.style.transition = 'transform .24s var(--ease)';
-  modal.style.transform = `translateY(${innerHeight}px)`;
+  const phone = isPhone();
+  modal.style.transition = phone ? 'transform .24s var(--ease)' : 'transform .18s ease-in, opacity .18s ease-in';
+  modal.style.transform = phone ? `translateY(${innerHeight}px)` : 'translateY(18px) scale(.98)';
+  if (!phone) modal.style.opacity = '0';
   setTimeout(() => {
     if (!modal.classList.contains('sheet-closing')) return;
     resetSheet();
+    modal.style.opacity = '';
     closeDialog();
-  }, 230);
+  }, phone ? 230 : 170);
 }
 
 const sheetDragExcluded = 'input, textarea, select, [contenteditable="true"], .workspace';
@@ -3158,17 +3179,21 @@ modal.addEventListener('touchstart', event => {
     ? { x: touch.clientX, y: touch.clientY, lastY: touch.clientY, lastTime: event.timeStamp, distance: 0, speed: 0, active: false }
     : null;
 }, { passive: true });
+// At 70% the sheet itself follows the finger up to full height; at the top of the content a pull down
+// moves the sheet down. Sideways gestures are left to the gallery.
 modal.addEventListener('touchmove', event => {
   if (!sheetDrag) return;
   if (event.touches.length !== 1) { if (sheetDrag.active) setSheetOffset(0, true); sheetDrag = null; return; }
   const touch = event.touches[0];
   if (!sheetDrag.active) {
-    const down = touch.clientY - sheetDrag.y;
+    const dy = touch.clientY - sheetDrag.y;
     const side = Math.abs(touch.clientX - sheetDrag.x);
-    if (modal.scrollTop > 0 || down <= 0) { sheetDrag.x = touch.clientX; sheetDrag.y = touch.clientY; return; }
-    if (side > down) { sheetDrag = null; return; }
-    if (down < 8) return;
+    if (Math.abs(dy) < 6 && side < 6) return;
+    if (side > Math.abs(dy)) { sheetDrag = null; return; }
+    const expand = sheetDetent === 'half' && dy < 0 && modal.scrollTop <= 0;
+    if (!expand && (modal.scrollTop > 0 || dy <= 0)) { sheetDrag.x = touch.clientX; sheetDrag.y = touch.clientY; return; }
     sheetDrag.active = true;
+    sheetDrag.expand = expand;
     sheetDrag.y = touch.clientY;
   }
   if (event.cancelable) event.preventDefault();
@@ -3176,13 +3201,21 @@ modal.addEventListener('touchmove', event => {
   sheetDrag.speed = (touch.clientY - sheetDrag.lastY) / elapsed;
   sheetDrag.lastY = touch.clientY;
   sheetDrag.lastTime = event.timeStamp;
-  sheetDrag.distance = Math.max(0, touch.clientY - sheetDrag.y);
+  const dy = touch.clientY - sheetDrag.y;
+  sheetDrag.distance = sheetDrag.expand ? Math.max(-sheetBase(), Math.min(40, dy)) : Math.max(0, dy);
   setSheetOffset(sheetDrag.distance);
 }, { passive: false });
 modal.addEventListener('touchend', () => {
   const drag = sheetDrag;
   sheetDrag = null;
-  if (drag?.active) releaseSheet(drag.distance, drag.speed > 0.6);
+  if (!drag?.active) return;
+  if (drag.expand) {
+    if (drag.distance < -50 || drag.speed < -0.4) setDetent('full');
+    else if (drag.distance > 30) dismissSheet();
+    else setSheetOffset(0, true);
+    return;
+  }
+  releaseSheet(drag.distance, drag.speed > 0.6);
 });
 modal.addEventListener('touchcancel', () => { if (sheetDrag?.active) setSheetOffset(0, true); sheetDrag = null; });
 modal.addEventListener('wheel', event => {
@@ -3239,13 +3272,13 @@ modal.addEventListener('drop', event => {
   else addPublishFiles(event.dataTransfer.files);
 });
 
-modal.addEventListener('click', event => { if (event.target === modal) closeDialog(); });
+modal.addEventListener('click', event => { if (event.target === modal) closeAnimated(); });
 modal.addEventListener('close', () => {
   resetSheet();
   modal.querySelectorAll?.('video').forEach(video => video.pause?.());
   document.querySelectorAll?.('.feed-item.in-view').forEach(syncFeedVideo);
 });
-modal.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
+modal.addEventListener('cancel', event => { event.preventDefault(); closeAnimated(); });
 window.addEventListener('hashchange', () => {
   connectionVersion += 1;
   if (modal.open) modal.close();
