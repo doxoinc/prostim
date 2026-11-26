@@ -7,6 +7,7 @@ import { openDatabase } from './db.mjs';
 import { HttpError, fail, sha256, token, hashPassword, verifyPassword, pairingCode, parseCookies, clip, cleanText, safeHttpUrl, initialsOf, colorFor, limiter } from './util.mjs';
 import { trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
+import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -99,6 +100,8 @@ function projectView(project, meId) {
     slides: projectMedia(project).length || project.slides || 1,
     author: owner.name, handle: owner.handle, initials: owner.initials, color: owner.color, avatar: owner.avatar || '',
     votes: (project.seedVotes || 0) + project.votes.length - Number(voted),
+    saves: project.saves.length,
+    stats: cleanStats(D.feedStats[project.id]),
     comments: project.comments.map(comment => ({ ...personRef(comment.userId, comment.name), text: comment.text, time: comment.time || '', createdAt: comment.createdAt }))
   };
 }
@@ -380,6 +383,7 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     follows: meId ? (D.follows[meId] || []).map(id => D.users[id]?.handle).filter(Boolean) : [],
     votes: meId ? D.projects.filter(project => project.votes.includes(meId)).map(project => project.id) : [],
     saved: meId ? D.projects.filter(project => project.saves.includes(meId)).map(project => project.id) : [],
+    taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : []
   };
@@ -491,6 +495,7 @@ on('DELETE', '/api/projects/:id', async ({ user, params }) => {
   const project = requireProject(params.id);
   if (project.ownerId !== user.id) fail(403, 'Удалить может только автор');
   D.projects.splice(D.projects.indexOf(project), 1);
+  delete D.feedStats[project.id];
   db.save();
   return { ok: true };
 });
@@ -522,6 +527,41 @@ on('POST', '/api/projects/:id/comments', async ({ user, params, body }) => {
   db.save();
   if (project.ownerId !== user.id) pushTo([project.ownerId], 'notice', { text: `${user.name} прокомментировал «${project.title}»` });
   return { project: projectView(project, user.id) };
+});
+
+/* Feed attention: what people watch, skip and come back to */
+
+const feedLimit = limiter(90, 60 * 1000);
+
+function rankingProject(project) {
+  return { id: project.id, category: project.category, tags: project.tags || [], handle: D.users[project.ownerId]?.handle || '', media: projectMedia(project) };
+}
+
+on('POST', '/api/feed/events', async ({ user, request, body }) => {
+  if (!feedLimit(user?.id || clientIp(request))) fail(429, 'Слишком часто');
+  const events = Array.isArray(body.events) ? body.events.slice(0, 40) : [];
+  const byId = new Map(D.projects.map(project => [project.id, project]));
+  const taste = user ? cleanTaste(D.tastes[user.id]) : null;
+  let accepted = 0;
+  for (const event of events) {
+    const project = byId.get(String(event?.id || ''));
+    const type = String(event?.type || '');
+    if (!project || !(type === 'view' || Object.hasOwn(tasteSignals, type))) continue;
+    const signal = { type, dwell: Math.max(0, Math.min(600000, Number(event.dwell) || 0)), expected: Math.max(1500, Math.min(60000, Number(event.expected) || 4000)) };
+    if (statSignals.includes(type) && project.ownerId !== user?.id) D.feedStats[project.id] = recordStat(cleanStats(D.feedStats[project.id]), signal);
+    if (taste) recordSignal(taste, rankingProject(project), signal);
+    accepted += 1;
+  }
+  if (taste) D.tastes[user.id] = taste;
+  if (accepted) db.save();
+  return { accepted };
+});
+
+on('DELETE', '/api/me/taste', async ({ user }) => {
+  needUser(user);
+  D.tastes[user.id] = emptyTaste();
+  db.save();
+  return { taste: D.tastes[user.id] };
 });
 
 /* People: follows and ratings */

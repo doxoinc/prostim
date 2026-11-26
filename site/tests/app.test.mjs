@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 
-const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'trust.js', 'timeline.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
+const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
   .map(content => content.replace(/^import .*;\n/gm, '').replace(/^export /gm, ''))
   .join('\n');
 
@@ -103,11 +103,27 @@ test('bottom-bar pages render: search, inbox, chat, profile, author', () => {
   assert.match(app.elements.get('main').innerHTML, /Алина Русу/);
 });
 
-test('steam calculator splits revenue after the 30% store share', () => {
+test('steam calculator: 30% to Steam, then 2% of the payout to the publisher', () => {
   const app = createApp();
   app.navigate('#/steam');
   assert.match(app.elements.get('main').innerHTML, /Сколько получит автор/);
+  assert.match(app.elements.get('main').innerHTML, /perk-fee-big">2%/);
   const values = runInContext('calcValues()', app.context);
   assert.equal(values.gross, 75000);
-  assert.equal(values.author, 36750);
+  assert.equal(values.payout, 52500, 'Steam keeps 30%');
+  assert.equal(values.publisher, 1050, 'the publisher takes 2% of the Steam payout');
+  assert.equal(values.author, 51450);
+});
+
+test('feed order comes from the recommender and survives re-renders', () => {
+  const app = createApp();
+  const first = runInContext('feedOrder.entries.map(entry => entry.id).join()', app.context);
+  assert.equal(first.split(',').length, 4, 'every project is in the first round');
+  runInContext('trackSignal(projectById("pulse"), "save"); trackSignal(projectById("pulse"), "view", { dwell: 9000, expected: 4000 })', app.context);
+  app.navigate('#/steam');
+  app.navigate('#/feed');
+  assert.equal(runInContext('feedOrder.entries.map(entry => entry.id).join()', app.context), first, 'order is stable until a refresh');
+  assert.ok(runInContext('currentTaste().signals', app.context) >= 2);
+  app.navigate('#/me');
+  assert.match(app.elements.get('main').innerHTML, /Лента знает тебя/);
 });

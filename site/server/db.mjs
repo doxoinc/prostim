@@ -16,7 +16,9 @@ const empty = () => ({
   workspaces: {},
   tasks: {},
   pairCodes: {},
-  uploads: {}
+  uploads: {},
+  tastes: {},
+  feedStats: {}
 });
 
 export const uploadTypes = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4', webm: 'video/webm', mov: 'video/mp4' };

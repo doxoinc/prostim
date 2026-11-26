@@ -133,3 +133,27 @@ test('media uploads: owner-only reuse, type sniffing and byte ranges for video',
   assert.deepEqual(created.project.media, [{ type: 'video', url: upload.url }]);
   assert.equal(created.project.video, 'https://www.youtube.com/watch?v=abc');
 });
+
+test('feed events build post stats for everyone and a taste for the signed-in viewer', async () => {
+  const viewer = client();
+  await viewer('POST', '/api/auth/register', { handle: 'viewer1', name: 'Зритель', password: 'secret12' });
+  const events = [
+    { id: 'pulse', type: 'view', dwell: 9000, expected: 4000 },
+    { id: 'pulse', type: 'save' },
+    { id: 'forest-light', type: 'view', dwell: 300, expected: 4000 },
+    { id: 'missing', type: 'view', dwell: 5000 },
+    { id: 'pulse', type: 'teleport' }
+  ];
+  const sent = await viewer('POST', '/api/feed/events', { events });
+  assert.equal(sent.body.accepted, 3, 'unknown posts and event types are ignored');
+  await client()('POST', '/api/feed/events', { events: [{ id: 'pulse', type: 'view', dwell: 2000, expected: 4000 }] });
+  const boot = await viewer('GET', '/api/bootstrap');
+  const pulse = boot.body.projects.find(project => project.id === 'pulse');
+  assert.equal(pulse.stats.impressions, 2, 'guests count towards post stats');
+  assert.equal(pulse.stats.completes, 1);
+  assert.equal(boot.body.projects.find(project => project.id === 'forest-light').stats.skips, 1);
+  assert.ok(boot.body.taste.weights['cat:tools'] > 0);
+  assert.ok(boot.body.taste.weights['cat:games'] < 0);
+  const reset = await viewer('DELETE', '/api/me/taste');
+  assert.deepEqual(reset.body.taste.weights, {});
+});

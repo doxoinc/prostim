@@ -1,8 +1,9 @@
-import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq } from './data.js';
+import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq, PUBLISHER_FEE, publisherPerks } from './data.js';
 import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels } from './trust.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
+import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals } from './recommend.js';
 
 const main = document.querySelector('main');
 const topbar = document.querySelector('#topbar');
@@ -46,11 +47,31 @@ let feedMuted = true;
 let avatarDraft = null;
 let liveEvents = null;
 const reviewsCache = new Map();
-const calculator = { price: 15, copiesIndex: 5, share: 30 };
+const calculator = { price: 15, copiesIndex: 5 };
 const copySteps = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
 let lastTap = { time: 0, id: '' };
 let tapTimer;
 let pointerStart = null;
+const TASTE_KEY = 'prostim-taste-v1';
+const FEED_ROUNDS = 4;
+let localTaste = emptyTaste();
+let localStats = {};
+let feedOrder = null;
+let feedSeed = Math.floor(Math.random() * 1e6);
+let pinnedProjectId = '';
+let activeView = null;
+let feedEvents = [];
+let feedFlushTimer;
+let tasteSaveTimer;
+let feedRefreshing = false;
+let pullState = null;
+let wheelPull = { amount: 0, armed: false, last: 0, timer: null };
+const reasonLabels = { new: ['sparkle', 'Новое'], taste: ['flame', 'Для тебя'], follow: ['users', 'Подписки'], popular: ['up', 'Популярное'], again: ['refresh', 'Снова'], discover: ['search', 'Открытие'], mine: ['user', 'Твой проект'] };
+try {
+  const savedTaste = JSON.parse(storage.getItem(TASTE_KEY) || '{}');
+  localTaste = cleanTaste(savedTaste.taste);
+  localStats = Object.fromEntries(Object.entries(savedTaste.stats || {}).map(([id, value]) => [id, cleanStats(value)]));
+} catch {}
 const ai = { workspaces: [], details: new Map(), trees: new Map(), git: new Map(), errors: new Map(), loading: new Set(), file: null, pair: null, pairAllow: 'edit', pairOs: /Win/.test(globalThis.navigator?.userAgent || '') ? 'win' : 'unix', paired: null, draft: '', mode: 'edit', engine: {}, continueChat: true, expanded: new Set(), treeFilter: '', sending: false };
 
 const photos = {
@@ -90,6 +111,7 @@ function applyBootstrap(data) {
   remote = data;
   me = data.me;
   remote.userMap = new Map(data.users.map(user => [user.handle, user]));
+  remote.taste = cleanTaste(data.taste);
   state.votes = data.votes;
   state.saved = data.saved;
   state.follows = data.follows;
@@ -103,6 +125,7 @@ async function loadBootstrap() {
 async function reloadAll({ rerender = true } = {}) {
   if (!online) return;
   try {
+    await flushFeedEvents();
     await loadBootstrap();
     connectEvents();
     if (rerender) renderKeepingInput();
@@ -365,7 +388,7 @@ function markRead(id) {
 function renderChrome(view, current) {
   const isService = services.some(([id]) => id === view);
   if (isService) {
-    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}</nav>`;
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
     const title = thread ? thread.name : view === 'u' ? `@${current.page}` : view === 'me' && online && !me ? 'Вход' : sectionTitles[view];
@@ -387,6 +410,7 @@ function renderChrome(view, current) {
 }
 
 function afterRender(view, changedPage, current) {
+  endView();
   feedObserver?.disconnect();
   feedObserver = null;
   if (view === 'ai') afterAiRender(current, changedPage);
@@ -400,16 +424,28 @@ function afterRender(view, changedPage, current) {
   if (!feed) return;
   feed.scrollTop = feedScrollTop;
   feed.addEventListener('scroll', () => { feedScrollTop = feed.scrollTop; }, { passive: true });
+  feed.addEventListener('wheel', onFeedWheel, { passive: true });
   if (typeof IntersectionObserver === 'function' && feed.querySelectorAll) {
     feed.classList.add('io');
     feedObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
         entry.target.classList.toggle('in-view', entry.isIntersecting);
         syncFeedVideo(entry.target);
+        if (entry.isIntersecting) {
+          beginView(entry.target);
+          extendFeedNear(entry.target);
+        } else if (activeView?.item === entry.target) endView();
       }
     }, { root: feed, threshold: 0.55 });
-    feed.querySelectorAll('.feed-item').forEach(item => feedObserver.observe(item));
+    observeFeedItems(feed);
   }
+}
+
+function observeFeedItems(feed) {
+  feed.querySelectorAll('.feed-item:not([data-observed])').forEach(item => {
+    item.dataset.observed = '1';
+    feedObserver?.observe(item);
+  });
 }
 
 /* Scenes: covers drawn from HTML and CSS, or uploaded screenshots */
@@ -426,6 +462,18 @@ function projectImages(project) {
 function syncFeedVideo(item) {
   const video = item?.querySelector?.('video[data-feed-video]');
   if (!video) return;
+  if (!video.dataset.tracked) {
+    video.dataset.tracked = '1';
+    let lastTime = 0;
+    video.addEventListener('timeupdate', () => {
+      const view = activeView;
+      if (view && video.currentTime + 0.5 < lastTime && lastTime > 1 && view.item.contains?.(video) && view.rewatches < 2) {
+        view.rewatches += 1;
+        trackSignal(projectById(view.id), 'rewatch');
+      }
+      lastTime = video.currentTime;
+    });
+  }
   video.muted = feedMuted;
   if (item.classList.contains('in-view') && !modal.open) video.play?.().catch(() => {}); else video.pause?.();
 }
@@ -472,25 +520,194 @@ function scene(project, slide = 0, mode = 'feed') {
 
 /* Feed */
 
-function feedProjects() {
-  return filterProjects(projects(), { category: feedCategory }).sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0) || (right.votes || 0) - (left.votes || 0));
+function currentTaste() {
+  return online && me ? (remote.taste ||= emptyTaste()) : localTaste;
+}
+
+function statsFor(project) {
+  return online ? project.stats : localStats[project.id];
+}
+
+function savesCount(project) {
+  return online ? Number(project.saves) || 0 : Number(state.saved.includes(project.id));
+}
+
+function rankOptions(seed, pinned = '') {
+  return { taste: currentTaste(), stats: Object.fromEntries(projects().map(project => [project.id, statsFor(project)])), seed, follows: state.follows, me: myHandle(), pinned };
+}
+
+function feedPool() {
+  const list = filterProjects(projects(), { category: feedCategory });
+  return { list: list.length ? list : projects(), empty: !list.length };
+}
+
+function buildFeedOrder() {
+  const { list, empty } = feedPool();
+  const ranked = rankFeed(list, rankOptions(feedSeed, pinnedProjectId));
+  feedOrder = { key: feedCategory, rounds: 1, done: false, entries: [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(item => ({ id: item.project.id, reason: item.reason }))] };
+}
+
+// The catalogue is small: after the last post another round starts, with what was just seen pushed back.
+function extendFeedNear(item) {
+  const feed = document.querySelector('#feed');
+  const items = feed?.querySelectorAll?.('.feed-item');
+  if (!items?.length || !feedOrder || feedOrder.done) return;
+  if (Array.prototype.indexOf.call(items, item) < items.length - 2) return;
+  const { list } = feedPool();
+  let added;
+  if (feedOrder.rounds >= FEED_ROUNDS || !list.length) {
+    added = [{ sep: 'final' }];
+    feedOrder.done = true;
+  } else {
+    feedOrder.rounds += 1;
+    // Everything already in the feed counts as seen now, even if it is still on screen or just ahead.
+    const taste = currentTaste();
+    const shown = { ...taste, seen: { ...taste.seen } };
+    const now = Date.now();
+    feedOrder.entries.forEach(entry => { if (entry.id && !shown.seen[entry.id]) shown.seen[entry.id] = { n: 1, last: now, done: 0 }; });
+    added = rankFeed(list, { ...rankOptions(feedSeed + feedOrder.rounds), taste: shown }).map(entry => ({ id: entry.project.id, reason: 'again' }));
+    const lastId = [...feedOrder.entries].reverse().find(entry => entry.id)?.id;
+    if (added.length > 1 && added[0].id === lastId) [added[0], added[1]] = [added[1], added[0]];
+    if (feedOrder.rounds === 2) added.unshift({ sep: 'end' });
+  }
+  feedOrder.entries.push(...added);
+  feed.insertAdjacentHTML?.('beforeend', added.map(feedEntryHtml).join(''));
+  observeFeedItems(feed);
+}
+
+function feedEndHtml(kind) {
+  if (kind === 'empty') return `<section class="feed-item feed-end"><div class="end-card"><span class="end-icon muted">${icon(categoryIcons[feedCategory] || 'search')}</span><h2>Здесь пока пусто</h2><p>Ниже — проекты из других разделов</p><div class="end-actions"><a class="btn btn-ghost" href="#/feed">Вся лента</a><button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать</button></div><span class="end-hint">${icon('chevronDown')}</span></div></section>`;
+  const final = kind === 'final';
+  return `<section class="feed-item feed-end"><div class="end-card"><span class="end-icon">${icon('check')}</span><h2>${final ? 'На сегодня всё' : 'Новое закончилось'}</h2><p>${final ? 'Загляни позже или покажи свой проект' : 'Дальше — лучшее из того, что ты видел'}</p><div class="end-actions"><button class="btn btn-primary" data-action="feed-refresh">${icon('refresh')} Обновить</button><button class="btn btn-ghost" data-action="publish">${icon('plus')} Свой проект</button></div>${final ? '' : `<span class="end-hint">${icon('chevronDown')}</span>`}</div></section>`;
+}
+
+function feedEntryHtml(entry) {
+  if (entry.sep) return feedEndHtml(entry.sep);
+  const project = projectById(entry.id);
+  return project ? feedItem(project, entry.reason) : '';
 }
 
 function renderFeed() {
-  const list = feedProjects();
-  const items = list.length
-    ? list.map(feedItem).join('')
-    : `<section class="feed-item">${emptyState('search', 'Здесь пока пусто', '<a class="btn btn-ghost" href="#/feed">Все проекты</a>')}</section>`;
+  if (!feedOrder || feedOrder.key !== feedCategory) buildFeedOrder();
+  const items = feedOrder.entries.map(feedEntryHtml).join('') || `<section class="feed-item">${emptyState('search', 'Здесь пока пусто', `<button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать первым</button>`)}</section>`;
   const chip = feedCategory === 'all' ? '' : `<a class="filter-chip" href="#/feed" aria-label="Сбросить фильтр «${categoryNames[feedCategory]}»">${icon(categoryIcons[feedCategory])}${categoryNames[feedCategory]}${icon('close')}</a>`;
-  return `<h1 class="sr-only">Лента проектов</h1><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
+  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
 }
 
-function feedItem(project) {
+function feedItem(project, reason = '') {
   const id = escapeHtml(project.id);
-  return `<section class="feed-item" data-project="${id}" aria-label="${escapeHtml(project.title)}"><article class="card"><div class="card-media" data-action="media" data-id="${id}">${mediaInner(project)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
+  return `<section class="feed-item" data-project="${id}" aria-label="${escapeHtml(project.title)}"><article class="card"><div class="card-media" data-action="media" data-id="${id}" data-reason="${escapeHtml(reason)}">${mediaInner(project, reason)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
 }
 
-function mediaInner(project) {
+function reasonChip(reason) {
+  const label = reasonLabels[reason];
+  return label ? `<span class="reason-chip ${reason}">${icon(label[0])}${label[1]}</span>` : '';
+}
+
+/* Attention: how long each post holds the screen, and what people do with it */
+
+function saveTaste() {
+  clearTimeout(tasteSaveTimer);
+  tasteSaveTimer = setTimeout(() => {
+    try { storage.setItem(TASTE_KEY, JSON.stringify({ taste: localTaste, stats: localStats })); } catch {}
+  }, 400);
+}
+
+function queueFeedEvent(event) {
+  feedEvents.push(event);
+  clearTimeout(feedFlushTimer);
+  if (feedEvents.length >= 30) flushFeedEvents();
+  else feedFlushTimer = setTimeout(flushFeedEvents, 5000);
+}
+
+function flushFeedEvents(keepalive = false) {
+  clearTimeout(feedFlushTimer);
+  if (!online || !feedEvents.length || typeof fetch !== 'function') return Promise.resolve();
+  const events = feedEvents.splice(0, 40);
+  return fetch('/api/feed/events', { method: 'POST', credentials: 'same-origin', keepalive, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events }) }).catch(() => {});
+}
+
+function trackSignal(project, type, extra = {}) {
+  if (!project) return;
+  const signal = { type, ...extra };
+  recordSignal(currentTaste(), project, signal);
+  const counted = statSignals.includes(type) && !isMine(project.handle) && project.id;
+  if (online) {
+    if (counted && project.stats) recordStat(project.stats, signal);
+    if (project.id) queueFeedEvent({ id: project.id, type, dwell: Math.round(extra.dwell || 0), expected: Math.round(extra.expected || 0) });
+  } else if (counted) localStats[project.id] = recordStat(localStats[project.id] || emptyStats(), signal);
+  if (!online || !me) saveTaste();
+}
+
+function beginView(item) {
+  const id = item?.dataset?.project;
+  if (!id || activeView?.item === item) return;
+  endView();
+  activeView = { item, id, start: Date.now(), slides: 0, rewatches: 0 };
+}
+
+function endView() {
+  const view = activeView;
+  activeView = null;
+  const project = view && projectById(view.id);
+  if (!project) return;
+  const video = view.item.querySelector?.('video[data-feed-video]');
+  trackSignal(project, 'view', { dwell: Date.now() - view.start, expected: expectedDwell(project, Number(video?.duration) || 0) });
+}
+
+/* Pull to refresh: drag down at the top on a phone, scroll up past the top with a wheel or trackpad */
+
+function setPull(distance) {
+  document.body.style?.setProperty?.('--pull', `${Math.round(distance)}px`);
+  document.body.style?.setProperty?.('--pull-turn', `${Math.round(distance * 3)}deg`);
+  document.body.style?.setProperty?.('--pull-o', String(Math.min(1, distance / 50)));
+  document.body.classList?.toggle('pulling', distance > 0 && !feedRefreshing);
+  document.body.classList?.toggle('ptr-ready', distance >= 70);
+}
+
+async function refreshFeed() {
+  if (feedRefreshing) return;
+  feedRefreshing = true;
+  setPull(64);
+  document.body.classList?.add('ptr-loading');
+  endView();
+  const started = Date.now();
+  if (online) await reloadAll({ rerender: false });
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, 700 - (Date.now() - started))));
+  const taste = currentTaste();
+  const unseen = filterProjects(projects(), { category: feedCategory }).filter(project => !taste.seen[project.id]).length;
+  feedSeed = Math.floor(Math.random() * 1e6);
+  feedOrder = null;
+  pinnedProjectId = '';
+  feedScrollTop = 0;
+  feedRefreshing = false;
+  document.body.classList?.remove('ptr-loading');
+  setPull(0);
+  if (document.body.dataset.view === 'feed') render();
+  navigator.vibrate?.(10);
+  toast(unseen ? `Лента обновлена · новых: ${unseen}` : 'Лента обновлена');
+}
+
+function onFeedWheel(event) {
+  const feed = event.currentTarget;
+  const now = Date.now();
+  if (now - wheelPull.last > 300) wheelPull.armed = feed.scrollTop <= 0;
+  wheelPull.last = now;
+  if (!wheelPull.armed || feedRefreshing || event.deltaY >= 0 || feed.scrollTop > 0) {
+    if (wheelPull.amount) { wheelPull.amount = 0; setPull(0); }
+    return;
+  }
+  wheelPull.amount += -event.deltaY;
+  setPull(Math.min(110, wheelPull.amount * 0.35));
+  clearTimeout(wheelPull.timer);
+  wheelPull.timer = setTimeout(() => {
+    const ready = wheelPull.amount * 0.35 >= 70;
+    wheelPull.amount = 0;
+    if (ready) refreshFeed(); else setPull(0);
+  }, 260);
+}
+
+function mediaInner(project, reason = '') {
   const count = slideKinds(project).length;
   const slide = Math.min(slides.get(project.id) || 0, count - 1);
   const id = escapeHtml(project.id);
@@ -498,7 +715,7 @@ function mediaInner(project) {
     ? `<div class="slide-bars" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div><button class="slide-arrow prev" data-action="slide" data-direction="-1" data-id="${id}" aria-label="Предыдущий слайд" ${slide === 0 ? 'disabled' : ''}>${icon('chevronLeft')}</button><button class="slide-arrow next" data-action="slide" data-direction="1" data-id="${id}" aria-label="Следующий слайд" ${slide === count - 1 ? 'disabled' : ''}>${icon('chevronRight')}</button>`
     : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info"><button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
 }
 
 function railButton(action, id, iconName, count, on, label, pop) {
@@ -536,13 +753,19 @@ function changeSlide(id, direction) {
   const next = Math.max(0, Math.min(count - 1, current + direction));
   if (next === current) return;
   slides.set(id, next);
-  const media = document.querySelector(`.card-media[data-id="${id}"]`);
-  if (!media?.classList) { render(); return; }
-  media.innerHTML = mediaInner(project);
-  syncFeedVideo(media.closest?.('.feed-item'));
-  media.classList.remove('from-left', 'from-right');
-  void media.offsetWidth;
-  media.classList.add(direction > 0 ? 'from-right' : 'from-left');
+  if (activeView?.id === id && activeView.slides < 3) {
+    activeView.slides += 1;
+    trackSignal(project, 'slide');
+  }
+  const list = document.querySelectorAll?.(`.card-media[data-id="${id}"]`) || [];
+  if (!list.length || !list[0]?.classList) { render(); return; }
+  list.forEach(media => {
+    media.innerHTML = mediaInner(project, media.dataset.reason || '');
+    syncFeedVideo(media.closest?.('.feed-item'));
+    media.classList.remove('from-left', 'from-right');
+    void media.offsetWidth;
+    media.classList.add(direction > 0 ? 'from-right' : 'from-left');
+  });
 }
 
 function stepFeed(direction) {
@@ -577,7 +800,9 @@ async function toggleProjectFlag(action, id, { onlyOn = false } = {}) {
   if (onlyOn && state[key].includes(id)) return;
   state[key] = toggleMembership(state[key], id);
   persist();
-  if (state[key].includes(id)) navigator.vibrate?.(8);
+  const on = state[key].includes(id);
+  if (on) navigator.vibrate?.(8);
+  trackSignal(projectById(id), on ? action : action === 'vote' ? 'unvote' : 'unsave');
   refresh({ action, id });
   if (action === 'save' && state.saved.includes(id)) toast('Сохранено в профиле');
   if (!online) return;
@@ -596,6 +821,7 @@ async function toggleFollow(handle, target) {
   if (needLogin('Чтобы подписываться на авторов, войди в аккаунт')) return;
   state.follows = toggleMembership(state.follows, handle);
   persist();
+  trackSignal(projects().find(project => project.handle === handle) || { handle }, state.follows.includes(handle) ? 'follow' : 'unfollow');
   if (target?.closest?.('dialog') && target.classList?.contains('follow-pill')) target.outerHTML = followPill(handle, 'small');
   refresh();
   if (!online) return;
@@ -767,7 +993,7 @@ function renderProfile(handle, tab) {
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
   const badges = `${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${avatar(person, 'xxl')}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div>${levelHtml(person)}<div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${avatar(person, 'xxl')}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div>${levelHtml(person)}<div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -799,13 +1025,17 @@ function openEditProfile() {
 
 /* Steam */
 
+// Steam keeps 30% and pays the rest for the game; the publisher's 2% comes out of that payout first.
 function calcValues() {
   const copies = copySteps[calculator.copiesIndex];
   const gross = calculator.price * copies;
   const steam = gross * 0.3;
-  const publisher = (gross - steam) * calculator.share / 100;
-  return { copies, gross, steam, publisher, author: gross - steam - publisher };
+  const payout = gross - steam;
+  const publisher = payout * PUBLISHER_FEE;
+  return { copies, gross, steam, payout, publisher, author: payout - publisher };
 }
+
+const feePercent = `${Math.round(PUBLISHER_FEE * 100)}%`;
 
 function slider(name, label, value, min, max, step, current) {
   return `<label class="slider"><span>${label}<b data-calc="${name}-out">${value}</b></span><input type="range" name="calc-${name}" min="${min}" max="${max}" step="${step}" value="${current}" style="--fill:${((current - min) / (max - min)) * 100}%"></label>`;
@@ -813,21 +1043,22 @@ function slider(name, label, value, min, max, step, current) {
 
 function calculatorHtml() {
   const values = calcValues();
-  const share = calculator.share;
-  return `<section class="block calc"><h2 class="block-title">Сколько получит автор</h2><div class="calc-result"><strong data-calc="author">${money(values.author)}</strong><small>из <span data-calc="gross">${money(values.gross)}</span></small></div><div class="split-bar" aria-hidden="true"><i class="seg-steam" style="flex-grow:30"></i><i class="seg-pub" data-calc="bar-pub" style="flex-grow:${70 * share / 100}"></i><i class="seg-author" data-calc="bar-author" style="flex-grow:${70 * (100 - share) / 100}"></i></div><div class="split-legend"><span><i class="dot seg-steam"></i>Steam 30%</span><span><i class="dot seg-pub"></i>Издатель <b data-calc="share-pct">${share}%</b></span><span><i class="dot seg-author"></i>Автор</span></div>${slider('price', 'Цена', `$${calculator.price}`, 1, 60, 1, calculator.price)}${slider('copies', 'Продажи', number.format(values.copies), 0, copySteps.length - 1, 1, calculator.copiesIndex)}${slider('share', 'Доля издателя', `${share}%`, 0, 50, 5, share)}<p class="fine">Пример до налогов и возвратов. Долю издателя фиксирует договор.</p></section>`;
+  const publisherShare = 70 * PUBLISHER_FEE;
+  return `<section class="block calc"><h2 class="block-title">Сколько получит автор</h2><div class="calc-result"><strong data-calc="author">${money(values.author)}</strong><small>из <span data-calc="gross">${money(values.gross)}</span> продаж</small></div><div class="split-bar" aria-hidden="true"><i class="seg-steam" style="flex-grow:30"></i><i class="seg-pub" style="flex-grow:${publisherShare}"></i><i class="seg-author" style="flex-grow:${70 - publisherShare}"></i></div><div class="split-legend"><span><i class="dot seg-steam"></i>Steam 30%</span><span><i class="dot seg-pub"></i>Издатель ${feePercent} · <b data-calc="publisher">${money(values.publisher)}</b></span><span><i class="dot seg-author"></i>Автор 98%</span></div>${slider('price', 'Цена', `$${calculator.price}`, 1, 60, 1, calculator.price)}${slider('copies', 'Продажи', number.format(values.copies), 0, copySteps.length - 1, 1, calculator.copiesIndex)}<p class="fine">${feePercent} берутся с выплаты Steam первыми. Банковские комиссии, конвертация и налоги — после, с твоей части.</p></section>`;
 }
 
 function updateCalculator() {
   const values = calcValues();
-  const text = { author: money(values.author), gross: money(values.gross), 'share-pct': `${calculator.share}%`, 'price-out': `$${calculator.price}`, 'copies-out': number.format(values.copies), 'share-out': `${calculator.share}%` };
+  const text = { author: money(values.author), gross: money(values.gross), publisher: money(values.publisher), 'price-out': `$${calculator.price}`, 'copies-out': number.format(values.copies) };
   for (const [key, value] of Object.entries(text)) {
     const element = document.querySelector(`[data-calc="${key}"]`);
     if (element) element.textContent = value;
   }
-  const pub = document.querySelector('[data-calc="bar-pub"]');
-  const author = document.querySelector('[data-calc="bar-author"]');
-  if (pub?.style) pub.style.flexGrow = 70 * calculator.share / 100;
-  if (author?.style) author.style.flexGrow = 70 * (100 - calculator.share) / 100;
+}
+
+// Advantages in accent: the 2% fee is the headline, the rest backs it up.
+function perksHtml() {
+  return `<section class="perks" aria-label="Почему с нами"><div class="perk-fee"><span class="perk-fee-big">${feePercent}</span><div><b>Доля издателя</b><p>С выплаты Steam за игру — и всё. Удерживаем первыми, остальные 98% твои.</p></div><div class="fee-compare" aria-label="Сравнение доли издателя"><span><i style="width:${PUBLISHER_FEE * 100 * 2}%"></i><b>про.стим</b><small>${feePercent}</small></span><span class="usual"><i style="width:80%"></i><b>У многих издателей</b><small>30–50%</small></span></div></div>${publisherPerks.map(perk => `<div class="perk">${icon(perk.icon)}<b>${perk.title}</b><small>${perk.text}</small></div>`).join('')}</section>`;
 }
 
 function readinessPercent() {
@@ -867,7 +1098,7 @@ function steamLinkHtml(className = 'btn btn-glass') {
 
 function studioCardHtml() {
   const official = online ? userByHandle('prostim') : null;
-  return `<section class="block studio-card"><div class="studio-head"><span class="studio-mark">${logoMark}</span><div><h2>${escapeHtml(studio.name)}</h2><p>${escapeHtml(studio.tagline)} · ${escapeHtml(studio.country)}</p></div></div><div class="studio-facts"><span>${icon('check')} Работаем по договору</span><span>${icon('coins')} Счёт и выплаты в Молдове</span><span>${icon('users')} Отвечаем в чате</span></div>${studio.team.length ? `<div class="studio-people">${studio.team.map(person => `<span>${avatar(person)}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role)}</small></span>`).join('')}</div>` : ''}<div class="hero-actions">${steamLinkHtml('btn btn-ghost')}<a class="btn btn-ghost" href="#/steam/studio">${icon('users')} Кто мы</a>${official ? `<a class="btn btn-ghost" href="#/inbox/prostim">${icon('inbox')} Написать</a>` : ''}</div></section>`;
+  return `<section class="block studio-card"><div class="studio-head"><span class="studio-mark">${logoMark}</span><div><h2>${escapeHtml(studio.name)}</h2><p>${escapeHtml(studio.tagline)} · ${escapeHtml(studio.country)}</p></div></div><div class="studio-facts"><span class="accent-fact">${icon('percent')} ${feePercent} с выплаты Steam</span><span>${icon('check')} Работаем по договору</span><span>${icon('coins')} Счёт и выплаты в Молдове</span><span>${icon('users')} Отвечаем в чате</span></div>${studio.team.length ? `<div class="studio-people">${studio.team.map(person => `<span>${avatar(person)}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role)}</small></span>`).join('')}</div>` : ''}<div class="hero-actions">${steamLinkHtml('btn btn-ghost')}<a class="btn btn-ghost" href="#/steam/studio">${icon('users')} Кто мы</a>${official ? `<a class="btn btn-ghost" href="#/inbox/prostim">${icon('inbox')} Написать</a>` : ''}</div></section>`;
 }
 
 function servicesHtml() {
@@ -875,7 +1106,7 @@ function servicesHtml() {
 }
 
 function payoutHtml() {
-  return `<section class="block payout"><h2 class="block-title">Как автор получает деньги</h2><div class="payout-flow">${payoutFlow.map((item, index) => `${index ? `<i class="payout-arrow">${icon('chevronRight')}</i>` : ''}<div class="payout-node">${icon(item.icon)}<b>${item.title}</b><small>${item.text}</small></div>`).join('')}</div><div class="payout-facts">${payoutFacts.map(([value, text]) => `<div><b>${value}</b><small>${text}</small></div>`).join('')}</div><p class="fine">Условия Steam: <a class="text-link inline" href="https://partner.steamgames.com/doc/finance/payments_salesreporting" target="_blank" rel="noopener noreferrer">выплаты и отчёты Steamworks</a>. Налоги и банковские комиссии зависят от договора и банка.</p></section>`;
+  return `<section class="block payout"><h2 class="block-title">Как автор получает деньги</h2><div class="payout-flow">${payoutFlow.map((item, index) => `${index ? `<i class="payout-arrow">${icon('chevronRight')}</i>` : ''}<div class="payout-node">${icon(item.icon)}<b>${item.title}</b><small>${item.text}</small></div>`).join('')}</div><div class="payout-facts">${payoutFacts.map(([value, text]) => `<div><b>${value}</b><small>${text}</small></div>`).join('')}</div><p class="fine">Условия Steam: <a class="text-link inline" href="https://partner.steamgames.com/doc/finance/payments_salesreporting" target="_blank" rel="noopener noreferrer">выплаты и отчёты Steamworks</a>. ${feePercent} издателя удерживаются первыми, банковские комиссии и налоги считаются после — с части автора.</p></section>`;
 }
 
 function roadmapHtml() {
@@ -891,7 +1122,7 @@ function renderStudio() {
     ? `<div class="team-grid">${studio.team.map(person => `<div class="team-card">${avatar(person, 'xl')}<b>${escapeHtml(person.name)}</b><small>${escapeHtml(person.role || '')}</small>${person.link && safeUrl(person.link) ? `<a class="text-link" href="${escapeHtml(safeUrl(person.link))}" target="_blank" rel="noopener noreferrer">Steam</a>` : ''}</div>`).join('')}</div>`
     : `<p class="muted-line">Карточки команды появятся здесь: имя, роль и ссылка на профиль.</p>`;
   const links = (studio.links || []).map(([label, url]) => safeUrl(url) ? `<a class="ext-link" href="${escapeHtml(safeUrl(url))}" target="_blank" rel="noopener noreferrer">${icon('external')} ${escapeHtml(label)}</a>` : '').join('');
-  return `${studioCardHtml()}<section class="block"><h2 class="block-title">Команда</h2>${team}${links ? `<div class="studio-links">${links}</div>` : ''}</section><section class="block"><h2 class="block-title">Зачем мы это делаем</h2><div class="why-grid"><div><b>Автору</b><p>Выпустить игру в Steam без своей компании за границей: договор, страница, билд и выплаты берёт на себя издатель.</p></div><div><b>Игрокам</b><p>Видеть игры до релиза в ленте, пробовать демо и поддерживать авторов.</p></div><div><b>Нам</b><p>Доля от продаж по договору и платные услуги, если автору они нужны. Других скрытых платежей нет.</p></div></div></section>${roadmapHtml()}`;
+  return `${studioCardHtml()}<section class="block"><h2 class="block-title">Команда</h2>${team}${links ? `<div class="studio-links">${links}</div>` : ''}</section><section class="block"><h2 class="block-title">Зачем мы это делаем</h2><div class="why-grid"><div><b>Автору</b><p>Выпустить игру в Steam без своей компании за границей: договор, страница, билд и выплаты берёт на себя издатель.</p></div><div><b>Игрокам</b><p>Видеть игры до релиза в ленте, пробовать демо и поддерживать авторов.</p></div><div><b>Нам</b><p>${feePercent} с выплаты Steam за игру и платные услуги — только если автор сам их закажет. Скрытых платежей нет.</p></div></div></section>${roadmapHtml()}`;
 }
 
 function renderSteam(page) {
@@ -907,7 +1138,7 @@ function renderSteam(page) {
   }
   const applications = myApplications();
   const mine = applications.length ? `<section class="block my-apps"><h2 class="block-title">Мои заявки</h2>${applications.slice(0, 3).map(application => `<a class="app-row" href="#/me/applications"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || 'Черновик')} · ${escapeHtml(application.stage || '')}</small></span>${icon('chevronRight')}</a>`).join('')}</section>` : '';
-  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art">${scene(demoProjects[0], 0)}</div><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span>в Steam</span></h1><p class="hero-lead">Договор, страница, билд, запуск и выплаты — через издателя в Молдове. Права на игру остаются у тебя.</p><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml()}<a class="btn btn-glass" href="#/steam/studio">Кто мы</a></div></div></section>${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
+  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art">${scene(demoProjects[0], 0)}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span>в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml()}<a class="btn btn-glass" href="#/steam/studio">Кто мы</a></div></div></section>${perksHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
 }
 
 /* AI world */
@@ -1325,6 +1556,7 @@ function closeDialog() {
 }
 
 function navigateToProject(id) {
+  trackSignal(projectById(id), 'open');
   projectOpenedFromApp = true;
   location.hash = `#/project/${encodeURIComponent(id)}`;
 }
@@ -1335,6 +1567,33 @@ function commentsHtml(project) {
     ? comments.map(comment => `<div class="comment">${avatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#c4f56f' : '#cfd9c4') })}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
     : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
   return `<div class="comments">${list}</div><form id="comment-form" data-id="${escapeHtml(project.id)}" class="composer sticky"><input name="text" maxlength="1200" placeholder="${online && !me ? 'Войди, чтобы комментировать' : 'Комментарий…'}" aria-label="Комментарий" autocomplete="off" required><button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
+}
+
+// Interest of a post: support, saves and how much of it people actually watch.
+function interestHtml(project) {
+  const stats = cleanStats(statsFor(project));
+  const quality = projectQuality({ ...project, votes: voteCount(project), saves: savesCount(project) }, stats);
+  const score = Math.round(quality.score * 100);
+  const items = [
+    ['up', voteCount(project), 'поддержали'],
+    ['bookmark', savesCount(project), 'сохранили'],
+    ['clock', stats.impressions ? `${Math.round(quality.retention * 100)}%` : '—', 'досмотрели'],
+    ['eye', number.format(stats.impressions), 'показов']
+  ];
+  return `<div class="interest"><div class="interest-head"><span>${icon('flame')} Интерес</span><i class="interest-meter"><i style="width:${score}%"></i></i><b>${score}</b></div><div class="interest-stats">${items.map(([iconName, value, label]) => `<span>${icon(iconName)}<b>${value}</b><small>${label}</small></span>`).join('')}</div></div>`;
+}
+
+function interestsCardHtml() {
+  const taste = currentTaste();
+  const top = topInterests(taste, 6);
+  const max = top[0]?.weight || 1;
+  const label = item => item.kind === 'cat' ? categoryNames[item.value] || item.value : item.kind === 'author' ? `@${item.value}` : `#${item.value}`;
+  const iconFor = item => item.kind === 'cat' ? categoryIcons[item.value] || 'grid' : item.kind === 'author' ? 'user' : 'tag';
+  const confidence = Math.round(tasteConfidence(taste) * 100);
+  const chips = top.length
+    ? `<div class="taste-chips">${top.map(item => `<span class="taste-chip" style="--w:${Math.max(0.2, item.weight / max).toFixed(2)}">${icon(iconFor(item))}${escapeHtml(label(item))}</span>`).join('')}</div>`
+    : `<p class="taste-empty">Листай ленту — интересы появятся сами</p>`;
+  return `<section class="taste-card"><div class="taste-head"><span class="taste-title">${icon('sparkle')} Лента знает тебя</span><span class="taste-level"><i style="width:${confidence}%"></i></span><b>${confidence}%</b>${top.length ? `<button class="icon-btn" data-action="reset-taste" aria-label="Сбросить интересы" title="Сбросить">${icon('refresh')}</button>` : ''}</div>${chips}</section>`;
 }
 
 function openProject(id) {
@@ -1354,7 +1613,7 @@ function openProject(id) {
   const gallery = media.length > 1 ? `<div class="sheet-gallery">${media.slice(1).map(item => item.type === 'video' ? `<video src="${item.url}" ${uploadUrl(item.poster) ? `poster="${item.poster}"` : ''} controls playsinline preload="metadata"></video>` : `<img src="${item.url}" alt="" loading="lazy">`).join('')}</div>` : '';
   const trailer = safeUrl(project.video) ? `<a class="btn btn-ghost" href="${escapeHtml(safeUrl(project.video))}" target="_blank" rel="noopener noreferrer">${icon('play')} Трейлер</a>` : '';
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<div class="sheet-media">${scene(project, 0, 'player')}</div><div class="sheet-body"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title">${escapeHtml(project.title)}</h2><p class="lead">${escapeHtml(project.summary)}</p><div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>${more}${gallery}<div class="sheet-actions">${primary}${trailer}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div>`, { kind: 'project', id });
+  showDialog(`<div class="sheet-media">${scene(project, 0, 'player')}</div><div class="sheet-body"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(project)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title">${escapeHtml(project.title)}</h2><p class="lead">${escapeHtml(project.summary)}</p><div class="chips">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>${interestHtml(project)}${more}${gallery}<div class="sheet-actions">${primary}${trailer}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div>`, { kind: 'project', id });
 }
 
 function openComments(id) {
@@ -1592,6 +1851,7 @@ async function shareProject(id) {
       await navigator.clipboard.writeText(url);
       toast('Ссылка скопирована');
     }
+    trackSignal(project, 'share');
   } catch (error) {
     if (error.name !== 'AbortError') showDialog(`<div class="sheet-body"><h2 id="modal-title">Ссылка</h2><input class="field" readonly value="${escapeHtml(url)}" aria-label="Ссылка на проект"></div>`);
   }
@@ -1625,10 +1885,32 @@ document.addEventListener('click', async event => {
   if (action === 'close-modal') closeDialog();
   else if (action === 'home') {
     const feed = document.querySelector('#feed');
-    if (route().section === 'feed' && feed?.scrollTop > 0) {
+    if (route().section === 'feed' && feed) {
       event.preventDefault();
-      feed.scrollTo({ top: 0, behavior: 'smooth' });
+      if (feed.scrollTop > 0) feed.scrollTo?.({ top: 0, behavior: 'smooth' }); else refreshFeed();
     }
+  } else if (action === 'feed-refresh') {
+    const feed = document.querySelector('#feed');
+    if (feed?.scrollTop > 0) feed.scrollTo?.({ top: 0, behavior: 'smooth' });
+    refreshFeed();
+  } else if (action === 'not-interested') {
+    if (activeView?.id === id) endView();
+    trackSignal(projectById(id), 'hide');
+    if (feedOrder) feedOrder.entries = feedOrder.entries.filter(entry => entry.id !== id);
+    closeDialog();
+    document.querySelectorAll?.(`.feed-item[data-project="${id}"]`).forEach(item => item.remove?.());
+    toast('Покажем меньше похожего');
+  } else if (action === 'reset-taste') {
+    if (!confirm('Сбросить то, что лента узнала о твоих интересах?')) return;
+    if (online && me) {
+      try { remote.taste = cleanTaste((await apiCall('DELETE', '/api/me/taste')).taste); } catch (error) { toast(error.message); return; }
+    } else {
+      localTaste = emptyTaste();
+      saveTaste();
+    }
+    feedOrder = null;
+    render();
+    toast('Интересы сброшены');
   } else if (action === 'back') {
     if (history.length > 1) history.back();
     else location.hash = route().section === 'inbox' ? '#/inbox' : '#/feed';
@@ -1888,6 +2170,7 @@ document.addEventListener('submit', async event => {
         if (submit) submit.textContent = 'Публикуем…';
         const { project } = await apiCall('POST', '/api/projects', { ...fields, media, video: value('video') });
         remote.projects.unshift(project);
+        pinnedProjectId = project.id;
       } catch (error) {
         formError(form, error.message);
         if (submit) { submit.disabled = false; submit.textContent = 'Опубликовать'; }
@@ -1895,10 +2178,12 @@ document.addEventListener('submit', async event => {
       }
     } else {
       state.projects.unshift({ id: newId('local'), ...fields, tags: tags.length ? tags : ['Новый проект'], author: 'Вы', initials: 'Я', handle: 'me', color: '#c4f56f', votes: 0, createdAt: Date.now(), slides: 1, comments: [] });
+      pinnedProjectId = state.projects[0].id;
       persist();
     }
     clearPublishMedia();
     feedCategory = 'all';
+    feedOrder = null;
     feedScrollTop = 0;
     go('#/feed');
     render();
@@ -1917,6 +2202,7 @@ document.addEventListener('submit', async event => {
       state.comments[id].push({ name: 'Вы', text: value('text'), time: 'сейчас' });
       persist();
     }
+    trackSignal(projectById(id), 'comment');
     refresh();
     if (dialogContext?.kind === 'project') openProject(id); else openComments(id);
     const list = modal.querySelector?.('.comments');
@@ -2030,7 +2316,6 @@ document.addEventListener('input', event => {
     const amount = Number(target.value);
     if (key === 'price') calculator.price = amount;
     else if (key === 'copies') calculator.copiesIndex = amount;
-    else if (key === 'share') calculator.share = amount;
     target.style?.setProperty('--fill', `${((amount - Number(target.min)) / (Number(target.max) - Number(target.min))) * 100}%`);
     updateCalculator();
   }
@@ -2104,6 +2389,30 @@ document.addEventListener('pointerup', event => {
   pointerStart = null;
 });
 document.addEventListener('pointercancel', () => { pointerStart = null; });
+
+document.addEventListener('touchstart', event => {
+  const feed = event.target.closest?.('#feed');
+  pullState = feed && feed.scrollTop <= 0 && !feedRefreshing && !modal.open && event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, distance: 0 } : null;
+}, { passive: true });
+document.addEventListener('touchmove', event => {
+  if (!pullState) return;
+  const deltaY = event.touches[0].clientY - pullState.y;
+  const deltaX = Math.abs(event.touches[0].clientX - pullState.x);
+  if (deltaY <= 0 || deltaX > deltaY || (document.querySelector('#feed')?.scrollTop || 0) > 0) {
+    if (pullState.distance) { pullState.distance = 0; setPull(0); }
+    return;
+  }
+  pullState.distance = Math.min(120, deltaY * 0.5);
+  setPull(pullState.distance);
+}, { passive: true });
+document.addEventListener('touchend', () => {
+  if (!pullState) return;
+  const ready = pullState.distance >= 70;
+  pullState = null;
+  if (ready) refreshFeed(); else setPull(0);
+});
+document.addEventListener('touchcancel', () => { if (pullState) { pullState = null; setPull(0); } });
+window.addEventListener('pagehide', () => { endView(); flushFeedEvents(true); });
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
 
 document.addEventListener('keydown', event => {
@@ -2136,6 +2445,12 @@ document.addEventListener('error', event => {
   if (event.target.matches?.('.scene.photo img')) event.target.parentElement.classList.add('image-unavailable');
 }, true);
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    endView();
+    flushFeedEvents(true);
+    return;
+  }
+  if (document.body.dataset.view === 'feed') beginView(document.querySelector('.feed-item.in-view'));
   if (document.visibilityState === 'visible' && online) {
     reloadAll({ rerender: document.body.dataset.view !== 'feed' && !modal.open });
     const current = route();
