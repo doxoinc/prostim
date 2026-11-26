@@ -127,3 +127,13 @@ test('feed order comes from the recommender and survives re-renders', () => {
   app.navigate('#/me');
   assert.match(app.elements.get('main').innerHTML, /Лента знает тебя/);
 });
+
+test('slide dots sit in the bottom info block, above the title', () => {
+  const app = createApp();
+  const multi = runInContext('demoProjects.find(project => slideKinds(project).length > 1)', app.context);
+  assert.ok(multi, 'a seed project has several slides');
+  const html = runInContext(`mediaInner(projectById(${JSON.stringify(multi.id)}))`, app.context);
+  assert.doesNotMatch(html, /slide-bars/);
+  const info = html.slice(html.indexOf('class="card-info"'));
+  assert.ok(info.indexOf('slide-dots') > 0 && info.indexOf('slide-dots') < info.indexOf('card-title'), 'dots come before the title inside card-info');
+});

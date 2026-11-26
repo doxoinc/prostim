@@ -691,6 +691,7 @@ async function refreshFeed() {
 function onFeedWheel(event) {
   const feed = event.currentTarget;
   const now = Date.now();
+  if (now < feedWheelMuteUntil) { wheelPull.last = now; wheelPull.armed = false; return; }
   if (now - wheelPull.last > 300) wheelPull.armed = feed.scrollTop <= 0;
   wheelPull.last = now;
   if (!wheelPull.armed || feedRefreshing || event.deltaY >= 0 || feed.scrollTop > 0) {
@@ -712,10 +713,11 @@ function mediaInner(project, reason = '') {
   const slide = Math.min(slides.get(project.id) || 0, count - 1);
   const id = escapeHtml(project.id);
   const controls = count > 1
-    ? `<div class="slide-bars" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div><button class="slide-arrow prev" data-action="slide" data-direction="-1" data-id="${id}" aria-label="Предыдущий слайд" ${slide === 0 ? 'disabled' : ''}>${icon('chevronLeft')}</button><button class="slide-arrow next" data-action="slide" data-direction="1" data-id="${id}" aria-label="Следующий слайд" ${slide === count - 1 ? 'disabled' : ''}>${icon('chevronRight')}</button>`
+    ? `<button class="slide-arrow prev" data-action="slide" data-direction="-1" data-id="${id}" aria-label="Предыдущий слайд" ${slide === 0 ? 'disabled' : ''}>${icon('chevronLeft')}</button><button class="slide-arrow next" data-action="slide" data-direction="1" data-id="${id}" aria-label="Следующий слайд" ${slide === count - 1 ? 'disabled' : ''}>${icon('chevronRight')}</button>`
     : '';
+  const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${isMine(project.handle) ? 'Вы' : `@${escapeHtml(project.handle)}`}${trustBadge(author, true)}<span> · ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p><div class="card-tags">${(project.tags || []).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div></div>`;
 }
 
 function railButton(action, id, iconName, count, on, label, pop) {
@@ -2429,8 +2431,106 @@ document.addEventListener('keydown', event => {
   else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') changeSlide(currentFeedId(), event.key === 'ArrowRight' ? 1 : -1);
 });
 
+/* Sheets close with a swipe down (touch) or a pull down at the top (trackpad) */
+
+const SHEET_CLOSE_DISTANCE = 120;
+let sheetDrag = null;
+const sheetWheel = { amount: 0, last: 0, armed: false, timer: 0 };
+let feedWheelMuteUntil = 0;
+
+// The rest of a trackpad swipe that closed a sheet must not scroll or refresh the feed underneath.
+function muteFeedWheel(ms) {
+  feedWheelMuteUntil = Date.now() + ms;
+  document.body.classList.add('wheel-mute');
+  setTimeout(() => { if (Date.now() >= feedWheelMuteUntil) document.body.classList.remove('wheel-mute'); }, ms);
+}
+
+function sheetHasDraft() {
+  return Array.from(modal.querySelectorAll?.('input, textarea') || []).some(field => !['radio', 'checkbox', 'hidden', 'file'].includes(field.type) && field.value.trim() && field.value !== field.defaultValue);
+}
+
+function setSheetOffset(offset, animate = false) {
+  modal.style.transition = animate ? 'transform .24s var(--ease)' : 'none';
+  modal.style.transform = offset ? `translateY(${offset}px)` : '';
+  modal.style.setProperty('--sheet-fade', String(Math.max(0, 1 - offset / 500)));
+}
+
+function resetSheet() {
+  clearTimeout(sheetWheel.timer);
+  sheetDrag = null;
+  sheetWheel.amount = 0;
+  modal.classList.remove('sheet-closing');
+  modal.style.transition = '';
+  modal.style.transform = '';
+  modal.style.removeProperty('--sheet-fade');
+}
+
+function releaseSheet(distance, fast = false) {
+  if (distance > SHEET_CLOSE_DISTANCE || (fast && distance > 30)) {
+    if (sheetHasDraft()) { setSheetOffset(0, true); toast('Сначала отправь или сотри текст'); return; }
+    modal.classList.add('sheet-closing');
+    muteFeedWheel(1000);
+    setSheetOffset(innerHeight, true);
+    setTimeout(() => { if (modal.classList.contains('sheet-closing')) closeDialog(); resetSheet(); }, 220);
+  } else setSheetOffset(0, true);
+}
+
+const sheetDragExcluded = 'input, textarea, select, [contenteditable="true"], .workspace';
+modal.addEventListener('touchstart', event => {
+  const touch = event.touches[0];
+  sheetDrag = event.touches.length === 1 && !modal.classList.contains('sheet-closing') && !event.target.closest?.(sheetDragExcluded)
+    ? { x: touch.clientX, y: touch.clientY, lastY: touch.clientY, lastTime: event.timeStamp, distance: 0, speed: 0, active: false }
+    : null;
+}, { passive: true });
+modal.addEventListener('touchmove', event => {
+  if (!sheetDrag) return;
+  if (event.touches.length !== 1) { if (sheetDrag.active) setSheetOffset(0, true); sheetDrag = null; return; }
+  const touch = event.touches[0];
+  if (!sheetDrag.active) {
+    const down = touch.clientY - sheetDrag.y;
+    const side = Math.abs(touch.clientX - sheetDrag.x);
+    if (modal.scrollTop > 0 || down <= 0) { sheetDrag.x = touch.clientX; sheetDrag.y = touch.clientY; return; }
+    if (side > down) { sheetDrag = null; return; }
+    if (down < 8) return;
+    sheetDrag.active = true;
+    sheetDrag.y = touch.clientY;
+  }
+  if (event.cancelable) event.preventDefault();
+  const elapsed = Math.max(1, event.timeStamp - sheetDrag.lastTime);
+  sheetDrag.speed = (touch.clientY - sheetDrag.lastY) / elapsed;
+  sheetDrag.lastY = touch.clientY;
+  sheetDrag.lastTime = event.timeStamp;
+  sheetDrag.distance = Math.max(0, touch.clientY - sheetDrag.y);
+  setSheetOffset(sheetDrag.distance);
+}, { passive: false });
+modal.addEventListener('touchend', () => {
+  const drag = sheetDrag;
+  sheetDrag = null;
+  if (drag?.active) releaseSheet(drag.distance, drag.speed > 0.6);
+});
+modal.addEventListener('touchcancel', () => { if (sheetDrag?.active) setSheetOffset(0, true); sheetDrag = null; });
+modal.addEventListener('wheel', event => {
+  const now = Date.now();
+  if (now - sheetWheel.last > 300) sheetWheel.armed = modal.scrollTop <= 0 && !event.target.closest?.(sheetDragExcluded);
+  sheetWheel.last = now;
+  if (event.deltaY > 0 || event.ctrlKey || modal.scrollTop > 0) sheetWheel.armed = false;
+  if (!sheetWheel.armed || modal.classList.contains('sheet-closing')) {
+    if (sheetWheel.amount) { sheetWheel.amount = 0; setSheetOffset(0, true); }
+    return;
+  }
+  sheetWheel.amount += -event.deltaY;
+  setSheetOffset(Math.min(180, sheetWheel.amount * 0.3));
+  clearTimeout(sheetWheel.timer);
+  sheetWheel.timer = setTimeout(() => {
+    const distance = Math.min(180, sheetWheel.amount * 0.3);
+    sheetWheel.amount = 0;
+    releaseSheet(distance);
+  }, 260);
+}, { passive: true });
+
 modal.addEventListener('click', event => { if (event.target === modal) closeDialog(); });
 modal.addEventListener('close', () => {
+  resetSheet();
   modal.querySelectorAll?.('video').forEach(video => video.pause?.());
   document.querySelectorAll?.('.feed-item.in-view').forEach(syncFeedVideo);
 });
