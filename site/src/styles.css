@@ -1840,7 +1840,7 @@ body.ptr-loading .ptr .i { display: none; }
 @property --siri { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
 :root { --siri-colors: #ff2e63, #ff8a3d, #ffd36e, #5ec8ff, #7c6cff, #d46bff, #ff2e63; }
 .ad-glow { position: absolute; z-index: 3; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; -webkit-mask-image: linear-gradient(to top, #000 0%, #000 14%, rgba(0, 0, 0, .4) 34%, transparent 56%); mask-image: linear-gradient(to top, #000 0%, #000 14%, rgba(0, 0, 0, .4) 34%, transparent 56%); animation: siri-spin 5s linear infinite; }
-.feed:not(.io) .ad-glow, .feed-item.next-ad.in-view .ad-glow { animation: siri-in .9s .35s var(--ease) both, siri-spin 5s linear infinite; }
+.feed:not(.io) .ad-glow, .feed-item.next-ad.in-view .ad-glow { animation: siri-in .45s var(--ease) both, siri-spin 5s linear infinite; }
 .ad-glow .glow-line { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--siri) at 50% 100%, var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
 .ad-glow .glow-soft { padding: 0; background: none; -webkit-mask: none; mask: none; filter: blur(18px); animation: siri-breathe 2.6s ease-in-out infinite; }
 .ad-glow .glow-soft b { position: absolute; inset: 0; border-radius: inherit; padding: 24px; background: conic-gradient(from var(--siri) at 50% 100%, var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
@@ -1849,7 +1849,7 @@ body.ptr-loading .ptr .i { display: none; }
 @keyframes siri-in { from { opacity: 0; translate: 0 24px; } to { opacity: 1; translate: 0 0; } }
 @keyframes siri-breathe { 50% { opacity: .6; } }
 .ad-next { position: absolute; z-index: 5; left: 50%; bottom: 16px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 5px 0 12px; border: 1.5px solid transparent; border-radius: 99px; background: linear-gradient(rgba(14, 14, 18, .72), rgba(14, 14, 18, .72)) padding-box, conic-gradient(from var(--siri), var(--siri-colors)) border-box; color: rgba(255, 255, 255, .82); font-size: 12.5px; font-weight: 650; white-space: nowrap; transform: translateX(-50%); opacity: 0; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: siri-spin 5s linear infinite; }
-.feed:not(.io) .ad-next, .feed-item.next-ad.in-view .ad-next { animation: siri-in .6s .6s var(--ease) both, siri-spin 5s linear infinite; }
+.feed:not(.io) .ad-next, .feed-item.next-ad.in-view .ad-next { animation: siri-in .45s .1s var(--ease) both, siri-spin 5s linear infinite; }
 .ad-next > .i { font-size: 15px; color: #ffd36e; }
 .ad-next b { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 99px; background: var(--grad); color: #fff; font-weight: 800; }
 .ad-next b .i { font-size: 13px; }
@@ -1915,6 +1915,7 @@ body.scrolling :is(.ad-glow, .ad-glow .glow-soft, .ad-next, .plus-promo-art i, .
   .ad-skip { top: calc(var(--top-h) + env(safe-area-inset-top) + 8px); right: 12px; }
   .feed-item.next-ad .card-info { padding-bottom: 64px; }
   .ad-glow { border-radius: 0 0 34px 34px; }
+  .ad-frame { border-radius: 44px 44px 30px 30px; }
   .feed-item.next-ad .rail { bottom: 62px; }
   .ad-next { left: 16px; transform: none; }
   .plan-card { padding: 16px 10px 12px; }
@@ -1922,8 +1923,24 @@ body.scrolling :is(.ad-glow, .ad-glow .glow-soft, .ad-next, .plus-promo-art i, .
   .plan-card strong { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ad-glow, .ad-glow .glow-soft, .ad-next, .plus-mark, .plus-promo-art i, .plus-promo-mark { animation: none !important; opacity: 1; }
+  .ad-glow, .ad-glow .glow-soft, .ad-next, .plus-mark, .plus-promo-art i, .plus-promo-mark, .ad-frame, .ad-frame .frame-soft { animation: none !important; opacity: 1; }
+  .ad-frame { --reveal: 180deg; }
+  .ad-frame .frame-comet { display: none; }
 }
+
+/* The ad itself: the whole screen edge glows. */
+@property --reveal { syntax: "<angle>"; inherits: true; initial-value: 180deg; }
+@property --comet { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
+.ad-frame { --reveal: 0deg; position: absolute; z-index: 4; inset: 0; border-radius: inherit; pointer-events: none; -webkit-mask-image: conic-gradient(#000 0 var(--reveal), transparent var(--reveal) calc(360deg - var(--reveal)), #000 calc(360deg - var(--reveal))); mask-image: conic-gradient(#000 0 var(--reveal), transparent var(--reveal) calc(360deg - var(--reveal)), #000 calc(360deg - var(--reveal))); }
+.feed:not(.io) .ad-frame, .feed-item.is-ad.near .ad-frame { --reveal: 180deg; animation: frame-draw .7s var(--ease) both, siri-spin 5s linear infinite, frame-comet 3.4s ease-in-out infinite alternate; }
+.ad-frame .frame-line { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--siri), var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.ad-frame .frame-soft { position: absolute; inset: 0; border-radius: inherit; filter: blur(16px); animation: siri-breathe 2.4s ease-in-out infinite; }
+.ad-frame .frame-soft b { position: absolute; inset: 0; border-radius: inherit; padding: 22px; background: conic-gradient(from var(--siri), var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.ad-frame .frame-comet { position: absolute; inset: 0; border-radius: inherit; filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 12px rgba(255, 255, 255, .7)); }
+.ad-frame .frame-comet b { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--comet), #fff 0deg, rgba(255, 255, 255, .55) 7deg, transparent 20deg 340deg, rgba(255, 255, 255, .55) 353deg); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+@keyframes frame-draw { from { --reveal: 0deg; } to { --reveal: 180deg; } }
+@keyframes frame-comet { from { --comet: -30deg; } to { --comet: 330deg; } }
+body.scrolling .ad-frame .frame-soft { animation-play-state: paused; }
 
 /* про.стим advertising Plus in an ad slot of the feed */
 .plus-promo { background: radial-gradient(80% 55% at 75% 18%, rgba(124, 108, 255, .34), transparent 62%), radial-gradient(70% 50% at 15% 62%, rgba(255, 46, 99, .3), transparent 62%), radial-gradient(60% 45% at 85% 82%, rgba(255, 176, 59, .24), transparent 62%), #0c0a11; cursor: default; }

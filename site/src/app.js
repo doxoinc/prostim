@@ -45,6 +45,7 @@ let promptDraft = '';
 let connectionVersion = 0;
 let feedScrollTop = 0;
 let feedObserver = null;
+let adObserver = null; // marks an ad the moment its first pixels scroll in
 let projectOpenedFromApp = false;
 let lastService = 'feed';
 let renderedView = '';
@@ -526,6 +527,8 @@ function afterRender(view, changedPage, current) {
   endView();
   feedObserver?.disconnect();
   feedObserver = null;
+  adObserver?.disconnect();
+  adObserver = null;
   if (view === 'ai') afterAiRender(current, changedPage);
   if (view === 'steam') countUp();
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
@@ -550,6 +553,9 @@ function afterRender(view, changedPage, current) {
   if (typeof IntersectionObserver === 'function' && feed.querySelectorAll) {
     feed.classList.add('io');
     markNextAds(feed);
+    adObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) entry.target.classList.toggle('near', entry.isIntersecting);
+    }, { root: feed, threshold: 0 });
     feedObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
         entry.target.classList.toggle('in-view', entry.isIntersecting);
@@ -593,6 +599,7 @@ function observeFeedItems(feed) {
   feed.querySelectorAll('.feed-item:not([data-observed])').forEach(item => {
     item.dataset.observed = '1';
     feedObserver?.observe(item);
+    if (item.classList.contains('is-ad')) adObserver?.observe(item);
   });
 }
 
@@ -740,12 +747,21 @@ function plusFeedItem() {
 // comes as a surprise and can be jumped over in one tap.
 function markNextAds(feed = document.querySelector('#feed')) {
   feed?.querySelectorAll?.('.feed-item.is-ad').forEach(ad => {
+    const frame = ad.querySelector?.('.card-media');
+    if (frame && !frame.querySelector?.('.ad-frame')) frame.insertAdjacentHTML?.('beforeend', adFrameHtml());
     const before = ad.previousElementSibling;
     if (!before?.classList?.contains('feed-item') || before.classList.contains('is-ad')) return;
     before.classList.add('next-ad');
     const media = before.querySelector?.('.card-media');
     if (media && !media.querySelector?.('.ad-glow')) media.insertAdjacentHTML?.('beforeend', adGlowHtml());
   });
+}
+
+// An ad is recognisable by its light, not only by its label: the whole edge of the screen glows in the
+// same colours as the hint before it. The line draws itself from the top centre as soon as the ad starts
+// to scroll in, the halo breathes, and a spark runs back and forth around the frame.
+function adFrameHtml() {
+  return '<div class="ad-frame" aria-hidden="true"><span class="frame-line"></span><span class="frame-soft"><b></b></span><span class="frame-comet"><b></b></span></div>';
 }
 
 // Like the edge light of the new Siri, but only along the bottom: the screen glows from below
