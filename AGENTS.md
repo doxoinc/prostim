@@ -9,7 +9,7 @@ Product documentation lives in `docs/`. The web service lives in `site/`: browse
 Run these from `site/` (Node.js 20+):
 
 ```sh
-npm install      # installs pg, the only runtime dependency
+npm install      # installs pg and @anthropic-ai/sdk, the runtime dependencies
 npm start        # server on http://127.0.0.1:4173, data in site/data/
 npm test         # node:test suites in site/tests/
 npm run build    # offline single-file copy in site/dist/

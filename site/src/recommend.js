@@ -5,8 +5,8 @@
 
 export const TASTE_HALF_LIFE_DAYS = 10;
 export const QUICK_SKIP_MS = 1200;
-export const tasteSignals = { vote: 2, unvote: -1.5, save: 2.5, unsave: -2, comment: 2.2, share: 2.5, open: 1, slide: 0.3, rewatch: 0.6, follow: 3, unfollow: -3, hide: -4 };
-export const statSignals = ['view', 'open', 'share', 'rewatch', 'hide'];
+export const tasteSignals = { vote: 2, unvote: -1.5, save: 2.5, unsave: -2, comment: 2.2, share: 2.5, repost: 3, play: 2.5, open: 1, slide: 0.3, rewatch: 0.6, follow: 3, unfollow: -3, hide: -4 };
+export const statSignals = ['view', 'open', 'share', 'rewatch', 'hide', 'play'];
 
 const tasteFeatureShare = { cat: 0.6, tag: 0.5, author: 0.8, media: 0.25 };
 const tasteLimits = { features: 160, seen: 400, min: -6, max: 12 };
@@ -17,7 +17,7 @@ export function emptyTaste() {
 }
 
 export function emptyStats() {
-  return { impressions: 0, views: 0, completes: 0, skips: 0, dwellMs: 0, opens: 0, shares: 0, rewatches: 0, hides: 0 };
+  return { impressions: 0, views: 0, completes: 0, skips: 0, dwellMs: 0, opens: 0, shares: 0, rewatches: 0, hides: 0, plays: 0 };
 }
 
 const finite = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -137,6 +137,7 @@ export function recordStat(stats, signal) {
   else if (signal.type === 'share') stats.shares += 1;
   else if (signal.type === 'rewatch') stats.rewatches += 1;
   else if (signal.type === 'hide') stats.hides += 1;
+  else if (signal.type === 'play') stats.plays += 1;
   return stats;
 }
 
@@ -150,7 +151,7 @@ export function projectQuality(project, rawStats) {
   const saves = finite(project.saves);
   const comments = Array.isArray(project.comments) ? project.comments.length : finite(project.comments);
   const popularity = Math.min(1, Math.log1p(votes + 2 * saves + 2 * comments + 3 * stats.shares) / Math.log1p(400));
-  const actionRate = Math.min(1, (stats.opens + 2 * stats.shares + stats.rewatches + 1.5) / (stats.impressions + 10));
+  const actionRate = Math.min(1, (stats.opens + 2 * stats.shares + stats.rewatches + 2 * stats.plays + 1.5) / (stats.impressions + 10));
   const score = 0.35 * retention + 0.2 * (1 - Math.min(1, skipRate)) + 0.3 * popularity + 0.15 * actionRate;
   return { score, retention, skipRate: Math.min(1, skipRate), popularity, actionRate, impressions: stats.impressions, averageDwell: stats.impressions ? stats.dwellMs / stats.impressions : 0 };
 }
@@ -161,12 +162,29 @@ function hashUnit(text) {
   return (hash >>> 0) / 4294967296;
 }
 
+// What a person told the feed directly: more of a topic, less of it, or never. Stronger than taste,
+// because it was asked for.
+function prefsScore(features, prefs) {
+  if (!prefs) return 0;
+  let value = 0;
+  for (const feature of features) {
+    if (prefs.more?.includes(feature)) value += 0.45;
+    if (prefs.less?.includes(feature)) value -= 0.55;
+  }
+  return Math.max(-1.2, Math.min(0.9, value));
+}
+
+export function hiddenByPrefs(project, prefs) {
+  return Boolean(prefs?.hidden?.length) && projectFeatures(project).some(feature => prefs.hidden.includes(feature));
+}
+
 export function tasteConfidence(taste) {
   return taste.signals / (taste.signals + 12);
 }
 
 // Orders posts for one person. New people get the best and freshest posts; as signals pile up, taste takes over.
-export function rankFeed(list, { taste = emptyTaste(), stats = {}, now = Date.now(), seed = 1, follows = [], me = '', pinned = '' } = {}) {
+// A fresh update makes a seen post new again; a repost by someone the person follows lifts a post too.
+export function rankFeed(list, { taste = emptyTaste(), stats = {}, now = Date.now(), seed = 1, follows = [], me = '', pinned = '', prefs = null, reposts = null, watching = [] } = {}) {
   const confidence = tasteConfidence(taste);
   const scored = list.map(project => {
     const quality = projectQuality(project, stats[project.id]).score;
@@ -175,21 +193,29 @@ export function rankFeed(list, { taste = emptyTaste(), stats = {}, now = Date.no
     const raw = features.reduce((sum, feature) => sum + (taste.weights[feature] || 0) / (feature.startsWith('tag:') ? Math.sqrt(tagCount) : 1), 0);
     const personal = Math.tanh(raw / 4);
     const ageHours = Math.max(0, (now - (finite(project.createdAt) || now)) / 36e5);
-    const fresh = Math.exp(-ageHours / 96);
     const seen = taste.seen[project.id];
+    const updatedAt = finite(project.lastUpdateAt);
+    const updateHours = updatedAt ? Math.max(0, (now - updatedAt) / 36e5) : Infinity;
+    const freshUpdate = updateHours < 168 && (!seen || seen.last < updatedAt);
+    const fresh = Math.max(Math.exp(-ageHours / 96), freshUpdate ? 0.8 * Math.exp(-updateHours / 72) : 0);
     const hoursSinceSeen = seen ? (now - seen.last) / 36e5 : Infinity;
-    const fatigue = seen ? Math.min(0.95, (0.35 + 0.15 * Math.min(seen.n, 4) + 0.2 * seen.done) * Math.exp(-hoursSinceSeen / 18)) : 0;
+    const fatigue = seen ? Math.min(0.95, (0.35 + 0.15 * Math.min(seen.n, 4) + 0.2 * seen.done) * Math.exp(-hoursSinceSeen / 18)) * (freshUpdate ? 0.3 : 1) : 0;
     const followed = follows.includes(project.handle);
+    const watched = watching.includes(project.id);
+    const reposter = reposts?.get?.(project.id) || '';
     const own = Boolean(me) && project.handle === me;
-    const score = 0.45 * quality + 0.2 * fresh + personal * (0.2 + 0.5 * confidence) + (seen ? 0 : 0.3) + (followed ? 0.2 : 0) - fatigue - (own ? 0.25 : 0) + hashUnit(`${seed}:${project.id}`) * 0.12 + (project.id === pinned ? 100 : 0);
+    const asked = prefsScore(features, prefs);
+    const score = 0.45 * quality + 0.2 * fresh + personal * (0.2 + 0.5 * confidence) + asked + (seen ? 0 : 0.3) + (followed ? 0.2 : 0) + (reposter ? 0.25 : 0) + (freshUpdate && (followed || watched) ? 0.3 : 0) - fatigue - (own ? 0.25 : 0) + hashUnit(`${seed}:${project.id}`) * 0.12 + (project.id === pinned ? 100 : 0);
     let reason = 'discover';
     if (project.id === pinned || own) reason = 'mine';
     else if (!seen && ageHours < 72) reason = 'new';
+    else if (freshUpdate && (watched || followed || seen)) reason = 'update';
+    else if (reposter) reason = 'repost';
     else if (followed) reason = 'follow';
     else if (personal > 0.25 && confidence > 0.25) reason = 'taste';
     else if (seen) reason = 'again';
     else if (quality > 0.5) reason = 'popular';
-    return { project, score, reason, personal, quality };
+    return { project, score, reason, personal, quality, by: reason === 'repost' ? reposter : '' };
   });
   const ranked = [];
   while (scored.length) {

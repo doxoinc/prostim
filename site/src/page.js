@@ -56,8 +56,27 @@ const linkKinds = [
   ['figma', 'Figma', 'pen', ['figma.com']]
 ];
 
+// People paste links without the scheme ("t.me/game", "mygame.ru", "www.site.com"): those get https://.
+// Anything with another scheme (javascript:, mailto:, localhost:) stays rejected.
+export function normalizeUrl(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (/^[a-z][a-z\d+.-]*:/i.test(text)) return safeUrl(text);
+  if (text.startsWith('//')) return safeUrl(`https:${text}`);
+  return /^[\p{L}\d-]+(\.[\p{L}\d-]+)+(:\d+)?([/?#]|$)/u.test(text) ? safeUrl(`https://${text}`) : '';
+}
+
+// A playable build in the browser: only https, so it can be shown inside an https page. The author
+// may paste an embed code (itch.io "Embed game"): the address is taken from its iframe.
+export function cleanDemoUrl(value) {
+  const text = String(value ?? '').slice(0, 3000);
+  const src = /<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/i.exec(text)?.[1];
+  const url = normalizeUrl((src ? src.replace(/&amp;/g, '&') : text).trim().slice(0, 500));
+  return url.startsWith('https://') ? url : '';
+}
+
 export function linkKind(value) {
-  const url = safeUrl(value);
+  const url = normalizeUrl(value);
   if (!url) return null;
   const host = new URL(url).hostname.replace(/^www\./, '');
   const found = linkKinds.find(([, , , domains]) => domains.some(domain => host === domain || host.endsWith(`.${domain}`)));
@@ -122,7 +141,7 @@ export function cleanBlock(block, checkMedia = () => null) {
     return compact({ type: block.type, url: media.url, caption: cleanString(block.caption, 200) });
   }
   if (block.type === 'button') {
-    const url = safeUrl(cleanString(block.url, 500));
+    const url = normalizeUrl(cleanString(block.url, 500));
     return url ? compact({ type: 'button', url, label: cleanString(block.label, 60) }) : null;
   }
   if (block.type === 'divider') return { type: 'divider' };
@@ -136,7 +155,7 @@ export function cleanPage(blocks, checkMedia) {
 export function cleanLinks(values) {
   const links = [];
   for (const value of Array.isArray(values) ? values : []) {
-    const url = safeUrl(cleanString(typeof value === 'string' ? value : value?.url, 500));
+    const url = normalizeUrl(cleanString(typeof value === 'string' ? value : value?.url, 500));
     if (url && !links.includes(url)) links.push(url);
   }
   return links.slice(0, POST_LINK_LIMIT);
@@ -152,6 +171,7 @@ export function cleanPostFields(source, checkMedia) {
     ai: body.ai === true,
     madeWith: (Array.isArray(body.madeWith) ? body.madeWith : String(body.madeWith ?? '').split(',')).map(item => cleanString(item, 24)).filter(Boolean).slice(0, 6),
     links: cleanLinks(body.links),
+    demo: cleanDemoUrl(body.demo),
     theme: cleanTheme(body.theme),
     page: cleanPage(body.page, checkMedia)
   };

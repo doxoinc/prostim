@@ -8,12 +8,17 @@ import { HttpError, fail, sha256, token, hashPassword, verifyPassword, pairingCo
 import { trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
 import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
-import { cleanPostFields } from '../src/page.js';
+import { cleanDemoUrl, cleanPostFields, normalizeUrl } from '../src/page.js';
 import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 import { codeLetter, createMailer } from './mail.mjs';
 import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
 import { boostPlan, boostPrice, plusPlan } from '../src/ads.js';
+import { cleanFeedPrefs, commentDigest, reportReasons } from '../src/social.js';
+import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
+import { vapidKeys } from './push.mjs';
+import { embeddable, linkDraft, safeFetch } from './linkpreview.mjs';
+import { aiAvailable, aiCommentSummary, aiPostDraft } from './ai.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -31,6 +36,41 @@ const mailer = createMailer(process.env, DATA_DIR);
 const REQUIRE_EMAIL = process.env.REQUIRE_EMAIL ? process.env.REQUIRE_EMAIL === '1' : mailer.real;
 const D = db.data;
 seed();
+migrate();
+
+// Keys and lists added after the first pilot data was written.
+function migrate() {
+  for (const key of ['notifications', 'pushSubs', 'blocks', 'feedPrefs', 'secrets']) D[key] ||= {};
+  D.reports ||= [];
+  for (const project of D.projects) {
+    for (const comment of project.comments) comment.id ||= randomUUID();
+    project.updates ||= [];
+    project.watchers ||= [];
+    project.reposts ||= [];
+  }
+  vapidKeys(process.env, D.secrets);
+  db.save();
+}
+
+const notifier = createNotifier({
+  D, env: process.env,
+  save: () => db.save(),
+  live: (userIds, event, data) => pushTo(userIds, event, data),
+  keys: () => vapidKeys(process.env, D.secrets),
+  get subject() { return process.env.PUSH_SUBJECT || D.secrets.pushSubject || 'mailto:noreply@example.com'; },
+  nameOf: userId => D.users[userId]?.name || 'Кто-то',
+  projectTitle: projectId => D.projects.find(project => project.id === projectId)?.title || 'проект'
+});
+
+/* Blocks: either side of a block stops seeing and reaching the other */
+
+const blockedBy = (userId, otherId) => Boolean(userId && otherId) && (D.blocks[userId] || []).includes(otherId);
+const blockedEither = (left, right) => blockedBy(left, right) || blockedBy(right, left);
+
+function visibleTo(project, meId) {
+  if (project.ownerId === meId) return true;
+  return !project.flagged && !blockedEither(meId, project.ownerId);
+}
 
 /* Seed: official account, demo authors and their sample projects */
 
@@ -135,7 +175,18 @@ function projectView(project, meId) {
     votes: (project.seedVotes || 0) + project.votes.length - Number(voted),
     saves: project.saves.length,
     stats: cleanStats(D.feedStats[project.id]),
-    comments: project.comments.map(comment => ({ ...personRef(comment.userId, comment.name), text: comment.text, time: comment.time || '', createdAt: comment.createdAt }))
+    demoBlocked: Boolean(project.demoBlocked),
+    lastUpdateAt: project.lastUpdateAt || 0,
+    updates: (project.updates || []).map(update => ({ id: update.id, title: update.title, text: update.text || '', version: update.version || '', image: update.image || '', createdAt: update.createdAt })),
+    watchers: (project.watchers || []).length,
+    reposts: (project.reposts || []).length,
+    reposters: (project.reposts || []).slice(-30).map(id => D.users[id]?.handle).filter(Boolean),
+    flagged: project.ownerId === meId && Boolean(project.flagged),
+    comments: project.comments.filter(comment => !comment.hidden && !blockedEither(meId, comment.userId)).map(comment => ({
+      id: comment.id, ...personRef(comment.userId, comment.name), text: comment.text || '', time: comment.time || '', createdAt: comment.createdAt,
+      likes: (comment.likes || []).length, liked: Boolean(meId && (comment.likes || []).includes(meId)), replyTo: comment.replyTo || '',
+      voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId)
+    }))
   };
 }
 
@@ -163,7 +214,8 @@ function threadsFor(meId) {
       id: user.handle, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', official: Boolean(user.official),
       unread: list.filter(message => message.to === meId && message.createdAt > (reads[other] || 0)).length,
       lastAt: list[list.length - 1].createdAt,
-      messages: list.map(message => ({ id: message.id, from: message.from === meId ? 'me' : 'them', text: message.text, image: message.image || '', sticker: message.sticker || '', reactions: reactionSummary(message.reactions, meId), createdAt: message.createdAt }))
+      blocked: blockedBy(meId, other), blockedMe: blockedBy(other, meId),
+      messages: list.map(message => ({ id: message.id, from: message.from === meId ? 'me' : 'them', text: message.text, image: message.image || '', sticker: message.sticker || '', project: message.project || '', reactions: reactionSummary(message.reactions, meId), createdAt: message.createdAt }))
     };
   }).sort((left, right) => right.lastAt - left.lastAt);
 }
@@ -688,6 +740,7 @@ on('PATCH', '/api/me', async ({ user, body }) => {
     user.initials = initialsOf(name);
   }
   if (body.bio !== undefined) user.bio = cleanText(body.bio, 300);
+  if (body.notify && typeof body.notify === 'object') user.notify = cleanNotifyPrefs(body.notify, notifyPrefs(user));
   if (body.avatar !== undefined) user.avatar = body.avatar ? ownedUpload(body.avatar, user, 'image').url : '';
   db.save();
   return { me: publicUser(user) };
@@ -699,7 +752,7 @@ on('GET', '/api/bootstrap', async ({ user }) => {
   return {
     me: publicUser(user, stats),
     users: Object.values(D.users).map(item => publicUser(item, stats)),
-    projects: D.projects.map(project => projectView(project, meId)),
+    projects: D.projects.filter(project => visibleTo(project, meId)).map(project => projectView(project, meId)),
     topics: D.topics.map(topicView),
     threads: meId ? threadsFor(meId) : [],
     applications: meId ? D.applications.filter(item => item.userId === meId) : [],
@@ -709,10 +762,15 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
-    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0 } : null,
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id) } : null,
+    activity: meId ? { unread: notifier.unread(meId) } : { unread: 0 },
+    watching: meId ? D.projects.filter(project => (project.watchers || []).includes(meId)).map(project => project.id) : [],
+    reposted: meId ? D.projects.filter(project => (project.reposts || []).includes(meId)).map(project => project.id) : [],
+    blocked: meId ? (D.blocks[meId] || []).map(id => D.users[id]?.handle).filter(Boolean) : [],
+    feedPrefs: meId ? cleanFeedPrefs(D.feedPrefs[meId]) : null,
     ads: adsFor(user),
     promotions: meId ? D.promotions.filter(item => item.ownerId === meId && item.status !== 'canceled').map(promotionView) : [],
-    config: { email: mailer.configured, requireEmail: REQUIRE_EMAIL, providers: oauthProviders().map(id => ({ id, label: oauthLabel(id) })), payments: paymentsMode() }
+    config: { email: mailer.configured, requireEmail: REQUIRE_EMAIL, providers: oauthProviders().map(id => ({ id, label: oauthLabel(id) })), payments: paymentsMode(), push: vapidKeys(process.env, D.secrets).publicKey, ai: aiAvailable(process.env) }
   };
 });
 
@@ -744,7 +802,7 @@ function videoLink(value) {
   return ['youtube.com', 'youtu.be', 'vimeo.com', 'rutube.ru', 'vk.com', 'vkvideo.ru', 'store.steampowered.com', 'twitch.tv'].includes(host) ? url : '';
 }
 
-const uploadLimits = { image: 4 * 1024 * 1024, gif: 8 * 1024 * 1024, video: 40 * 1024 * 1024 };
+const uploadLimits = { image: 4 * 1024 * 1024, gif: 8 * 1024 * 1024, video: 40 * 1024 * 1024, audio: 3 * 1024 * 1024 };
 const uploadLimit = limiter(60, 60 * 60 * 1000);
 
 function sniffMedia(bytes) {
@@ -757,24 +815,34 @@ function sniffMedia(bytes) {
   return null;
 }
 
+// Voice comments: what MediaRecorder writes (WebM/Opus in Chrome and Firefox, MP4/AAC in Safari).
+function sniffAudio(bytes) {
+  if (bytes.subarray(0, 4).toString('hex') === '1a45dfa3') return ['audio', 'weba'];
+  if (bytes.subarray(4, 8).toString() === 'ftyp') return ['audio', 'm4a'];
+  if (bytes.subarray(0, 4).toString() === 'OggS') return ['audio', 'ogg'];
+  if (bytes.subarray(0, 3).toString() === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0)) return ['audio', 'mp3'];
+  if (bytes.subarray(0, 4).toString() === 'RIFF' && bytes.subarray(8, 12).toString() === 'WAVE') return ['audio', 'wav'];
+  return null;
+}
+
 // Raw upload: the body is the file itself. Only image/* and video/* content types are accepted,
 // which a cross-site form cannot send without a CORS preflight.
 on('POST', '/api/uploads', async ({ user, request }) => {
   needUser(user);
   const declared = String(request.headers['content-type'] || '');
-  const kind = declared.startsWith('video/') ? 'video' : declared.startsWith('image/') ? 'image' : fail(415, 'Можно загружать только картинки и видео');
+  const kind = declared.startsWith('video/') ? 'video' : declared.startsWith('image/') ? 'image' : declared.startsWith('audio/') ? 'audio' : fail(415, 'Можно загружать только картинки, видео и голосовые');
   if (!uploadLimit(user.id)) fail(429, 'Слишком много загрузок, подожди немного');
   const limit = declared.startsWith('image/gif') ? uploadLimits.gif : uploadLimits[kind];
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > limit) fail(413, kind === 'video' ? 'Видео больше 40 МБ — сожми его или дай ссылку на YouTube' : limit === uploadLimits.gif ? 'GIF больше 8 МБ' : 'Картинка больше 4 МБ');
+    if (size > limit) fail(413, kind === 'video' ? 'Видео больше 40 МБ — сожми его или дай ссылку на YouTube' : kind === 'audio' ? 'Голосовое длиннее двух минут' : limit === uploadLimits.gif ? 'GIF больше 8 МБ' : 'Картинка больше 4 МБ');
     chunks.push(chunk);
   }
   const bytes = Buffer.concat(chunks);
-  const sniffed = sniffMedia(bytes);
-  if (!sniffed || sniffed[0] !== kind) fail(400, kind === 'video' ? 'Нужен MP4, MOV или WebM' : 'Нужна картинка JPEG, PNG, WebP или GIF');
+  const sniffed = kind === 'audio' ? sniffAudio(bytes) : sniffMedia(bytes);
+  if (!sniffed || sniffed[0] !== kind) fail(400, kind === 'video' ? 'Нужен MP4, MOV или WebM' : kind === 'audio' ? 'Голосовое не распознано' : 'Нужна картинка JPEG, PNG, WebP или GIF');
   if (sniffed[1] === 'gif' ? size > uploadLimits.gif : size > uploadLimits[kind]) fail(413, 'Файл слишком большой');
   const name = `${sniffed[0][0]}-${randomUUID().slice(0, 18)}.${sniffed[1]}`;
   await db.putUpload(name, bytes);
@@ -856,10 +924,14 @@ on('POST', '/api/projects', async ({ user, request }) => {
     category: ['games', 'apps', 'tools'].includes(body.category) ? body.category : 'apps',
     url: fields.links[0] || safeHttpUrl(cleanText(body.url, 500)), scene: legacyScenes.includes(body.scene) ? body.scene : '',
     slides: 1, images: media.filter(item => item.type === 'image').map(item => item.url), media, video: videoLink(body.video), tags: postTags(body.tags),
-    createdAt: Date.now(), seedVotes: 0, votes: [], saves: [], comments: [], ...fields
+    createdAt: Date.now(), seedVotes: 0, votes: [], saves: [], comments: [], updates: [], watchers: [], reposts: [], ...fields
   };
   D.projects.push(project);
   db.save();
+  checkDemo(project, request);
+  for (const [followerId, list] of Object.entries(D.follows)) {
+    if (list.includes(user.id)) notifier.notify(followerId, { type: 'post', actorId: user.id, projectId: project.id, url: `/#/project/${project.id}` });
+  }
   return { project: projectView(project, user.id) };
 });
 
@@ -892,6 +964,7 @@ on('PATCH', '/api/projects/:id', async ({ user, params, request }) => {
   const summary = cleanText(body.summary, 160);
   if (!title || !summary) fail(400, 'Нужны название и короткое описание');
   const current = projectMedia(project);
+  const previousDemo = project.demo || '';
   const media = postMedia(body.media, user, current);
   const pageFiles = new Set(Array.isArray(project.page) ? project.page.map(block => block?.url).filter(Boolean) : []);
   const fields = cleanPostFields(body, block => pageFiles.has(block.url) ? { url: block.url, type: block.type } : ownedUpload(block.url, user));
@@ -900,9 +973,18 @@ on('PATCH', '/api/projects/:id', async ({ user, params, request }) => {
     url: fields.links[0] || '', media, images: media.filter(item => item.type === 'image').map(item => item.url), video: videoLink(body.video), tags: postTags(body.tags),
     updatedAt: Date.now(), ...fields
   });
+  if (fields.demo !== previousDemo) { delete project.demoBlocked; checkDemo(project, request); }
   db.save();
   return { project: projectView(project, user.id) };
 });
+
+// A demo is shown inside the post; if its site forbids being framed, the post opens it in a new tab.
+function checkDemo(project, request) {
+  if (!project.demo) return;
+  embeddable(project.demo, process.env, siteOrigin(request)).then(ok => {
+    if (ok === false) { project.demoBlocked = true; db.save(); }
+  }).catch(() => {});
+}
 
 function requireProject(id) {
   return D.projects.find(project => project.id === id) || fail(404, 'Проект не найден');
@@ -924,6 +1006,7 @@ on('POST', '/api/projects/:id/vote', async ({ user, params }) => {
   const voted = !project.votes.includes(user.id);
   project.votes = voted ? [...project.votes, user.id] : project.votes.filter(id => id !== user.id);
   db.save();
+  if (voted) notifier.notify(project.ownerId, { type: 'like', actorId: user.id, projectId: project.id, url: `/#/project/${project.id}` });
   return { voted };
 });
 
@@ -936,15 +1019,261 @@ on('POST', '/api/projects/:id/save', async ({ user, params }) => {
   return { saved };
 });
 
+const commentLimit = limiter(30, 60 * 1000);
+
+function requireComment(project, id) {
+  return project.comments.find(comment => comment.id === id && !comment.hidden) || fail(404, 'Комментарий не найден');
+}
+
 on('POST', '/api/projects/:id/comments', async ({ user, params, body }) => {
   needUser(user);
   const project = requireProject(params.id);
+  if (!visibleTo(project, user.id)) fail(404, 'Проект не найден');
+  if (blockedBy(project.ownerId, user.id)) fail(403, 'Автор ограничил комментарии для тебя');
+  if (!commentLimit(user.id)) fail(429, 'Слишком часто, подожди немного');
   const text = cleanText(body.text, 1200);
-  if (!text) fail(400, 'Пустой комментарий');
-  project.comments.push({ id: randomUUID(), userId: user.id, text, createdAt: Date.now() });
+  const voice = body.voice ? ownedUpload(body.voice, user, 'audio').url : '';
+  if (!text && !voice) fail(400, 'Пустой комментарий');
+  const parent = body.replyTo ? requireComment(project, String(body.replyTo)) : null;
+  const root = parent?.replyTo ? project.comments.find(comment => comment.id === parent.replyTo) || parent : parent;
+  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], ...(root ? { replyTo: root.id } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
+  project.comments.push(comment);
   db.save();
-  if (project.ownerId !== user.id) pushTo([project.ownerId], 'notice', { text: `${user.name} прокомментировал «${project.title}»` });
+  const url = `/#/project/${project.id}`;
+  const snippet = text || 'Голосовой комментарий';
+  if (parent?.userId && parent.userId !== user.id) notifier.notify(parent.userId, { type: 'reply', actorId: user.id, projectId: project.id, snippet, url });
+  if (project.ownerId !== parent?.userId) notifier.notify(project.ownerId, { type: 'comment', actorId: user.id, projectId: project.id, snippet, url });
+  return { project: projectView(project, user.id), comment: comment.id };
+});
+
+on('POST', '/api/projects/:id/comments/:cid/like', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  const comment = requireComment(project, params.cid);
+  comment.likes ||= [];
+  const liked = !comment.likes.includes(user.id);
+  comment.likes = liked ? [...comment.likes, user.id] : comment.likes.filter(id => id !== user.id);
+  db.save();
+  if (liked && comment.userId) notifier.notify(comment.userId, { type: 'comment-like', actorId: user.id, projectId: project.id, snippet: comment.text || 'голосовой', url: `/#/project/${project.id}` });
+  return { liked, likes: comment.likes.length };
+});
+
+on('POST', '/api/projects/:id/comments/:cid/pin', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (project.ownerId !== user.id) fail(403, 'Закреплять может только автор проекта');
+  const comment = requireComment(project, params.cid);
+  const pinned = project.pinnedComment !== comment.id;
+  project.pinnedComment = pinned ? comment.id : '';
+  db.save();
+  if (pinned && comment.userId) notifier.notify(comment.userId, { type: 'pin', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
   return { project: projectView(project, user.id) };
+});
+
+on('DELETE', '/api/projects/:id/comments/:cid', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  const comment = requireComment(project, params.cid);
+  if (comment.userId !== user.id && project.ownerId !== user.id) fail(403, 'Удалить может автор комментария или проекта');
+  project.comments = project.comments.filter(item => item.id !== comment.id && item.replyTo !== comment.id);
+  if (project.pinnedComment === comment.id) project.pinnedComment = '';
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+// "О чём пишут": Claude retells the thread when ANTHROPIC_API_KEY is set, otherwise a plain digest.
+// Kept until the thread grows.
+on('GET', '/api/projects/:id/comments/summary', async ({ user, params }) => {
+  const project = requireProject(params.id);
+  const comments = project.comments.filter(comment => !comment.hidden).map(comment => ({ ...comment, name: personRef(comment.userId, comment.name).name }));
+  const cached = project.digest;
+  if (cached && cached.count === comments.length && (cached.source === 'ai' || !aiAvailable(process.env))) return cached;
+  let digest = null;
+  if (aiAvailable(process.env) && comments.filter(comment => comment.text).length >= 3) {
+    const result = await aiCommentSummary(process.env, project, comments.filter(comment => comment.text));
+    if (result) digest = { ...result, source: 'ai' };
+  }
+  digest ||= { ...commentDigest(comments), source: 'auto' };
+  project.digest = { ...digest, count: comments.length, at: Date.now() };
+  db.save();
+  return project.digest;
+});
+
+/* Project updates: a devlog in episodes, and people who follow one project */
+
+on('POST', '/api/projects/:id/updates', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (project.ownerId !== user.id) fail(403, 'Обновления пишет только автор');
+  const title = cleanText(body.title, 100);
+  if (!title) fail(400, 'Нужен заголовок обновления');
+  const image = body.image ? ownedUpload(body.image, user, 'image').url : '';
+  const update = { id: randomUUID().slice(0, 12), title, text: cleanText(body.text, 2000), version: cleanText(body.version, 24), ...(image ? { image } : {}), createdAt: Date.now() };
+  project.updates = [update, ...(project.updates || [])].slice(0, 50);
+  project.lastUpdateAt = update.createdAt;
+  db.save();
+  for (const id of project.watchers || []) notifier.notify(id, { type: 'update', actorId: user.id, projectId: project.id, snippet: update.version ? `${update.version} · ${title}` : title, url: `/#/project/${project.id}` });
+  return { project: projectView(project, user.id) };
+});
+
+on('DELETE', '/api/projects/:id/updates/:uid', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (project.ownerId !== user.id) fail(403, 'Удалить может только автор');
+  project.updates = (project.updates || []).filter(update => update.id !== params.uid);
+  project.lastUpdateAt = project.updates[0]?.createdAt || 0;
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+on('POST', '/api/projects/:id/watch', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (project.ownerId === user.id) fail(400, 'Это твой проект');
+  project.watchers ||= [];
+  const watching = !project.watchers.includes(user.id);
+  project.watchers = watching ? [...project.watchers, user.id] : project.watchers.filter(id => id !== user.id);
+  db.save();
+  return { watching, watchers: project.watchers.length };
+});
+
+on('POST', '/api/projects/:id/repost', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (!visibleTo(project, user.id)) fail(404, 'Проект не найден');
+  if (project.ownerId === user.id) fail(400, 'Свой проект репостить не нужно — он и так у тебя');
+  project.reposts ||= [];
+  const reposted = !project.reposts.includes(user.id);
+  project.reposts = reposted ? [...project.reposts, user.id] : project.reposts.filter(id => id !== user.id);
+  db.save();
+  if (reposted) notifier.notify(project.ownerId, { type: 'repost', actorId: user.id, projectId: project.id, url: `/#/project/${project.id}` });
+  return { reposted, project: projectView(project, user.id) };
+});
+
+/* Safety: reports and blocks */
+
+const REPORT_HIDE = Math.max(2, Number(process.env.REPORT_HIDE) || 5);
+const reportLimit = limiter(20, 60 * 60 * 1000);
+
+on('POST', '/api/reports', async ({ user, body }) => {
+  needUser(user);
+  if (!reportLimit(user.id)) fail(429, 'Слишком много жалоб подряд');
+  const kind = ['project', 'comment', 'user', 'message'].includes(body.kind) ? body.kind : fail(400, 'Непонятно, на что жалоба');
+  const reason = reportReasons.some(([key]) => key === body.reason) ? body.reason : fail(400, 'Выбери причину');
+  let targetId = '';
+  let projectId = '';
+  let offenderId = '';
+  if (kind === 'project') { const project = requireProject(String(body.id)); targetId = project.id; projectId = project.id; offenderId = project.ownerId; }
+  else if (kind === 'comment') { const project = requireProject(String(body.project)); const comment = requireComment(project, String(body.id)); targetId = comment.id; projectId = project.id; offenderId = comment.userId || ''; }
+  else if (kind === 'user') { const target = userByHandle(String(body.id)) || fail(404, 'Пользователь не найден'); targetId = target.id; offenderId = target.id; }
+  else { const message = D.messages.find(item => item.id === String(body.id) && item.to === user.id) || fail(404, 'Сообщение не найдено'); targetId = message.id; offenderId = message.from; }
+  if (offenderId === user.id) fail(400, 'На себя пожаловаться нельзя');
+  if (D.reports.some(item => item.reporterId === user.id && item.kind === kind && item.targetId === targetId)) return { ok: true, duplicate: true };
+  const report = { id: randomUUID(), kind, targetId, projectId, offenderId, reporterId: user.id, reason, note: cleanText(body.note, 500), at: Date.now(), status: 'open' };
+  D.reports.push(report);
+  const reporters = new Set(D.reports.filter(item => item.kind === kind && item.targetId === targetId).map(item => item.reporterId)).size;
+  let hidden = false;
+  if (kind === 'project' && reporters >= REPORT_HIDE) { requireProject(projectId).flagged = true; hidden = true; }
+  if (kind === 'comment' && reporters >= Math.max(2, REPORT_HIDE - 2)) { requireComment(requireProject(projectId), targetId).hidden = true; hidden = true; }
+  db.save();
+  if (process.env.REPORTS_EMAIL && mailer.real) {
+    const label = reportReasons.find(([key]) => key === reason)[1];
+    mailer.send({ to: process.env.REPORTS_EMAIL, subject: `Жалоба: ${label}`, text: `Жалоба на ${kind} ${targetId}${projectId ? ` (проект ${projectId})` : ''}\nПричина: ${label}\n${report.note}\nОт: @${user.handle}\nВсего жалоб на это: ${reporters}${hidden ? ' — скрыто автоматически' : ''}` }).catch(() => {});
+  }
+  return { ok: true, hidden };
+});
+
+on('POST', '/api/users/:handle/block', async ({ user, params }) => {
+  needUser(user);
+  const target = userByHandle(params.handle) || fail(404, 'Пользователь не найден');
+  if (target.id === user.id || target.official) fail(400, 'Этот аккаунт нельзя заблокировать');
+  const list = D.blocks[user.id] || [];
+  const blocked = !list.includes(target.id);
+  D.blocks[user.id] = blocked ? [...list, target.id] : list.filter(id => id !== target.id);
+  if (blocked) {
+    D.follows[user.id] = (D.follows[user.id] || []).filter(id => id !== target.id);
+    D.follows[target.id] = (D.follows[target.id] || []).filter(id => id !== user.id);
+  }
+  db.save();
+  return { blocked };
+});
+
+on('POST', '/api/me/feed-prefs', async ({ user, body }) => {
+  needUser(user);
+  D.feedPrefs[user.id] = cleanFeedPrefs(body);
+  db.save();
+  return { feedPrefs: D.feedPrefs[user.id] };
+});
+
+/* Notifications: the in-app list and web push */
+
+on('GET', '/api/notifications', async ({ user }) => {
+  needUser(user);
+  return { items: notifier.list(user.id), unread: notifier.unread(user.id) };
+});
+
+on('POST', '/api/notifications/read', async ({ user }) => {
+  needUser(user);
+  notifier.markRead(user.id);
+  return { unread: 0 };
+});
+
+on('POST', '/api/push/subscribe', async ({ request, user, body }) => {
+  needUser(user);
+  const origin = siteOrigin(request);
+  if (!D.secrets.pushSubject && origin.startsWith('https://')) { D.secrets.pushSubject = origin; db.save(); }
+  const result = notifier.subscribe(user, body);
+  if (result.error) fail(400, result.error);
+  return result;
+});
+
+on('POST', '/api/push/unsubscribe', async ({ user, body }) => {
+  needUser(user);
+  return notifier.unsubscribe(user, String(body.endpoint || ''));
+});
+
+on('POST', '/api/push/test', async ({ user }) => {
+  needUser(user);
+  return notifier.test(user);
+});
+
+/* Post from a link: a draft from Steam, GitHub, itch.io, stores and sites */
+
+const previewLimit = limiter(30, 10 * 60 * 1000);
+
+on('POST', '/api/link-preview', async ({ user, body }) => {
+  needUser(user);
+  if (!previewLimit(user.id)) fail(429, 'Слишком часто, подожди немного');
+  const url = normalizeUrl(cleanText(body.url, 500)) || fail(400, 'Вставь ссылку на страницу проекта');
+  let draft;
+  try { draft = await linkDraft(url, process.env); } catch (error) { fail(422, `Не получилось прочитать страницу: ${error.message}`); }
+  const polished = await aiPostDraft(process.env, draft);
+  const { text, ...result } = draft;
+  if (polished) Object.assign(result, { summary: polished.summary || result.summary, page: polished.page.length ? polished.page : result.page, tags: polished.tags.length ? polished.tags : result.tags, ai: true });
+  return { draft: result };
+});
+
+// Pictures of a draft come from other sites: the server copies them, so the post keeps working.
+on('POST', '/api/uploads/remote', async ({ user, body }) => {
+  needUser(user);
+  if (!uploadLimit(user.id)) fail(429, 'Слишком много загрузок, подожди немного');
+  const url = safeHttpUrl(cleanText(body.url, 1000)) || fail(400, 'Нет ссылки на картинку');
+  let file;
+  try { file = await safeFetch(url, { env: process.env, accept: 'image/*', maxBytes: uploadLimits.gif, timeout: 10000 }); } catch (error) { fail(422, `Картинка не загрузилась: ${error.message}`); }
+  const sniffed = sniffMedia(file.bytes);
+  if (!sniffed || sniffed[0] !== 'image') fail(415, 'По ссылке не картинка');
+  if (sniffed[1] !== 'gif' && file.bytes.length > uploadLimits.image) fail(413, 'Картинка больше 4 МБ');
+  const name = `i-${randomUUID().slice(0, 18)}.${sniffed[1]}`;
+  await db.putUpload(name, file.bytes);
+  D.uploads[name] = { userId: user.id, type: 'image', size: file.bytes.length, createdAt: Date.now() };
+  db.save();
+  return { url: `/uploads/${name}`, type: 'image' };
+});
+
+on('POST', '/api/demo-check', async ({ request, user, body }) => {
+  needUser(user);
+  const url = cleanDemoUrl(body.url) || fail(400, 'Нужна ссылка https:// на веб-версию');
+  return { url, embeddable: await embeddable(url, process.env, siteOrigin(request)) };
 });
 
 /* Feed attention: what people watch, skip and come back to */
@@ -990,8 +1319,10 @@ on('POST', '/api/users/:handle/follow', async ({ user, params }) => {
   if (target.id === user.id) fail(400, 'Нельзя подписаться на себя');
   const list = D.follows[user.id] || [];
   const following = !list.includes(target.id);
+  if (following && blockedEither(user.id, target.id)) fail(403, 'Подписка недоступна: один из вас заблокировал другого');
   D.follows[user.id] = following ? [...list, target.id] : list.filter(id => id !== target.id);
   db.save();
+  if (following) notifier.notify(target.id, { type: 'follow', actorId: user.id, url: `/#/u/${user.handle}` });
   return { following, user: publicUser(target) };
 });
 
@@ -1071,14 +1402,18 @@ on('POST', '/api/messages/:handle', async ({ user, params, body }) => {
   needUser(user);
   const target = userByHandle(params.handle) || fail(404, 'Пользователь не найден');
   if (target.id === user.id) fail(400, 'Нельзя написать себе');
+  if (blockedBy(target.id, user.id)) fail(403, 'Этот человек ограничил сообщения');
+  if (blockedBy(user.id, target.id)) fail(403, 'Ты заблокировал этого человека — разблокируй его в профиле');
   const text = cleanText(body.text, 2000);
   const sticker = stickerById(body.sticker)?.id || '';
   const image = body.image ? ownedUpload(body.image, user, 'image').url : '';
-  if (!text && !sticker && !image) fail(400, 'Пустое сообщение');
-  D.messages.push({ id: randomUUID(), from: user.id, to: target.id, text, ...(image ? { image } : {}), ...(sticker ? { sticker } : {}), createdAt: Date.now() });
+  const shared = body.project ? D.projects.find(project => project.id === String(body.project) && visibleTo(project, user.id)) || fail(404, 'Проект не найден') : null;
+  if (!text && !sticker && !image && !shared) fail(400, 'Пустое сообщение');
+  D.messages.push({ id: randomUUID(), from: user.id, to: target.id, text, ...(image ? { image } : {}), ...(sticker ? { sticker } : {}), ...(shared ? { project: shared.id } : {}), createdAt: Date.now() });
   D.reads[user.id] = { ...(D.reads[user.id] || {}), [target.id]: Date.now() };
   db.save();
   pushTo([target.id], 'dm', { from: user.handle });
+  notifier.notify(target.id, { type: 'message', actorId: user.id, snippet: text || (sticker ? 'Стикер' : image ? 'Картинка' : `Проект «${shared.title}»`), url: `/#/inbox/${user.handle}` });
   return { threads: threadsFor(user.id) };
 });
 
@@ -1355,7 +1690,7 @@ const securityHeaders = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'DENY',
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; media-src 'self' blob:; connect-src 'self' https://api.github.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; media-src 'self' blob: data:; connect-src 'self' https://api.github.com; frame-src https:; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 };
 
 const server = http.createServer(async (request, response) => {

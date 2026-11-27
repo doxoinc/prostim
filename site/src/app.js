@@ -5,8 +5,9 @@ import { trustLevels, levelTier, levelTiers } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
 import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
-import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals } from './recommend.js';
-import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
+import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
+import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons } from './social.js';
+import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
 
 const main = document.querySelector('main');
 const topbar = document.querySelector('#topbar');
@@ -45,6 +46,12 @@ let promptDraft = '';
 let connectionVersion = 0;
 let feedScrollTop = 0;
 let feedObserver = null;
+let activity = { items: [], loaded: false, loading: false }; // the notification list, loaded when opened
+let installPrompt = null; // Chrome's "install app" offer, kept for the button in settings
+let localFeedPrefs = null;
+let prefQuery = '';
+let replyTarget = null; // { projectId, id, name } while answering a comment
+const hiddenLocally = new Set(); // posts ("id") and comments ("c:id") reported in this session
 let adObserver = null; // marks an ad the moment its first pixels scroll in
 let projectOpenedFromApp = false;
 let lastService = 'feed';
@@ -79,7 +86,7 @@ let tasteSaveTimer;
 let feedRefreshing = false;
 let pullState = null;
 let wheelPull = { amount: 0, armed: false, last: 0, timer: null };
-const reasonLabels = { new: ['sparkle', 'Новое'], taste: ['flame', 'Для тебя'], follow: ['users', 'Подписки'], popular: ['up', 'Популярное'], again: ['refresh', 'Снова'], discover: ['search', 'Открытие'], mine: ['user', 'Твой проект'], ad: ['megaphone', 'Реклама'] };
+const reasonLabels = { update: ['bell', 'Обновление'], new: ['sparkle', 'Новое'], taste: ['flame', 'Для тебя'], follow: ['users', 'Подписки'], popular: ['up', 'Популярное'], again: ['refresh', 'Снова'], discover: ['search', 'Открытие'], mine: ['user', 'Твой проект'], ad: ['megaphone', 'Реклама'] };
 try {
   const savedTaste = JSON.parse(storage.getItem(TASTE_KEY) || '{}');
   localTaste = cleanTaste(savedTaste.taste);
@@ -94,7 +101,7 @@ const photos = {
 const categoryNames = { games: 'Игры', apps: 'Приложения', tools: 'Инструменты' };
 const categoryIcons = { games: 'gamepad', apps: 'grid', tools: 'code' };
 const services = [['feed', 'Лента'], ['steam', 'Steam'], ['ai', 'ИИ-мир']];
-const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', me: 'Профиль', u: 'Автор' };
+const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', activity: 'Уведомления', me: 'Профиль', u: 'Автор' };
 const localMe = { handle: 'me', name: 'Вы', author: 'Вы', initials: 'Я', color: '#e5e1d8' };
 const number = new Intl.NumberFormat('ru-RU');
 const money = value => `$${number.format(Math.round(value))}`;
@@ -129,6 +136,8 @@ function applyBootstrap(data) {
   state.saved = data.saved;
   state.follows = data.follows;
   ai.workspaces = data.workspaces || [];
+  remote.feedPrefs = cleanFeedPrefs(data.feedPrefs);
+  remote.activity ||= { unread: 0 };
 }
 
 async function loadBootstrap() {
@@ -156,6 +165,7 @@ function connectEvents() {
   liveEvents.addEventListener('paired', event => { ai.paired = parse(event); toast(`Компьютер «${ai.paired.name}» подключён`); refreshWorkspaces(); });
   liveEvents.addEventListener('dm', () => reloadAll());
   liveEvents.addEventListener('notice', event => toast(parse(event).text || ''));
+  liveEvents.addEventListener('notify', event => onNotify(parse(event)));
 }
 
 function needLogin(reason = '') {
@@ -416,6 +426,7 @@ function render(force = true) {
     else if (view === 'ai') main.innerHTML = renderAi(current);
     else if (view === 'search') main.innerHTML = renderSearch();
     else if (view === 'inbox') main.innerHTML = renderInbox(current.page);
+    else if (view === 'activity') main.innerHTML = renderActivity();
     else if (view === 'me') main.innerHTML = online && !me ? renderAuthPage() : renderProfile(myHandle(), current.page);
     else if (view === 'u') main.innerHTML = isMine(current.page) ? renderProfile(myHandle(), current.extra) : renderProfile(current.page, current.extra);
     else main.innerHTML = renderFeed();
@@ -441,13 +452,14 @@ function markRead(id) {
 function renderChrome(view, current) {
   const isService = services.some(([id]) => id === view);
   if (isService) {
-    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>`;
+    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>${bellHtml()}`;
     placeServicesBar();
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
     const title = thread ? thread.name : view === 'u' ? `@${current.page}` : view === 'me' && online && !me ? 'Вход' : sectionTitles[view];
     const back = thread || view === 'u';
-    topbar.innerHTML = `${back ? `<button class="top-back" data-action="back" aria-label="Назад">${icon('chevronLeft')}</button>` : ''}<span class="top-title">${escapeHtml(title)}</span>`;
+    const end = view === 'activity' ? (online && me ? `<button class="top-bell" data-action="notify-settings" aria-label="Настройки уведомлений">${icon('gear')}</button>` : '') : bellHtml();
+    topbar.innerHTML = `${back ? `<button class="top-back" data-action="back" aria-label="Назад">${icon('chevronLeft')}</button>` : ''}<span class="top-title">${escapeHtml(title)}</span>${end}`;
   }
   const unread = unreadCount();
   const profileLabel = online && !me ? 'Войти' : 'Профиль';
@@ -481,7 +493,7 @@ function placeServicesBar() {
   servicesBarX = x;
 }
 
-const routeOrder = { feed: 0, steam: 1, ai: 2, search: 3, inbox: 4, me: 5, u: 6 };
+const routeOrder = { feed: 0, steam: 1, ai: 2, search: 3, inbox: 4, activity: 4.5, me: 5, u: 6 };
 
 // New content slides in from the side we are moving to; inside a section it just fades up.
 function animateRoute(before, after) {
@@ -533,6 +545,7 @@ function afterRender(view, changedPage, current) {
   if (view === 'steam') countUp();
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
+  if (view === 'activity') loadActivity();
   if (view !== 'feed') {
     if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) { if (view === 'inbox' && route().page) scrollChatEnd(); else window.scrollTo?.(0, 0); }
     return;
@@ -564,6 +577,7 @@ function afterRender(view, changedPage, current) {
           if (entry.target.dataset?.ad) reportAd(entry.target.dataset.ad, 'seen');
           beginView(entry.target);
           extendFeedNear(entry.target);
+          preloadAhead(entry.target);
         } else if (activeView?.item === entry.target) endView();
       }
     }, { root: feed, threshold: 0.55 });
@@ -714,19 +728,20 @@ function savesCount(project) {
 }
 
 function rankOptions(seed, pinned = '') {
-  return { taste: currentTaste(), stats: Object.fromEntries(projects().map(project => [project.id, statsFor(project)])), seed, follows: state.follows, me: myHandle(), pinned };
+  return { taste: currentTaste(), stats: Object.fromEntries(projects().map(project => [project.id, statsFor(project)])), seed, follows: state.follows, me: myHandle(), pinned, prefs: feedPrefs(), reposts: repostMap(), watching: watchingList() };
 }
 
 function feedPool() {
-  const list = filterProjects(projects(), { category: feedCategory });
-  return { list: list.length ? list : projects(), empty: !list.length };
+  const visible = projects().filter(visibleInFeed);
+  const list = filterProjects(visible, { category: feedCategory });
+  return { list: list.length ? list : visible, empty: !list.length };
 }
 
 function buildFeedOrder() {
   const { list, empty } = feedPool();
   const ranked = rankFeed(list, rankOptions(feedSeed, pinnedProjectId));
   const adState = { since: 0, next: 0 };
-  const entries = [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(item => ({ id: item.project.id, reason: item.reason }))];
+  const entries = [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(item => ({ id: item.project.id, reason: item.reason === 'repost' && item.by ? `repost:${item.by}` : item.reason }))];
   feedOrder = { key: feedCategory, rounds: 1, done: false, adState, entries: placeAds(entries, feedAds(), adState) };
 }
 
@@ -830,7 +845,7 @@ function feedEntryHtml(entry) {
   if (entry.sep) return feedEndHtml(entry.sep);
   if (entry.ad === 'plus') return plusFeedItem();
   const project = projectById(entry.id);
-  return project ? feedItem(project, entry.reason, entry.ad) : '';
+  return project && visibleInFeed(project) ? feedItem(project, entry.reason, entry.ad) : '';
 }
 
 function renderFeed() {
@@ -847,6 +862,7 @@ function feedItem(project, reason = '', ad = '') {
 }
 
 function reasonChip(reason) {
+  if (String(reason).startsWith('repost:')) return `<span class="reason-chip repost">${icon('repost')}Репост @${escapeHtml(reason.slice(7))}</span>`;
   const label = reasonLabels[reason];
   return label ? `<span class="reason-chip ${reason}">${icon(label[0])}${label[1]}</span>` : '';
 }
@@ -965,7 +981,26 @@ function mediaInner(project, reason = '') {
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${tagline(project)}</div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
+}
+
+// The post's own call to action, right on the card: «Играть» for a demo that runs in the browser,
+// then the author's first button block or first store link. Before, the button lived only on the post page.
+function postButton(project) {
+  const block = (project.page || []).find(item => item.type === 'button' && linkKind(item.url));
+  if (block) {
+    const link = linkKind(block.url);
+    return { url: link.url, icon: link.icon, label: block.label || linkCta[link.kind] || link.label };
+  }
+  const first = (project.links?.length ? project.links : [project.url]).map(linkKind).find(Boolean);
+  return first ? { url: first.url, icon: first.icon, label: linkCta[first.kind] || 'Открыть сайт' } : null;
+}
+
+function cardCtaHtml(project) {
+  const play = project.demo ? `<button class="card-cta play" data-action="play-demo" data-id="${escapeHtml(project.id)}">${icon('play')}<span>Играть</span></button>` : '';
+  const button = postButton(project);
+  const link = button ? `<a class="card-cta" href="${escapeHtml(button.url)}" target="_blank" rel="noopener noreferrer nofollow ugc" data-action="post-link" data-id="${escapeHtml(project.id)}">${icon(button.icon)}<span>${escapeHtml(button.label)}</span>${icon('external')}</a>` : '';
+  return play || link ? `<div class="card-ctas">${play}${link}</div>` : '';
 }
 
 // Tags shown on cards and pages: no automatic placeholder and no repeat of the stage badge.
@@ -995,7 +1030,7 @@ function railInner(project, pop = '') {
   const saved = state.saved.includes(project.id);
   const followed = state.follows.includes(project.handle);
   const follow = isMine(project.handle) ? '' : `<button class="rail-follow ${followed ? 'on' : ''}" data-action="follow" data-handle="${handle}" aria-pressed="${followed}" aria-label="${followed ? 'Отписаться' : 'Подписаться'}">${icon(followed ? 'check' : 'plus')}</button>`;
-  return `<div class="rail-author"><button class="rail-avatar" data-action="profile" data-handle="${handle}" aria-label="Автор: ${escapeHtml(project.author)}">${ringAvatar(project, '', userByHandle(project.handle), true)}</button>${follow}</div>${railButton('vote', id, 'up', voteCount(project), voted, 'Поддержать', pop === 'vote')}${railButton('comments', id, 'comment', commentCount(project), false, 'Комментарии')}${railButton('save', id, 'bookmark', '', saved, saved ? 'Убрать из сохранённого' : 'Сохранить', pop === 'save')}${railButton('share', id, 'share', '', false, 'Поделиться')}`;
+  return `<div class="rail-author"><button class="rail-avatar" data-action="profile" data-handle="${handle}" aria-label="Автор: ${escapeHtml(project.author)}">${ringAvatar(project, '', userByHandle(project.handle), true)}</button>${follow}</div>${railButton('vote', id, 'up', voteCount(project), voted, 'Поддержать', pop === 'vote')}${railButton('comments', id, 'comment', commentCount(project), false, 'Комментарии')}${railButton('save', id, 'bookmark', '', saved, saved ? 'Убрать из сохранённого' : 'Сохранить', pop === 'save')}${railButton('share', id, 'share', '', false, 'Поделиться')}${railButton('post-menu', id, 'more', '', false, 'Ещё')}`;
 }
 
 function syncRails(pop = {}) {
@@ -1112,8 +1147,14 @@ function thumbsHtml(list) {
 }
 
 function searchResults() {
-  const list = filterProjects(projects(), { search });
-  return list.length ? thumbsHtml(list) : emptyState('search', 'Ничего не нашли');
+  const query = search.trim();
+  if (!query) {
+    const list = filterProjects(projects().filter(visibleInFeed), { search });
+    return list.length ? thumbsHtml(list) : emptyState('search', 'Ничего не нашли');
+  }
+  const found = searchProjects(projects().filter(visibleInFeed), query);
+  if (!found.length) return emptyState('search', 'Ничего не нашли', '', 'Ищем по названиям, тегам, авторам, описаниям, страницам и обновлениям');
+  return `<div class="search-hits">${found.slice(0, 40).map(({ project, snippet }) => `<button class="search-hit" data-action="open-project" data-id="${escapeHtml(project.id)}"><span class="search-thumb">${scene(project, 0, 'still')}</span><span class="search-text"><b>${escapeHtml(project.title)}</b><small>@${escapeHtml(project.handle)} · ${escapeHtml(categoryNames[project.category] || '')}</small><em>${snippet || escapeHtml(project.summary)}</em></span></button>`).join('')}</div>`;
 }
 
 function followPill(handle, className = '') {
@@ -1152,7 +1193,9 @@ function renderInbox(id) {
     if (!thread) return `<div class="page">${emptyState('inbox', 'Чат не найден', '<a class="btn btn-ghost" href="#/inbox">Все чаты</a>')}</div>`;
     const log = thread.all.map(message => bubbleHtml(message, thread)).join('');
     const profile = thread.handle && !thread.official ? `<button class="text-link" data-action="profile" data-handle="${escapeHtml(thread.handle)}">Профиль</button>` : '';
-    const composer = thread.official ? '<p class="chat-hint">Это служебный чат: сюда приходят ответы про заявки</p>' : chatComposerHtml(thread);
+    const composer = thread.official ? '<p class="chat-hint">Это служебный чат: сюда приходят ответы про заявки</p>'
+      : thread.blocked ? `<p class="chat-hint">Ты заблокировал этого человека. <button class="text-link inline" data-action="block" data-handle="${escapeHtml(thread.handle)}">Разблокировать</button></p>`
+      : thread.blockedMe ? '<p class="chat-hint">Этот человек ограничил сообщения</p>' : chatComposerHtml(thread);
     return `<div class="page chat-page"><h1 class="sr-only">Чат: ${escapeHtml(thread.name)}</h1><div class="chat-head">${avatar(thread, 'xl')}<b>${escapeHtml(thread.name)}</b>${profile}</div><div class="chat-log">${log || '<p class="chat-hint">Напиши первое сообщение 👋</p>'}</div>${composer}</div>`;
   }
   const list = threads();
@@ -1161,7 +1204,9 @@ function renderInbox(id) {
     const unread = threadUnread(thread);
     return `<a class="thread-row ${unread ? 'unread' : ''}" href="#/inbox/${encodeURIComponent(thread.id)}">${avatar(thread, 'lg')}<span class="thread-text"><b>${escapeHtml(thread.name)}${thread.official ? ` <span class="verified">${icon('check')}</span>` : ''}</b><small>${last ? `${last.from === 'me' ? 'Вы: ' : ''}${escapeHtml(last.text)}` : 'Нет сообщений'}</small></span><span class="thread-meta"><small>${escapeHtml(last?.time || '')}</small>${unread ? '<i class="dot-badge" aria-label="Новое"></i>' : ''}</span></a>`;
   }).join('');
-  return `<div class="page narrow"><h1 class="sr-only">Входящие</h1><div class="thread-list">${rows || emptyState('inbox', 'Пока нет переписок', '<a class="btn btn-ghost" href="#/search">Найти авторов</a>', 'Напиши автору из его профиля')}</div></div>`;
+  const unreadNotices = activityUnread();
+  const noticeRow = online && me ? `<a class="thread-row activity-row ${unreadNotices ? 'unread' : ''}" href="#/activity"><span class="activity-mark">${icon('bell')}</span><span class="thread-text"><b>Уведомления</b><small>Подписчики, ответы, поддержка и обновления</small></span><span class="thread-meta">${unreadNotices ? `<i class="count-badge">${unreadNotices > 99 ? '99+' : unreadNotices}</i>` : icon('chevronRight')}</span></a>` : '';
+  return `<div class="page narrow"><h1 class="sr-only">Входящие</h1><div class="thread-list">${noticeRow}${rows || emptyState('inbox', 'Пока нет переписок', '<a class="btn btn-ghost" href="#/search">Найти авторов</a>', 'Напиши автору из его профиля')}</div></div>`;
 }
 
 /* Chat: bubbles with pictures, stickers and reactions; a composer with emoji, stickers, screenshots and voice */
@@ -1177,8 +1222,10 @@ function bubbleHtml(message, thread) {
   const sticker = stickerById(message.sticker);
   const image = uploadUrl(message.image);
   const counts = Object.entries(message.reactions?.counts || {});
-  const kind = sticker ? 'is-sticker' : image && !message.text ? 'is-image' : onlyEmoji(message.text) ? 'is-emoji' : '';
-  const body = sticker ? stickerHtml(sticker) : `${image ? `<button class="bubble-image" data-action="view-chat-image" data-src="${image}" aria-label="Открыть картинку"><img src="${image}" alt="Скриншот" loading="lazy"></button>` : ''}${message.text ? `<span class="bubble-text">${escapeHtml(message.text)}</span>` : ''}`;
+  const shared = message.project ? projectById(message.project) : null;
+  const kind = sticker ? 'is-sticker' : message.project && !message.text ? 'is-post' : image && !message.text ? 'is-image' : onlyEmoji(message.text) ? 'is-emoji' : '';
+  const post = message.project ? (shared ? `<button class="bubble-post" data-action="open-project" data-id="${escapeHtml(shared.id)}"><span class="bubble-post-art">${scene(shared, 0, 'still')}</span><span><b>${escapeHtml(shared.title)}</b><small>@${escapeHtml(shared.handle)} · ${escapeHtml(shared.summary)}</small></span></button>` : '<span class="bubble-text muted">Пост удалён</span>') : '';
+  const body = sticker ? stickerHtml(sticker) : `${post}${image ? `<button class="bubble-image" data-action="view-chat-image" data-src="${image}" aria-label="Открыть картинку"><img src="${image}" alt="Скриншот" loading="lazy"></button>` : ''}${message.text ? `<span class="bubble-text">${escapeHtml(message.text)}</span>` : ''}`;
   const reactions = counts.length ? `<div class="reactions">${counts.map(([emoji, count]) => `<button class="reaction ${message.reactions.mine === emoji ? 'on' : ''}" data-action="react" data-id="${escapeHtml(message.id)}" data-emoji="${emoji}" aria-label="Реакция ${emoji}">${emoji}${count > 1 ? `<b>${count}</b>` : ''}</button>`).join('')}</div>` : '';
   const reactable = online && message.id && !thread.official;
   return `<div class="msg-row ${mine ? 'me' : 'them'}" ${reactable ? `data-msg="${escapeHtml(message.id)}"` : ''}><div class="bubble ${mine ? 'me' : 'them'} ${kind}">${body}${message.time ? `<small>${escapeHtml(message.time)}</small>` : ''}</div>${reactions}</div>`;
@@ -1195,6 +1242,7 @@ function chatComposerHtml(thread) {
 async function sendChat(threadId, payload) {
   if (online) {
     remote.threads = (await apiCall('POST', `/api/messages/${encodeURIComponent(threadId)}`, payload)).threads;
+    maybeAskPush('Сообщать о новых сообщениях?');
   } else {
     state.dms[threadId] ||= [];
     state.dms[threadId].push({ text: payload.text || '', sticker: payload.sticker || '', time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) });
@@ -1434,10 +1482,10 @@ function renderProfile(handle, tab) {
       : [[owned.length, 'проектов'], [owned.reduce((sum, project) => sum + voteCount(project), 0), 'поддержали'], [owned.reduce((sum, project) => sum + commentCount(project), 0), 'комментариев']];
   const actions = mine
     ? `<button class="btn btn-primary btn-sm" data-action="publish">${icon('plus')} Проект</button><button class="btn btn-ghost btn-sm" data-action="application">${icon('gamepad')} Заявка в Steam</button>${online ? `<button class="btn btn-ghost btn-sm btn-square" data-action="edit-profile" aria-label="Изменить профиль">${icon('pen')}</button>` : ''}`
-    : `${followPill(handle, 'btn-sm')}${person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(handle)}">${icon('inbox')} Написать</a>`}${online && !person.official ? `<button class="btn btn-ghost btn-sm" data-action="rate" data-handle="${escapeHtml(handle)}">${myRating ? `★ ${myRating.score} · Изменить` : '★ Оценить'}</button>` : ''}`;
+    : `${followPill(handle, 'btn-sm')}${person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(handle)}">${icon('inbox')} Написать</a>`}${online && !person.official ? `<button class="btn btn-ghost btn-sm" data-action="rate" data-handle="${escapeHtml(handle)}">${myRating ? `★ ${myRating.score} · Изменить` : '★ Оценить'}</button><button class="btn btn-ghost btn-sm btn-square" data-action="user-menu" data-handle="${escapeHtml(handle)}" aria-label="Ещё">${icon('more')}</button>` : ''}`;
   const tabs = mine
-    ? [['', 'grid', 'Проекты'], ['saved', 'bookmark', 'Сохранённое'], ['follows', 'users', 'Подписки'], ['applications', 'doc', 'Заявки'], ...(online ? [['reviews', 'comment', 'Отзывы']] : [])]
-    : online ? [['', 'grid', 'Проекты'], ['reviews', 'comment', 'Отзывы']] : [];
+    ? [['', 'grid', 'Проекты'], ['saved', 'bookmark', 'Сохранённое'], ...(online ? [['reposts', 'repost', 'Репосты']] : []), ['follows', 'users', 'Подписки'], ['applications', 'doc', 'Заявки'], ...(online ? [['reviews', 'comment', 'Отзывы']] : [])]
+    : online ? [['', 'grid', 'Проекты'], ['reposts', 'repost', 'Репосты'], ['reviews', 'comment', 'Отзывы']] : [];
   const activeTab = tabs.some(([id]) => id === tab) ? tab : '';
   let content;
   if (activeTab === 'saved') {
@@ -1455,8 +1503,13 @@ function renderProfile(handle, tab) {
     content = applications.length
       ? applications.map((application, index) => `<div class="app-row"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || application.stage || 'Черновик')}${application.createdAt ? ` · ${timeAgo(application.createdAt)}` : ''}</small></span><button class="icon-btn" data-action="download-application" data-index="${index}" aria-label="Скачать заявку">${icon('download')}</button></div>`).join('')
       : emptyState('gamepad', 'Заявок пока нет', `<button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>`);
+  } else if (activeTab === 'reposts') {
+    const shared = projects().filter(project => (project.reposters || []).includes(handle) && visibleInFeed(project));
+    content = shared.length ? thumbsHtml(shared) : emptyState('repost', mine ? 'Делись чужими проектами' : 'Репостов пока нет', '', mine ? 'Кнопка «Поделиться» → «Репост»: твои подписчики увидят пост в ленте' : '');
   } else if (activeTab === 'reviews') {
     content = reviewsHtml(handle);
+  } else if (!mine && blockedList().includes(handle)) {
+    content = `<div class="blocked-note">${icon('ban')}<span>Ты заблокировал @${escapeHtml(handle)}: посты и комментарии скрыты, написать тебе нельзя</span><button class="btn btn-ghost btn-sm" data-action="block" data-handle="${escapeHtml(handle)}">Разблокировать</button></div>`;
   } else {
     content = owned.length ? thumbsHtml(owned) : emptyState('sparkle', mine ? 'Покажи первый проект' : 'Проектов пока нет', mine ? `<button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать</button>` : '');
   }
@@ -1501,7 +1554,10 @@ function accountHtml() {
     ? `<span class="social-btn linked ${escapeHtml(provider.id)}">${providerIcons[provider.id] || ''}<span>${escapeHtml(provider.label)} подключён</span>${icon('check')}</span>`
     : `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || ''}<span>Подключить ${escapeHtml(provider.label)}</span></a>`).join('');
   const login = mail || linked ? `<section class="account-block"><h3>Вход и почта</h3>${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>` : '';
-  return `${login}<section class="account-block"><h3>Подписка</h3>${plusRowHtml()}</section>`;
+  const settings = `<section class="account-block"><h3>Уведомления и лента</h3><button class="plus-row" data-action="notify-settings"><span class="row-mark">${icon('bell')}</span><span><b>Уведомления</b><small>Push, тихие часы и что присылать</small></span>${icon('chevronRight')}</button><button class="plus-row" data-action="feed-prefs"><span class="row-mark">${icon('gear')}</span><span><b>Твоя лента</b><small>Больше, меньше или никогда — по темам и авторам</small></span>${icon('chevronRight')}</button></section>`;
+  const blocked = blockedList();
+  const blockedHtml = blocked.length ? `<section class="account-block"><h3>Заблокированные</h3>${blocked.map(handle => `<div class="account-row">${icon('ban')}<span><b>@${escapeHtml(handle)}</b></span><button class="btn btn-ghost btn-sm" data-action="block" data-handle="${escapeHtml(handle)}">Разблокировать</button></div>`).join('')}</section>` : '';
+  return `${login}${settings}<section class="account-block"><h3>Подписка</h3>${plusRowHtml()}</section>${blockedHtml}`;
 }
 
 function openEditProfile() {
@@ -2203,6 +2259,10 @@ function navigateToProject(id) {
 }
 
 function commentsHtml(project) {
+  return `<div class="comments-zone" data-comments="${escapeHtml(project.id)}">${commentsInner(project)}</div>`;
+}
+
+function oldCommentsHtml(project) {
   const comments = projectComments(project);
   const list = comments.length
     ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
@@ -2234,7 +2294,7 @@ function interestsCardHtml() {
   const chips = top.length
     ? `<div class="taste-chips">${top.map(item => `<span class="taste-chip" style="--w:${Math.max(0.2, item.weight / max).toFixed(2)}">${icon(iconFor(item))}${escapeHtml(label(item))}</span>`).join('')}</div>`
     : `<p class="taste-empty">Листай ленту — интересы появятся сами</p>`;
-  return `<section class="taste-card"><div class="taste-head"><span class="taste-title">${icon('sparkle')} Лента знает тебя</span><span class="taste-level"><i style="width:${confidence}%"></i></span><b>${confidence}%</b>${top.length ? `<button class="icon-btn" data-action="reset-taste" aria-label="Сбросить интересы" title="Сбросить">${icon('refresh')}</button>` : ''}</div>${chips}</section>`;
+  return `<section class="taste-card"><div class="taste-head"><span class="taste-title">${icon('sparkle')} Лента знает тебя</span><span class="taste-level"><i style="width:${confidence}%"></i></span><b>${confidence}%</b><button class="icon-btn" data-action="feed-prefs" aria-label="Настроить ленту" title="Настроить ленту">${icon('gear')}</button>${top.length ? `<button class="icon-btn" data-action="reset-taste" aria-label="Сбросить интересы" title="Сбросить">${icon('refresh')}</button>` : ''}</div>${chips}</section>`;
 }
 
 const linkCta = { steam: 'В Steam', vkplay: 'В VK Play', itch: 'На itch.io', gog: 'В GOG', github: 'Код на GitHub', gitlab: 'Код на GitLab', appstore: 'В App Store', gplay: 'В Google Play', rustore: 'В RuStore', telegram: 'В Telegram', discord: 'В Discord', youtube: 'На YouTube', vk: 'Во VK', figma: 'В Figma' };
@@ -2255,7 +2315,8 @@ function storeGalleryHtml(project) {
 function storeLinksHtml(project) {
   const links = (project.links?.length ? project.links : [project.url]).map(linkKind).filter(Boolean);
   const [first, ...rest] = links;
-  const primary = first
+  const play = project.demo ? `<button class="btn btn-grad store-cta" data-action="play-demo" data-id="${escapeHtml(project.id)}">${icon('play')} Играть в браузере</button>` : '';
+  const primary = play ? play + (first ? externalLink(first.url, 'link-pill', `${icon(first.icon)}${escapeHtml(linkCta[first.kind] || first.label)}`) : '') : first
     ? externalLink(first.url, 'btn btn-primary store-cta', `${icon(first.icon)} ${escapeHtml(linkCta[first.kind] || 'Открыть сайт')}`)
     : project.id === 'contour' ? `<button class="btn btn-primary store-cta" data-action="open-demo">${icon('play')} Попробовать</button>` : '';
   const trailer = safeUrl(project.video) ? externalLink(safeUrl(project.video), 'link-pill', `${icon('play')}Трейлер`) : '';
@@ -2290,7 +2351,7 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}<div class="store-foot">${promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="not-interested" data-id="${projectId}" aria-label="Не интересно" title="Не интересно">${icon('eyeOff')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
 }
@@ -2727,7 +2788,7 @@ function openPublish(projectId = '') {
   const field = (name, attrs) => `<input name="${name}" ${attrs} value="${escapeHtml(project?.[name] ?? '')}">`;
   const label = (iconName, text) => `<p class="field-label">${icon(iconName)}${text}</p>`;
   const steps = ['Основное', 'Детали', 'Страница'];
-  showDialog(`<div class="sheet-body publish"><h2 id="modal-title">${project ? 'Редактировать' : 'Новый проект'}</h2><div class="wizard-steps">${steps.map((name, index) => `<button type="button" class="wstep ${index ? '' : 'on'}" data-action="wizard-step" data-step="${index + 1}"><i>${index + 1}</i><span>${name}</span></button>`).join('')}</div><form id="publish-form" class="form wizard" data-step="1" novalidate><fieldset class="wpane" data-pane="1"><div class="image-pick-wrap">${imagePickerHtml()}</div>${field('title', 'maxlength="80" placeholder="Название" aria-label="Название" required autocomplete="off"')}${field('summary', 'maxlength="160" placeholder="Коротко: что это и для кого" aria-label="Короткое описание" required autocomplete="off"')}${label('grid', 'Раздел')}${chipRadio('category', Object.entries(categoryNames).map(([id, name]) => [id, name, categoryIcons[id]]), project?.category || 'apps')}</fieldset><fieldset class="wpane" data-pane="2">${label('flag', 'Стадия')}${chipChoice('stage', postStages, project?.stage, true)}${label('monitor', 'Платформы')}${chipChoice('platforms', postPlatforms, project?.platforms)}${label('coins', 'Цена')}${chipChoice('pricing', postPricing, project?.pricing, true)}${label('users', 'Кого ищешь')}${chipChoice('seeking', postSeeking, project?.seeking)}<label class="toggle-row"><input type="checkbox" name="ai" ${project?.ai ? 'checked' : ''}><span>${icon('sparkle')}<b>Сделано с помощью ИИ</b><small>Вайбкодинг, генерация кода или графики</small></span><i class="toggle" aria-hidden="true"></i></label><input name="madeWith" maxlength="160" placeholder="Чем сделано: Godot, Unity, React, Claude Code" aria-label="Чем сделано" value="${escapeHtml((project?.madeWith || []).join(', '))}" autocomplete="off">${label('globe', 'Ссылки')}<div class="link-rows">${linkRowsHtml()}</div>${online ? field('video', 'type="url" placeholder="Трейлер на YouTube, VK или Steam" aria-label="Ссылка на трейлер"') : ''}<input name="tags" maxlength="120" placeholder="Теги через запятую: Пиксель-арт, Кооператив" aria-label="Теги" value="${escapeHtml((project?.tags || []).filter(tag => tag !== 'Новый проект').join(', '))}" autocomplete="off"></fieldset><fieldset class="wpane" data-pane="3"><div class="pe-host">${pageEditorHtml()}</div></fieldset><p class="form-error" role="alert"></p><div class="wizard-bar"><button type="button" class="btn btn-ghost wizard-back" data-action="wizard-step" data-step="back">${icon('chevronLeft')}</button><button class="btn btn-primary" type="submit">Далее ${icon('chevronRight')}</button></div></form></div>`, { kind: 'publish', id: project?.id || '' });
+  showDialog(`<div class="sheet-body publish"><h2 id="modal-title">${project ? 'Редактировать' : 'Новый проект'}</h2><div class="wizard-steps">${steps.map((name, index) => `<button type="button" class="wstep ${index ? '' : 'on'}" data-action="wizard-step" data-step="${index + 1}"><i>${index + 1}</i><span>${name}</span></button>`).join('')}</div><form id="publish-form" class="form wizard" data-step="1" novalidate><fieldset class="wpane" data-pane="1">${!project && online ? `<div class="import-box"><p>${icon('wand')}<span><b>Заполнить по ссылке</b><small>Steam, itch.io, GitHub, RuStore, App Store, Google Play или сайт — подтянем название, текст, теги и картинки</small></span></p><div class="import-row"><input name="importUrl" inputmode="url" placeholder="Вставь ссылку на страницу проекта" aria-label="Ссылка для автозаполнения" autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" class="btn btn-grad btn-sm" data-action="import-link">Заполнить</button></div><small class="import-state" aria-live="polite"></small></div>` : ''}<div class="image-pick-wrap">${imagePickerHtml()}</div>${field('title', 'maxlength="80" placeholder="Название" aria-label="Название" required autocomplete="off"')}${field('summary', 'maxlength="160" placeholder="Коротко: что это и для кого" aria-label="Короткое описание" required autocomplete="off"')}${label('grid', 'Раздел')}${chipRadio('category', Object.entries(categoryNames).map(([id, name]) => [id, name, categoryIcons[id]]), project?.category || 'apps')}</fieldset><fieldset class="wpane" data-pane="2">${label('flag', 'Стадия')}${chipChoice('stage', postStages, project?.stage, true)}${label('monitor', 'Платформы')}${chipChoice('platforms', postPlatforms, project?.platforms)}${label('coins', 'Цена')}${chipChoice('pricing', postPricing, project?.pricing, true)}${label('users', 'Кого ищешь')}${chipChoice('seeking', postSeeking, project?.seeking)}<label class="toggle-row"><input type="checkbox" name="ai" ${project?.ai ? 'checked' : ''}><span>${icon('sparkle')}<b>Сделано с помощью ИИ</b><small>Вайбкодинг, генерация кода или графики</small></span><i class="toggle" aria-hidden="true"></i></label><input name="madeWith" maxlength="160" placeholder="Чем сделано: Godot, Unity, React, Claude Code" aria-label="Чем сделано" value="${escapeHtml((project?.madeWith || []).join(', '))}" autocomplete="off">${label('globe', 'Ссылки')}<div class="link-rows">${linkRowsHtml()}</div>${online ? field('video', 'type="url" placeholder="Трейлер на YouTube, VK или Steam" aria-label="Ссылка на трейлер"') : ''}${online ? `${label('play', 'Демо в браузере')}<input name="demo" maxlength="2000" inputmode="url" placeholder="Веб-версия: itch.io, GitHub Pages, свой сайт" aria-label="Ссылка на демо в браузере" value="${escapeHtml(project?.demo || '')}" autocomplete="off" autocapitalize="off" spellcheck="false" data-demo-input><small class="demo-state">Кнопка «Играть» появится на карточке, игра запустится прямо в посте. Можно вставить и код iframe — например «Embed game» с itch.io</small>` : ''}<input name="tags" maxlength="120" placeholder="Теги через запятую: Пиксель-арт, Кооператив" aria-label="Теги" value="${escapeHtml((project?.tags || []).filter(tag => tag !== 'Новый проект').join(', '))}" autocomplete="off"></fieldset><fieldset class="wpane" data-pane="3"><div class="pe-host">${pageEditorHtml()}</div></fieldset><p class="form-error" role="alert"></p><div class="wizard-bar"><button type="button" class="btn btn-ghost wizard-back" data-action="wizard-step" data-step="back">${icon('chevronLeft')}</button><button class="btn btn-primary" type="submit">Далее ${icon('chevronRight')}</button></div></form></div>`, { kind: 'publish', id: project?.id || '' });
   autosizeFields(modal);
 }
 
@@ -2807,9 +2868,16 @@ function editBlockHtml(block, index) {
     body = `<figure class="pb pb-media ${block.uploading ? 'uploading' : ''} ${block.error ? 'failed' : ''}">${media}${state}</figure>${block.error ? '' : input('caption', 'Подпись · необязательно')}`;
   } else if (block.type === 'button') {
     const link = linkKind(block.url);
-    body = `<div class="pb pb-button pe-button">${icon(link?.icon || 'external')}${input('label', link ? link.label : 'Текст кнопки')}</div>${input('url', 'https://… — куда ведёт кнопка', 'type="url" inputmode="url"')}`;
+    body = `<div class="pb pb-button pe-button">${icon(link?.icon || 'external')}${input('label', link ? link.label : 'Текст кнопки')}</div>${input('url', 'Ссылка: сайт, Steam, Telegram…', 'inputmode="url" autocapitalize="off" spellcheck="false"')}${buttonHintHtml(block)}`;
   } else if (block.type === 'divider') body = '<hr class="pb pb-divider">';
   return `<div class="peb ${on}" data-block="${index}">${blockToolsHtml(block, index)}${body}</div>`;
+}
+
+// Under the button's link: where it goes, or why it will not show.
+function buttonHintHtml(block) {
+  const link = linkKind(block.url);
+  if (link) return `<small class="pe-hint ok">${icon('check')} Кнопка ведёт на ${escapeHtml(link.host)} · видна на карточке в ленте и на странице</small>`;
+  return `<small class="pe-hint ${block.url ? 'bad' : ''}">${icon(block.url ? 'close' : 'external')} ${block.url ? 'Не похоже на ссылку — без неё кнопки не будет' : 'Вставь ссылку — без неё кнопка не появится'}</small>`;
 }
 
 function pageEditorHtml() {
@@ -3137,6 +3205,7 @@ document.addEventListener('click', async event => {
   } else if (action === 'publish') openPublish();
   else if (action === 'profile') go(isMine(target.dataset.handle) ? '#/me' : `#/u/${encodeURIComponent(target.dataset.handle)}`);
   else if (action === 'open-project') navigateToProject(id);
+  else if (action === 'post-link') trackSignal(projectById(id), 'open');
   else if (action === 'media') {
     const now = Date.now();
     clearTimeout(tapTimer);
@@ -3150,11 +3219,51 @@ document.addEventListener('click', async event => {
       tapTimer = setTimeout(() => navigateToProject(id), 300);
     }
   } else if (action === 'comments') openComments(id);
-  else if (action === 'share') await shareProject(id);
+  else if (action === 'share') openShare(id);
+  else if (action === 'share-native') await shareProject(id);
+  else if (action === 'share-to') shareTo(id, target.dataset.handle, target);
+  else if (action === 'repost') toggleRepost(id);
+  else if (action === 'copy-link') { copyText(projectLink(id)); trackSignal(projectById(id), 'share'); }
+  else if (action === 'post-menu') openPostMenu(id);
+  else if (action === 'user-menu') openUserMenu(target.dataset.handle);
+  else if (action === 'watch') toggleWatch(id, target);
+  else if (action === 'report') openReport(target.dataset.kind, id || target.dataset.handle, target.dataset.project || '');
+  else if (action === 'block') toggleBlock(target.dataset.handle);
+  else if (action === 'feed-prefs') openFeedPrefs();
+  else if (action === 'pref-set') setPref(target.dataset.key, target.dataset.kind || '', id);
+  else if (action === 'notify-settings') openNotifySettings();
+  else if (action === 'push-on') enablePush(target);
+  else if (action === 'push-off') disablePush();
+  else if (action === 'push-test') {
+    target.disabled = true;
+    apiCall('POST', '/api/push/test').then(result => toast(result.delivered ? 'Отправили — проверь уведомление' : 'Не дошло: выключи и включи уведомления заново')).catch(error => toast(error.message)).finally(() => { target.disabled = false; });
+  }
+  else if (action === 'install-app') installApp();
+  else if (action === 'ask-push-yes') { document.querySelector('.push-ask')?.remove?.(); enablePush(); }
+  else if (action === 'ask-push-no') document.querySelector('.push-ask')?.remove?.();
+  else if (action === 'new-update') openUpdateForm(id);
+  else if (action === 'delete-update') deleteUpdate(id, target.dataset.update);
+  else if (action === 'play-demo') openPlayer(id);
+  else if (action === 'player-full') { const frame = modal.querySelector?.('.player-frame'); (frame?.requestFullscreen || frame?.webkitRequestFullscreen)?.call(frame); }
+  else if (action === 'import-link') importLink(target);
+  else if (action === 'like-comment') likeComment(target.dataset.project, id, target);
+  else if (action === 'reply-comment') { replyTarget = { projectId: target.dataset.project, id, name: target.dataset.name || '' }; rerenderComments(target.dataset.project); modal.querySelector?.('#comment-form input[name="text"]')?.focus?.(); }
+  else if (action === 'reply-cancel') { const projectId = replyTarget?.projectId; replyTarget = null; if (projectId) rerenderComments(projectId); }
+  else if (action === 'pin-comment') commentAction('POST', target.dataset.project, id, 'pin');
+  else if (action === 'delete-comment') { if (confirm('Удалить комментарий? Ответы на него тоже пропадут.')) commentAction('DELETE', target.dataset.project, id, ''); }
+  else if (action === 'digest') showDigest(id, target);
+  else if (action === 'voice-rec') startVoice(id);
+  else if (action === 'voice-stop') stopVoice(true);
+  else if (action === 'voice-cancel') stopVoice(false);
+  else if (action === 'play-voice') playVoice(target);
   else if (action === 'vote' || action === 'save') {
     await toggleProjectFlag(action, id);
     if (target.closest?.('dialog') && action === 'vote') target.setAttribute('aria-pressed', String(state.votes.includes(id)));
-  } else if (action === 'follow') toggleFollow(target.dataset.handle, target);
+  } else if (action === 'follow') {
+    const following = !state.follows.includes(target.dataset.handle);
+    toggleFollow(target.dataset.handle, target);
+    if (following && online && me) maybeAskPush('Сообщать о новых проектах автора?');
+  }
   else if (action === 'slide') changeSlide(id, Number(target.dataset.direction));
   else if (action === 'feed-step') stepFeed(Number(target.dataset.direction));
   else if (action === 'step') {
@@ -3498,11 +3607,19 @@ document.addEventListener('submit', async event => {
     if (postDraft.step < 3) { setWizardStep(postDraft.step + 1); return; }
     if (!stepOneValid(form)) return;
     if (postDraft.blocks.some(block => block.uploading)) { formError(form, 'Подожди, файлы ещё загружаются'); return; }
+    const brokenButton = postDraft.blocks.findIndex(block => block.type === 'button' && !linkKind(block.url));
+    if (brokenButton >= 0) {
+      showWizardStep(3);
+      selectBlock(brokenButton);
+      modal.querySelector?.(`.peb[data-block="${brokenButton}"] [data-pe="url"]`)?.focus?.();
+      formError(form, 'У кнопки нет рабочей ссылки: вставь адрес или удали блок');
+      return;
+    }
     const tags = value('tags').split(',').map(tag => tag.trim()).filter(Boolean).slice(0, 5);
     const fields = {
       title: value('title'), summary: value('summary'), category: data.get('category') || 'apps', tags,
       stage: data.get('stage') || '', platforms: data.getAll('platforms'), pricing: data.get('pricing') || '', seeking: data.getAll('seeking'),
-      ai: data.get('ai') === 'on', madeWith: value('madeWith'), links: data.getAll('link').map(String), theme: { ...postDraft.theme }, page: draftPage()
+      ai: data.get('ai') === 'on', madeWith: value('madeWith'), links: data.getAll('link').map(String), demo: value('demo'), theme: { ...postDraft.theme }, page: draftPage()
     };
     const editing = postDraft.id;
     const label = editing ? 'Сохранить' : 'Опубликовать';
@@ -3556,13 +3673,31 @@ document.addEventListener('submit', async event => {
     go('#/feed');
     render();
     toast('Опубликовано ✓');
+  } else if (form.id === 'report-form') {
+    if (!data.get('reason')) { formError(form, 'Выбери причину'); return; }
+    if (submit) submit.disabled = true;
+    try {
+      await apiCall('POST', '/api/reports', { kind: form.dataset.kind, id: form.dataset.id, project: form.dataset.project, reason: data.get('reason'), note: value('note') });
+      hideReported(form.dataset.kind, form.dataset.id, form.dataset.project);
+      closeDialog();
+      toast('Спасибо. Жалоба у модераторов, автор не узнает, кто её отправил');
+    } catch (error) { formError(form, error.message); if (submit) submit.disabled = false; }
+  } else if (form.id === 'update-form') {
+    if (!value('title')) { formError(form, 'Напиши, что нового'); return; }
+    if (submit) submit.disabled = true;
+    try {
+      const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(form.dataset.id)}/updates`, { title: value('title'), version: value('version'), text: value('text'), image: form.dataset.image || '' });
+      replaceProject(project);
+      openProject(project.id);
+      toast(project.watchers ? `Обновление ушло ${project.watchers} подписчикам проекта` : 'Обновление опубликовано');
+    } catch (error) { formError(form, error.message); if (submit) submit.disabled = false; }
   } else if (form.id === 'comment-form') {
     if (!value('text')) return;
     if (needLogin('Чтобы комментировать, войди в аккаунт')) return;
     const id = form.dataset.id;
     if (online) {
       try {
-        const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/comments`, { text: value('text') });
+        const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/comments`, { text: value('text'), replyTo: value('replyTo') });
         replaceProject(project);
       } catch (error) { toast(error.message); return; }
     } else {
@@ -3571,10 +3706,12 @@ document.addEventListener('submit', async event => {
       persist();
     }
     trackSignal(projectById(id), 'comment');
+    const answered = Boolean(replyTarget);
+    replyTarget = null;
     refresh();
-    if (dialogContext?.kind === 'project') openProject(id); else openComments(id);
-    const list = modal.querySelector?.('.comments');
-    list?.lastElementChild?.scrollIntoView?.({ block: 'nearest' });
+    rerenderComments(id);
+    modal.querySelector?.('.comments .comment:last-child, .comments .comment.fresh')?.scrollIntoView?.({ block: 'nearest' });
+    maybeAskPush(answered ? 'Сообщить, когда ответят снова?' : 'Сообщить, когда тебе ответят?');
   } else if (form.id === 'application-form') {
     if (!value('title') || !value('description') || !value('contact')) return;
     let application = Object.fromEntries(data);
@@ -3684,6 +3821,8 @@ document.addEventListener('input', event => {
       const link = linkKind(target.value);
       const shell = target.closest?.('.peb')?.querySelector?.('.pe-button');
       if (shell?.firstElementChild) shell.firstElementChild.outerHTML = icon(link?.icon || 'external');
+      const hint = target.closest?.('.peb')?.querySelector?.('.pe-hint');
+      if (hint) hint.outerHTML = buttonHintHtml(block);
     }
     return;
   }
@@ -3693,6 +3832,12 @@ document.addEventListener('input', event => {
     const link = linkKind(target.value);
     const kind = modal.querySelector?.(`[data-kind-for="${index}"]`);
     if (kind) kind.innerHTML = `${icon(link?.icon || 'globe')}<small>${escapeHtml(link?.label || 'Ссылка')}</small>`;
+    return;
+  }
+  if (target.dataset?.prefSearch !== undefined) {
+    prefQuery = target.value;
+    const box = modal.querySelector?.('#pref-suggest');
+    if (box) box.innerHTML = suggestHtml(prefQuery);
     return;
   }
   if (target.name === 'search') {
@@ -3737,6 +3882,10 @@ document.addEventListener('input', event => {
 });
 
 document.addEventListener('change', async event => {
+  const changed = event.target;
+  if (changed?.dataset?.notify) { saveNotifyPref(changed.dataset.notify, changed.checked); return; }
+  if (changed?.dataset?.demoInput !== undefined) { checkDemoField(changed); return; }
+  if (changed?.dataset?.updateImage !== undefined) { attachUpdateImage(changed); return; }
   const target = event.target;
   if (target.name === 'pair-allow') { ai.pairAllow = target.value; renderKeepingInput(); }
   else if (target.name === 'pair-os') { ai.pairOs = target.value; renderKeepingInput(); }
@@ -3839,6 +3988,12 @@ function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation()
 
 document.addEventListener('keydown', event => {
   const target = event.target;
+  if (target?.name === 'importUrl' && event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault();
+    const button = modal.querySelector?.('[data-action="import-link"]');
+    if (button && !button.disabled) importLink(button);
+    return;
+  }
   if ((target?.id === 'prompt' || target?.name === 'task-prompt') && event.key === 'Enter' && !event.shiftKey && !event.isComposing && !isCompact()) {
     event.preventDefault();
     target.form?.requestSubmit?.();
@@ -4099,6 +4254,840 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+/* Notifications: the activity list, web push and installing the app */
+
+const noticeIcons = { follow: 'user', like: 'up', repost: 'repost', comment: 'comment', reply: 'comment', 'comment-like': 'heart', pin: 'pin', update: 'bell', post: 'sparkle' };
+const pushState = { subscribed: false, checked: false };
+const PUSH_ASK_KEY = 'prostim-push-ask';
+let workerRegistration = null;
+
+const pushSupported = () => typeof navigator !== 'undefined' && 'serviceWorker' in navigator && typeof PushManager === 'function' && typeof Notification === 'function';
+const isIos = () => typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+const isStandalone = () => Boolean(window.matchMedia?.('(display-mode: standalone)').matches || (typeof navigator !== 'undefined' && navigator.standalone));
+
+function activityUnread() {
+  return online && me ? remote?.activity?.unread || 0 : 0;
+}
+
+function bellHtml() {
+  if (!online || !me) return '';
+  const unread = activityUnread();
+  return `<a class="top-bell" href="#/activity" aria-label="Уведомления${unread ? `, новых: ${unread}` : ''}">${icon('bell')}${unread ? `<i class="count-badge">${unread > 99 ? '99+' : unread}</i>` : ''}</a>`;
+}
+
+function userById(id) {
+  return remote?.users?.find(user => user.id === id) || null;
+}
+
+function noticeRowHtml(item) {
+  const actor = userById(item.actor);
+  const project = item.projectId ? projectById(item.projectId) : null;
+  const href = String(item.url || '#/activity').replace(/^\//, '');
+  const kind = noticeIcons[item.type] || 'bell';
+  const face = actor ? avatar(actor, 'lg') : `<span class="notice-mark">${icon(kind)}</span>`;
+  return `<a class="notice-row ${item.read ? '' : 'unread'}" href="${escapeHtml(href)}"><span class="notice-face">${face}<i class="notice-kind ${escapeHtml(item.type)}">${icon(kind)}</i></span><span class="notice-text">${escapeHtml(item.text)}<small>${escapeHtml(timeAgo(item.at) || '')}</small></span>${project ? `<span class="notice-thumb">${scene(project, 0, 'still')}</span>` : ''}</a>`;
+}
+
+function renderActivity() {
+  if (!online) return `<div class="page narrow">${emptyState('bell', 'Уведомления работают, когда сайт подключён к серверу')}</div>`;
+  if (!me) return `<div class="page narrow">${loginCard('Войди, чтобы видеть подписчиков, ответы и обновления проектов')}</div>`;
+  const fresh = activity.items.filter(item => !item.read);
+  const older = activity.items.filter(item => item.read);
+  const list = !activity.loaded ? `<div class="notice-loading">${logoLoaderHtml()}</div>`
+    : activity.items.length ? `${fresh.length ? `<h2 class="row-title">Новые</h2>${fresh.map(noticeRowHtml).join('')}` : ''}${older.length ? `<h2 class="row-title">Раньше</h2>${older.map(noticeRowHtml).join('')}` : ''}`
+      : emptyState('bell', 'Пока тихо', '<a class="btn btn-ghost" href="#/feed">В ленту</a>', 'Здесь появятся подписчики, ответы, поддержка и обновления проектов, за которыми ты следишь');
+  return `<div class="page narrow activity"><h1 class="sr-only">Уведомления</h1><div id="push-banner">${pushBannerHtml()}</div><div class="notice-list">${list}</div></div>`;
+}
+
+function pushBannerHtml() {
+  if (!online || !me) return '';
+  if (!pushSupported()) {
+    return isIos() && !isStandalone() ? `<div class="push-banner">${icon('phone')}<span><b>Уведомления на iPhone</b><small>Добавь про.стим на экран «Домой» — и ответы будут приходить, даже когда сайт закрыт</small></span><button class="btn btn-ghost btn-sm" data-action="install-app">Как</button></div>` : '';
+  }
+  if (Notification.permission === 'denied') return `<div class="push-banner muted">${icon('bell')}<span><b>Уведомления запрещены в браузере</b><small>Их можно разрешить в настройках сайта</small></span></div>`;
+  if (pushState.subscribed || !pushState.checked) return '';
+  return `<div class="push-banner">${icon('bell')}<span><b>Не пропускай ответы</b><small>Комментарии, подписчики и обновления — даже когда сайт закрыт</small></span><button class="btn btn-grad btn-sm" data-action="push-on">Включить</button></div>`;
+}
+
+async function registerWorker() {
+  if (!canReachServer || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null;
+  if (!workerRegistration) {
+    try { workerRegistration = await navigator.serviceWorker.register('/sw.js'); } catch { workerRegistration = null; }
+    navigator.serviceWorker.addEventListener?.('message', event => {
+      if (event.data?.type !== 'open' || !event.data.url) return;
+      const url = new URL(event.data.url, location.href);
+      if (url.origin === location.origin) location.hash = url.hash || '#/activity';
+    });
+  }
+  return workerRegistration;
+}
+
+async function checkPush() {
+  if (!pushSupported()) { pushState.checked = true; return; }
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    pushState.subscribed = Boolean(await registration?.pushManager?.getSubscription());
+  } catch { pushState.subscribed = false; }
+  pushState.checked = true;
+  const banner = document.querySelector('#push-banner');
+  if (banner) banner.innerHTML = pushBannerHtml();
+}
+
+async function loadActivity() {
+  if (!online || !me || activity.loading) return;
+  activity.loading = true;
+  try {
+    const data = await apiCall('GET', '/api/notifications');
+    activity.items = data.items || [];
+    if (data.unread) await apiCall('POST', '/api/notifications/read').catch(() => {});
+    remote.activity = { unread: 0 };
+    navigator.clearAppBadge?.()?.catch?.(() => {});
+  } catch (error) {
+    toast(error.message);
+  }
+  activity.loaded = true;
+  activity.loading = false;
+  if (route().section === 'activity') {
+    main.innerHTML = renderActivity();
+    renderChrome('activity', route());
+  }
+  checkPush();
+}
+
+function onNotify(data) {
+  if (!remote) return;
+  remote.activity = { unread: Number(data.unread) || 0 };
+  if (route().section === 'activity') loadActivity();
+  else renderChrome(document.body.dataset.section || 'feed', route());
+}
+
+function urlBase64ToBytes(value) {
+  const padded = `${value}${'='.repeat((4 - value.length % 4) % 4)}`.replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(padded), char => char.charCodeAt(0));
+}
+
+async function enablePush(button = null) {
+  if (needLogin('Чтобы получать уведомления, войди в аккаунт')) return false;
+  if (!pushSupported()) {
+    if (isIos() && !isStandalone()) openInstall(); else toast('Этот браузер не умеет push-уведомления');
+    return false;
+  }
+  if (!remote?.config?.push) { toast('Сервер пока не настроил уведомления'); return false; }
+  if (button) button.disabled = true;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      toast(permission === 'denied' ? 'Уведомления запрещены — их можно разрешить в настройках сайта' : 'Уведомления не включены');
+      return false;
+    }
+    await registerWorker();
+    const registration = await navigator.serviceWorker.ready;
+    const key = urlBase64ToBytes(remote.config.push);
+    let subscription = await registration.pushManager.getSubscription();
+    const current = subscription?.options?.applicationServerKey ? new Uint8Array(subscription.options.applicationServerKey) : null;
+    if (subscription && current && (current.length !== key.length || current.some((byte, index) => byte !== key[index]))) {
+      await subscription.unsubscribe();
+      subscription = null;
+    }
+    subscription ||= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    const result = await apiCall('POST', '/api/push/subscribe', { ...subscription.toJSON(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+    if (remote.account) remote.account.pushDevices = result.devices;
+    pushState.subscribed = true;
+    pushState.checked = true;
+    toast('Уведомления включены 🔔');
+    return true;
+  } catch (error) {
+    toast(error.message || 'Не получилось включить уведомления');
+    return false;
+  } finally {
+    if (button) button.disabled = false;
+    refreshPushViews();
+  }
+}
+
+async function disablePush() {
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = await registration?.pushManager?.getSubscription();
+    if (subscription) {
+      const result = await apiCall('POST', '/api/push/unsubscribe', { endpoint: subscription.endpoint }).catch(() => null);
+      if (result && remote.account) remote.account.pushDevices = result.devices;
+      await subscription.unsubscribe();
+    }
+    pushState.subscribed = false;
+    toast('Уведомления на этом устройстве выключены');
+  } catch (error) {
+    toast(error.message);
+  }
+  refreshPushViews();
+}
+
+function refreshPushViews() {
+  const banner = document.querySelector('#push-banner');
+  if (banner) banner.innerHTML = pushBannerHtml();
+  if (dialogContext?.kind === 'notify') openNotifySettings();
+}
+
+// A gentle question at the moment it makes sense (after a comment, a follow, a message), not on arrival.
+function maybeAskPush(text) {
+  if (!online || !me || !pushSupported() || Notification.permission !== 'default' || pushState.subscribed) return;
+  let last = 0;
+  try { last = Number(storage.getItem(PUSH_ASK_KEY)) || 0; } catch {}
+  if (Date.now() - last < 3 * 864e5) return;
+  try { storage.setItem(PUSH_ASK_KEY, String(Date.now())); } catch {}
+  document.querySelector('.push-ask')?.remove?.();
+  document.body.insertAdjacentHTML?.('beforeend', `<div class="push-ask" role="dialog" aria-label="Уведомления">${icon('bell')}<span>${escapeHtml(text)}</span><button class="btn btn-grad btn-sm" data-action="ask-push-yes">Включить</button><button class="icon-btn" data-action="ask-push-no" aria-label="Не сейчас">${icon('close')}</button></div>`);
+  setTimeout(() => document.querySelector('.push-ask')?.remove?.(), 15000);
+}
+
+function installHtml() {
+  if (isStandalone()) return `<div class="account-row">${icon('phone')}<span><b>Приложение установлено</b><small>про.стим открывается с иконки, как обычное приложение</small></span>${icon('check')}</div>`;
+  if (installPrompt) return `<button class="plus-row" data-action="install-app"><span class="row-mark">${icon('download')}</span><span><b>Установить приложение</b><small>Иконка на экране, отдельное окно и уведомления</small></span>${icon('chevronRight')}</button>`;
+  if (isIos()) return `<div class="install-steps"><b>Как установить на iPhone и iPad</b><ol><li>Открой про.стим в Safari</li><li>Нажми ${icon('upload')} «Поделиться» внизу экрана</li><li>Выбери «На экран „Домой“»</li><li>Открой про.стим с новой иконки и включи уведомления</li></ol></div>`;
+  return `<p class="fine">В Chrome, Edge и Яндекс Браузере: значок установки в адресной строке или меню ⋮ → «Установить приложение». На Android — меню ⋮ → «Добавить на главный экран».</p>`;
+}
+
+async function installApp() {
+  if (!installPrompt) { openInstall(); return; }
+  installPrompt.prompt?.();
+  const choice = await installPrompt.userChoice?.catch?.(() => null);
+  installPrompt = null;
+  if (choice?.outcome === 'accepted') toast('про.стим установлен');
+  refreshPushViews();
+}
+
+function openInstall() {
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Установить про.стим</h2>${installHtml()}</div>`, { kind: 'install' });
+}
+
+function openNotifySettings() {
+  if (needLogin('Чтобы настроить уведомления, войди в аккаунт') || !me) return;
+  const prefs = remote?.account?.notify || {};
+  const groups = [['messages', 'inbox', 'Сообщения', 'Новые сообщения в чатах'], ['comments', 'comment', 'Комментарии', 'Комментарии, ответы, ♥ и закрепы'], ['likes', 'up', 'Поддержка и репосты', 'Кто поддержал и поделился'], ['follows', 'user', 'Подписчики', 'Новые подписчики'], ['updates', 'bell', 'Обновления', 'Новые проекты авторов и обновления тех проектов, за которыми следишь']];
+  const toggle = (key, iconName, label, hint, on) => `<label class="toggle-row"><input type="checkbox" data-notify="${key}" ${on ? 'checked' : ''}><span>${icon(iconName)}<b>${label}</b><small>${hint}</small></span><i class="toggle" aria-hidden="true"></i></label>`;
+  const toggles = groups.map(([key, iconName, label, hint]) => toggle(key, iconName, label, hint, prefs[key] !== false)).join('') + toggle('quiet', 'clock', 'Тихие часы', 'С 23:00 до 8:00 без push — всё дождётся в списке', prefs.quiet === true);
+  let device;
+  if (!pushSupported()) device = isIos() && !isStandalone() ? `<p class="fine">На iPhone push приходят только из установленного приложения — смотри ниже, как его поставить.</p>` : `<p class="fine">Этот браузер не умеет push-уведомления. Список уведомлений всё равно работает.</p>`;
+  else if (Notification.permission === 'denied') device = `<p class="fine">Уведомления запрещены в настройках браузера для этого сайта. Разреши их там и вернись сюда.</p>`;
+  else if (pushState.subscribed) device = `<div class="push-device">${icon('check')}<span><b>Включены на этом устройстве</b><small>Всего устройств с уведомлениями: ${remote?.account?.pushDevices || 1}</small></span></div><div class="push-buttons"><button class="btn btn-ghost btn-sm" data-action="push-test">Проверить</button><button class="btn btn-ghost btn-sm" data-action="push-off">Выключить здесь</button></div>`;
+  else device = `<button class="btn btn-grad btn-block" data-action="push-on">${icon('bell')} Включить уведомления</button>`;
+  showDialog(`<div class="sheet-body notify-settings"><h2 id="modal-title">Уведомления</h2><section class="account-block"><h3>Это устройство</h3>${device}</section><section class="account-block"><h3>Что присылать</h3>${toggles}</section><section class="account-block"><h3>Приложение</h3>${installHtml()}</section></div>`, { kind: 'notify' });
+}
+
+async function saveNotifyPref(key, on) {
+  if (!remote?.account) return;
+  remote.account.notify = { ...(remote.account.notify || {}), [key]: on };
+  try { await apiCall('PATCH', '/api/me', { notify: { [key]: on } }); } catch (error) { toast(error.message); }
+}
+
+/* Lists the server keeps for me */
+
+const watchingList = () => online ? remote?.watching || [] : [];
+const repostedList = () => online ? remote?.reposted || [] : [];
+const blockedList = () => online ? remote?.blocked || [] : [];
+const PREFS_KEY = 'prostim-feed-prefs-v1';
+
+function feedPrefs() {
+  if (online && me) return remote.feedPrefs ||= emptyFeedPrefs();
+  if (!localFeedPrefs) {
+    try { localFeedPrefs = cleanFeedPrefs(JSON.parse(storage.getItem(PREFS_KEY) || 'null')); } catch { localFeedPrefs = emptyFeedPrefs(); }
+  }
+  return localFeedPrefs;
+}
+
+function visibleInFeed(project) {
+  return Boolean(project) && !hiddenLocally.has(project.id) && !blockedList().includes(project.handle) && !hiddenByPrefs(project, feedPrefs());
+}
+
+// Posts reposted by people I follow: project id → the first such person.
+function repostMap() {
+  const map = new Map();
+  if (!online) return map;
+  for (const project of remote?.projects || []) {
+    const by = (project.reposters || []).find(handle => state.follows.includes(handle) && !isMine(handle));
+    if (by) map.set(project.id, by);
+  }
+  return map;
+}
+
+/* Project updates and following one project */
+
+function updatesHtml(project) {
+  const mine = isMine(project.handle);
+  const list = project.updates || [];
+  if (!list.length && !(mine && online)) return '';
+  const rows = list.slice(0, 12).map(update => `<article class="update">${update.version ? `<span class="update-version">${escapeHtml(update.version)}</span>` : `<span class="update-version dot"></span>`}<div class="update-body"><b>${escapeHtml(update.title)}</b><small>${escapeHtml(timeAgo(update.createdAt) || '')}</small>${update.text ? `<p>${escapeHtml(update.text).replace(/\n/g, '<br>')}</p>` : ''}${uploadUrl(update.image) ? `<img src="${uploadUrl(update.image)}" alt="" loading="lazy">` : ''}</div>${mine && online ? `<button class="icon-btn" data-action="delete-update" data-id="${escapeHtml(project.id)}" data-update="${escapeHtml(update.id)}" aria-label="Удалить обновление">${icon('trash')}</button>` : ''}</article>`).join('');
+  const add = mine && online ? `<button class="btn btn-ghost btn-sm" data-action="new-update" data-id="${escapeHtml(project.id)}">${icon('plus')} Обновление</button>` : '';
+  return `<section class="updates"><div class="updates-head"><h3 class="sheet-sub">Обновления${list.length ? ` <span>${list.length}</span>` : ''}</h3>${add}</div>${rows || '<p class="fine">Расскажи, что нового: версия, фичи, исправления. Все, кто следит за проектом, получат уведомление.</p>'}</section>`;
+}
+
+function cardUpdateHtml(project) {
+  const update = project.updates?.[0];
+  if (!update || Date.now() - update.createdAt > 14 * 864e5) return '';
+  return `<button class="card-update" data-action="open-project" data-id="${escapeHtml(project.id)}">${icon('sparkle')}<span>${update.version ? `<b>${escapeHtml(update.version)}</b> · ` : ''}${escapeHtml(update.title)}</span><small>${escapeHtml(timeAgo(update.createdAt) || '')}</small></button>`;
+}
+
+function watchButton(project) {
+  if (!online || isMine(project.handle)) return '';
+  const on = watchingList().includes(project.id);
+  return `<button class="btn btn-ghost watch-btn ${on ? 'on' : ''}" data-action="watch" data-id="${escapeHtml(project.id)}" aria-pressed="${on}">${icon('bell')} ${on ? 'Следишь' : 'Следить'}</button>`;
+}
+
+async function toggleWatch(id, button) {
+  if (needLogin('Чтобы следить за обновлениями, войди в аккаунт')) return;
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/watch`);
+    remote.watching = result.watching ? [...new Set([...(remote.watching || []), id])] : (remote.watching || []).filter(item => item !== id);
+    const project = projectById(id);
+    if (project) project.watchers = result.watchers;
+    toast(result.watching ? 'Пришлём уведомление о каждом обновлении' : 'Больше не следишь за проектом');
+    if (result.watching) maybeAskPush('Сообщать об обновлениях проекта?');
+    if (dialogContext?.kind === 'project' && dialogContext.id === id) openProject(id);
+    else if (dialogContext?.kind === 'post-menu') closeDialog();
+    else if (button?.isConnected) button.innerHTML = `${icon('bell')} ${result.watching ? 'Следишь' : 'Следить'}`;
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function openUpdateForm(id) {
+  const project = projectById(id);
+  if (!project) return;
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Обновление «${escapeHtml(project.title)}»</h2><form id="update-form" class="form" data-id="${escapeHtml(id)}"><div class="update-fields"><input class="field" name="version" maxlength="24" placeholder="Версия" aria-label="Версия"><input class="field" name="title" maxlength="100" placeholder="Что нового — коротко" aria-label="Что нового" required></div><textarea class="field" name="text" rows="5" maxlength="2000" placeholder="Подробнее: новые уровни, исправления, планы" aria-label="Подробнее"></textarea><label class="update-image">${icon('image')}<span>Картинка · необязательно</span><input class="file-cover" type="file" accept="image/*" data-update-image></label><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('send')} Опубликовать обновление</button><p class="fine">Уведомление получат все, кто следит за проектом${project.watchers ? ` — сейчас их ${project.watchers}` : ''}.</p></form></div>`, { kind: 'update', id });
+}
+
+async function attachUpdateImage(input) {
+  const file = input.files?.[0];
+  const form = input.closest?.('form');
+  const label = input.closest?.('.update-image')?.querySelector?.('span');
+  if (!file || !form) return;
+  if (label) label.textContent = 'Загружаем…';
+  try {
+    const blob = file.size > 2 * 1024 * 1024 ? await imageToBlob(file) : file;
+    form.dataset.image = await uploadBlob(blob, 'image');
+    if (label) label.textContent = `${file.name} ✓`;
+  } catch (error) {
+    if (label) label.textContent = error.message;
+  }
+}
+
+async function deleteUpdate(id, updateId) {
+  if (!confirm('Удалить это обновление?')) return;
+  try {
+    replaceProject((await apiCall('DELETE', `/api/projects/${encodeURIComponent(id)}/updates/${encodeURIComponent(updateId)}`)).project);
+    openProject(id);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+/* Menus: a post and a person */
+
+function menuItem(action, iconName, label, extra = '', danger = false) {
+  return `<button class="menu-item ${danger ? 'danger' : ''}" data-action="${action}" ${extra}>${icon(iconName)}<span>${label}</span></button>`;
+}
+
+function openPostMenu(id) {
+  const project = projectById(id);
+  if (!project) return;
+  const mine = isMine(project.handle);
+  const pid = escapeHtml(id);
+  const handle = escapeHtml(project.handle);
+  const topics = [[`cat:${project.category}`, categoryNames[project.category]], ...visibleTags(project).slice(0, 3).map(tag => [`tag:${tag.toLocaleLowerCase('ru')}`, `#${tag}`])].filter(([, label]) => label);
+  const rows = [
+    mine ? '' : menuItem('not-interested', 'eyeOff', 'Не интересно', `data-id="${pid}"`),
+    ...(mine ? [] : topics.map(([key, label]) => menuItem('pref-set', 'minus', `Меньше про ${escapeHtml(label)}`, `data-key="${escapeHtml(key)}" data-kind="less" data-id="${pid}"`))),
+    mine ? '' : menuItem('pref-set', 'eyeOff', `Не показывать посты @${handle}`, `data-key="author:${handle}" data-kind="hidden" data-id="${pid}"`),
+    online && !mine ? menuItem('watch', 'bell', watchingList().includes(id) ? 'Не следить за обновлениями' : 'Следить за обновлениями', `data-id="${pid}"`) : '',
+    online && !mine ? menuItem('repost', 'repost', repostedList().includes(id) ? 'Убрать репост' : 'Репост к себе', `data-id="${pid}"`) : '',
+    menuItem('copy-link', 'link', 'Скопировать ссылку', `data-id="${pid}"`),
+    menuItem('feed-prefs', 'gear', 'Настроить ленту'),
+    online && !mine ? menuItem('report', 'flag', 'Пожаловаться', `data-kind="project" data-id="${pid}"`, true) : '',
+    online && !mine ? menuItem('block', 'ban', blockedList().includes(project.handle) ? `Разблокировать @${handle}` : `Заблокировать @${handle}`, `data-handle="${handle}"`, true) : ''
+  ].join('');
+  showDialog(`<div class="sheet-body menu-sheet"><div class="menu-head"><span class="menu-art">${scene(project, 0, 'still')}</span><span><b id="modal-title">${escapeHtml(project.title)}</b><small>@${handle}</small></span></div><div class="menu-list">${rows}</div></div>`, { kind: 'post-menu', id });
+}
+
+function openUserMenu(handle) {
+  const person = userByHandle(handle);
+  if (!person) return;
+  const safe = escapeHtml(handle);
+  const blocked = blockedList().includes(handle);
+  const rows = [
+    menuItem('pref-set', 'eyeOff', feedPrefs().hidden.includes(`author:${handle}`) ? 'Снова показывать в ленте' : 'Не показывать в ленте', `data-key="author:${safe}" data-kind="${feedPrefs().hidden.includes(`author:${handle}`) ? '' : 'hidden'}"`),
+    menuItem('report', 'flag', 'Пожаловаться', `data-kind="user" data-handle="${safe}"`, true),
+    menuItem('block', 'ban', blocked ? 'Разблокировать' : 'Заблокировать', `data-handle="${safe}"`, true)
+  ].join('');
+  showDialog(`<div class="sheet-body menu-sheet"><div class="menu-head">${avatar(person, 'lg')}<span><b id="modal-title">${escapeHtml(person.name)}</b><small>@${safe}</small></span></div><div class="menu-list">${rows}</div></div>`, { kind: 'user-menu', id: handle });
+}
+
+/* Your feed: topics, tags and authors to see more of, less of, or never */
+
+const prefLabel = key => {
+  const at = key.indexOf(':');
+  const kind = key.slice(0, at);
+  const value = key.slice(at + 1);
+  return kind === 'cat' ? categoryNames[value] || value : kind === 'author' ? `@${value}` : `#${value}`;
+};
+
+function prefTopics() {
+  const map = new Map(Object.entries(categoryNames).map(([id, name]) => [`cat:${id}`, name]));
+  for (const project of projects()) {
+    for (const tag of visibleTags(project)) map.set(`tag:${tag.toLocaleLowerCase('ru')}`, `#${tag}`);
+    if (!isMine(project.handle)) map.set(`author:${project.handle}`, `@${project.handle}`);
+  }
+  return [...map.entries()];
+}
+
+function suggestHtml(query) {
+  const needle = query.trim().toLocaleLowerCase('ru').replace(/^[#@]/, '');
+  const prefs = feedPrefs();
+  const list = prefTopics().filter(([, label]) => !needle || label.toLocaleLowerCase('ru').includes(needle)).slice(0, needle ? 10 : 6);
+  const names = { more: 'Больше', less: 'Меньше', hidden: 'Скрыть' };
+  return list.map(([key, label]) => `<div class="pref-row"><b>${escapeHtml(label)}</b><span class="pref-actions">${Object.entries(names).map(([kind, name]) => {
+    const on = prefs[kind].includes(key);
+    return `<button class="${kind} ${on ? 'on' : ''}" data-action="pref-set" data-key="${escapeHtml(key)}" data-kind="${on ? '' : kind}" aria-pressed="${on}">${name}</button>`;
+  }).join('')}</span></div>`).join('') || '<p class="fine">Такой темы пока нет в ленте</p>';
+}
+
+function openFeedPrefs() {
+  const prefs = feedPrefs();
+  const chip = key => `<span class="pref-chip">${escapeHtml(prefLabel(key))}<button data-action="pref-set" data-key="${escapeHtml(key)}" data-kind="" aria-label="Убрать ${escapeHtml(prefLabel(key))}">${icon('close')}</button></span>`;
+  const section = (kind, title, hint) => `<section class="pref-section ${kind}"><h3>${title}</h3>${prefs[kind].length ? `<div class="pref-chips">${prefs[kind].map(chip).join('')}</div>` : `<p class="fine">${hint}</p>`}</section>`;
+  const learned = topInterests(currentTaste(), 8);
+  const learnedHtml = learned.length ? `<section class="pref-section"><h3>Что лента узнала сама</h3><div class="pref-chips">${learned.map(item => `<span class="pref-chip learned">${escapeHtml(prefLabel(`${item.kind}:${item.value}`))}</span>`).join('')}</div></section>` : '';
+  showDialog(`<div class="sheet-body feed-prefs"><h2 id="modal-title">Твоя лента</h2><p class="fine">Лента учится сама по тому, что ты смотришь, — а здесь можно сказать прямо.</p><label class="search-box">${icon('search')}<input data-pref-search value="${escapeHtml(prefQuery)}" placeholder="Тема, #тег или @автор" aria-label="Найти тему" autocomplete="off"></label><div class="pref-suggest" id="pref-suggest">${suggestHtml(prefQuery)}</div>${section('more', 'Показывать больше', 'Нажми «Больше» у темы или автора')}${section('less', 'Показывать меньше', 'Такие посты будут реже')}${section('hidden', 'Не показывать', 'Скрытые темы и авторы не появятся в ленте')}${learnedHtml}<button class="btn btn-ghost btn-block" data-action="reset-taste">${icon('refresh')} Начать ленту с чистого листа</button></div>`, { kind: 'feed-prefs' });
+}
+
+async function setPref(key, kind, id = '') {
+  if (!key) return;
+  const next = withFeedPref(feedPrefs(), key, kind);
+  if (online && me) {
+    remote.feedPrefs = next;
+    try { remote.feedPrefs = cleanFeedPrefs((await apiCall('POST', '/api/me/feed-prefs', next)).feedPrefs); } catch (error) { toast(error.message); }
+  } else {
+    localFeedPrefs = next;
+    try { storage.setItem(PREFS_KEY, JSON.stringify(next)); } catch {}
+  }
+  const label = prefLabel(key);
+  if (kind === 'hidden') dropHiddenFromFeed();
+  if (dialogContext?.kind === 'feed-prefs') { openFeedPrefs(); return; }
+  if (id && activeView?.id === id && kind) trackSignal(projectById(id), 'hide');
+  closeDialog();
+  toast(kind === 'hidden' ? `Больше не покажем ${label}` : kind === 'less' ? `Меньше про ${label}` : kind === 'more' ? `Больше про ${label}` : `${label}: как раньше`);
+}
+
+function dropHiddenFromFeed() {
+  if (feedOrder) feedOrder.entries = feedOrder.entries.filter(entry => !entry.id || visibleInFeed(projectById(entry.id)));
+  document.querySelectorAll?.('.feed-item[data-project]').forEach(item => {
+    if (!visibleInFeed(projectById(item.dataset.project))) item.remove?.();
+  });
+}
+
+/* Reports and blocks */
+
+function openReport(kind, id, projectId = '') {
+  if (needLogin('Чтобы пожаловаться, войди в аккаунт') || !id) return;
+  const what = { project: 'пост', comment: 'комментарий', user: 'пользователя', message: 'сообщение' }[kind] || 'контент';
+  const reasons = reportReasons.map(([key, label]) => `<label class="report-reason"><input type="radio" name="reason" value="${key}"><span>${label}</span></label>`).join('');
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Пожаловаться на ${what}</h2><form id="report-form" class="form" data-kind="${escapeHtml(kind)}" data-id="${escapeHtml(id)}" data-project="${escapeHtml(projectId)}"><div class="report-reasons">${reasons}</div><textarea class="field" name="note" rows="3" maxlength="500" placeholder="Подробности · необязательно" aria-label="Подробности"></textarea><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('flag')} Отправить жалобу</button><p class="fine">Автор не узнает, кто пожаловался.${kind === 'project' ? ' Пост сразу пропадёт из твоей ленты.' : kind === 'comment' ? ' Комментарий сразу скроется у тебя.' : ''}</p></form></div>`, { kind: 'report', id });
+}
+
+function hideReported(kind, id, projectId) {
+  if (kind === 'project') {
+    hiddenLocally.add(id);
+    dropHiddenFromFeed();
+  } else if (kind === 'comment') {
+    hiddenLocally.add(`c:${id}`);
+    if (projectId) rerenderComments(projectId);
+  }
+}
+
+async function toggleBlock(handle) {
+  if (!handle || needLogin('Чтобы блокировать, войди в аккаунт')) return;
+  const blocked = blockedList().includes(handle);
+  if (!blocked && !confirm(`Заблокировать @${handle}? Посты и комментарии пропадут у тебя из ленты, а писать и комментировать тебе будет нельзя. Разблокировать можно в профиле или в настройках.`)) return;
+  try {
+    await apiCall('POST', `/api/users/${encodeURIComponent(handle)}/block`);
+    if (modal.open) modal.close();
+    dialogContext = null;
+    feedOrder = null;
+    await reloadAll();
+    toast(blocked ? `@${handle} разблокирован` : `@${handle} заблокирован`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+/* Sharing: into a chat as a card, to your followers as a repost, or out of the site */
+
+function projectLink(id) {
+  const address = new URL(location.href);
+  address.search = '';
+  address.hash = `/project/${encodeURIComponent(id)}`;
+  return address.href;
+}
+
+function shareTargets() {
+  const list = [];
+  const seen = new Set();
+  const add = person => {
+    if (!person?.handle || seen.has(person.handle) || isMine(person.handle) || person.official || blockedList().includes(person.handle)) return;
+    seen.add(person.handle);
+    list.push(person);
+  };
+  for (const thread of threads()) if (!thread.blocked && !thread.blockedMe) add(thread);
+  for (const handle of state.follows) add(userByHandle(handle));
+  return list.slice(0, 18);
+}
+
+function openShare(id) {
+  const project = projectById(id);
+  if (!project) return;
+  if (id.startsWith('local-')) { toast('Проект пока только в твоём браузере'); return; }
+  const people = online && me ? shareTargets() : [];
+  const safe = escapeHtml(id);
+  const peopleHtml = people.length
+    ? `<div class="share-people">${people.map(person => `<button class="share-person" data-action="share-to" data-id="${safe}" data-handle="${escapeHtml(person.handle)}">${avatar(person, 'lg')}<span>${escapeHtml(person.name || person.handle)}</span></button>`).join('')}</div>`
+    : online && me ? '<p class="fine">Подпишись на авторов или начни переписку — и посты можно будет отправлять прямо в чат.</p>' : '';
+  const url = encodeURIComponent(projectLink(id));
+  const text = encodeURIComponent(`${project.title} — ${project.summary}`);
+  const reposted = repostedList().includes(id);
+  const actions = [
+    online && me && !isMine(project.handle) ? `<button class="share-action ${reposted ? 'on' : ''}" data-action="repost" data-id="${safe}">${icon('repost')}<span>${reposted ? 'В репостах' : 'Репост'}</span></button>` : '',
+    `<button class="share-action" data-action="copy-link" data-id="${safe}">${icon('link')}<span>Ссылка</span></button>`,
+    `<a class="share-action tg" href="https://t.me/share/url?url=${url}&amp;text=${text}" target="_blank" rel="noopener noreferrer">${icon('send')}<span>Telegram</span></a>`,
+    `<a class="share-action vk" href="https://vk.com/share.php?url=${url}" target="_blank" rel="noopener noreferrer">${icon('users')}<span>VK</span></a>`,
+    typeof navigator !== 'undefined' && navigator.share ? `<button class="share-action" data-action="share-native" data-id="${safe}">${icon('share')}<span>Ещё</span></button>` : ''
+  ].join('');
+  showDialog(`<div class="sheet-body share-sheet"><h2 id="modal-title">Поделиться</h2>${peopleHtml}<div class="share-actions">${actions}</div></div>`, { kind: 'share', id });
+}
+
+async function shareTo(id, handle, button) {
+  if (!handle || button.classList.contains('sent') || button.classList.contains('sending')) return;
+  button.classList.add('sending');
+  try {
+    remote.threads = (await apiCall('POST', `/api/messages/${encodeURIComponent(handle)}`, { project: id })).threads;
+    button.classList.add('sent');
+    const label = button.querySelector?.('span');
+    if (label) label.textContent = 'Отправлено';
+    trackSignal(projectById(id), 'share');
+  } catch (error) {
+    toast(error.message);
+  }
+  button.classList.remove('sending');
+}
+
+async function toggleRepost(id) {
+  if (needLogin('Чтобы репостить, войди в аккаунт')) return;
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/repost`);
+    replaceProject(result.project);
+    remote.reposted = result.reposted ? [...new Set([...(remote.reposted || []), id])] : (remote.reposted || []).filter(item => item !== id);
+    if (result.reposted) trackSignal(projectById(id), 'repost');
+    toast(result.reposted ? 'Репост: пост увидят твои подписчики' : 'Репост убран');
+    if (dialogContext?.kind === 'share') openShare(id); else closeDialog();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+/* Feed: the next posts start loading while this one is on screen */
+
+function preloadAhead(item) {
+  let next = item?.nextElementSibling;
+  for (let step = 0; step < 2 && next; step += 1, next = next.nextElementSibling) {
+    next.querySelectorAll?.('img[loading="lazy"]').forEach(image => { image.loading = 'eager'; });
+    next.querySelectorAll?.('video[data-feed-video]').forEach(video => { if (video.preload !== 'auto') video.preload = 'auto'; });
+    const project = projectById(next.dataset?.project);
+    if (!project || typeof Image !== 'function') continue;
+    for (const media of projectMedia(project).slice(1, 3)) {
+      if (media.type !== 'image') continue;
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = media.url;
+    }
+  }
+}
+
+/* A demo that runs in the browser, inside the post */
+
+function openPlayer(id) {
+  const project = projectById(id);
+  const url = cleanDemoUrl(project?.demo);
+  if (!url) return;
+  trackSignal(project, 'play');
+  document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
+  const host = new URL(url).hostname.replace(/^www\./, '');
+  const steam = (project.links || []).map(linkKind).find(link => link?.kind === 'steam');
+  const frame = project.demoBlocked
+    ? `<div class="player-blocked">${icon('gamepad')}<b>Сайт демо не разрешает встраивать себя</b><p>Открой его в отдельной вкладке — там всё работает.</p><a class="btn btn-grad" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon('external')} Открыть демо</a></div>`
+    : `<iframe src="${escapeHtml(url)}" title="Демо: ${escapeHtml(project.title)}" allow="autoplay; fullscreen; gamepad; pointer-lock; accelerometer; gyroscope" allowfullscreen sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-orientation-lock" referrerpolicy="no-referrer"></iframe>`;
+  const extra = [
+    steam ? `<a class="btn btn-ghost btn-sm" href="${escapeHtml(steam.url)}" target="_blank" rel="noopener noreferrer">${icon('gamepad')} В желаемое Steam</a>` : '',
+    online && !isMine(project.handle) ? `<button class="btn btn-ghost btn-sm" data-action="watch" data-id="${escapeHtml(id)}">${icon('bell')} ${watchingList().includes(id) ? 'Следишь' : 'Следить'}</button>` : '',
+    `<button class="btn btn-ghost btn-sm" data-action="vote" data-id="${escapeHtml(id)}" aria-pressed="${state.votes.includes(id)}">${icon('up')} Поддержать</button>`
+  ].join('');
+  showDialog(`<div class="player"><div class="player-bar"><span class="player-title"><b id="modal-title">${escapeHtml(project.title)}</b><small>${escapeHtml(host)}</small></span><button class="icon-btn" data-action="player-full" aria-label="Во весь экран">${icon('monitor')}</button><a class="icon-btn" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" aria-label="Открыть в новой вкладке">${icon('external')}</a></div><div class="player-frame">${frame}</div><div class="player-foot"><span>Понравилось?</span>${extra}</div></div>`, { kind: 'player', id });
+}
+
+async function checkDemoField(input) {
+  const status = input.parentElement?.querySelector?.('.demo-state');
+  const value = input.value.trim();
+  if (!status) return;
+  if (!value) { status.className = 'demo-state'; status.textContent = 'Кнопка «Играть» появится на карточке, игра запустится прямо в посте'; return; }
+  const url = cleanDemoUrl(value);
+  if (!url) { status.className = 'demo-state bad'; status.textContent = 'Нужна ссылка https:// на веб-версию или код iframe'; return; }
+  status.className = 'demo-state';
+  status.textContent = 'Проверяем…';
+  try {
+    const result = await apiCall('POST', '/api/demo-check', { url });
+    status.className = `demo-state ${result.embeddable === false ? 'bad' : 'ok'}`;
+    status.textContent = result.embeddable === false ? 'Этот сайт запрещает встраивание — откроем демо в новой вкладке' : result.embeddable ? '✓ Запустится прямо в посте' : 'Не получилось проверить — попробуем запустить в посте';
+  } catch (error) {
+    status.className = 'demo-state bad';
+    status.textContent = error.message;
+  }
+}
+
+/* A post from a link: Steam, itch.io, GitHub, stores and sites */
+
+function fillDraft(form, draft) {
+  const fill = (name, value) => {
+    const field = form.elements?.[name];
+    if (field && !field.value.trim() && value) { field.value = value; if (field.tagName === 'TEXTAREA') autosize(field); }
+  };
+  fill('title', draft.title);
+  fill('summary', draft.summary);
+  fill('tags', (draft.tags || []).join(', '));
+  if (draft.category) { const radio = form.querySelector?.(`input[name="category"][value="${draft.category}"]`); if (radio) radio.checked = true; }
+  const choose = (name, values) => {
+    const boxes = [...(form.querySelectorAll?.(`input[name="${name}"]`) || [])];
+    if (!values.length || boxes.some(box => box.checked)) return;
+    for (const box of boxes) box.checked = values.includes(box.value);
+  };
+  choose('platforms', draft.platforms || []);
+  choose('stage', draft.stage ? [draft.stage] : []);
+  choose('pricing', draft.pricing ? [draft.pricing] : []);
+  if (postDraft) {
+    for (const link of draft.links || []) {
+      if (postDraft.links.includes(link)) continue;
+      const empty = postDraft.links.indexOf('');
+      if (empty >= 0) postDraft.links[empty] = link; else if (postDraft.links.length < POST_LINK_LIMIT) postDraft.links.push(link);
+    }
+    const rows = modal.querySelector?.('.link-rows');
+    if (rows) rows.innerHTML = linkRowsHtml();
+    if (!postDraft.blocks.length && draft.page?.length) postDraft.blocks = draft.page.map(block => ({ ...block, ...(block.items ? { items: [...block.items] } : {}) }));
+  }
+}
+
+async function importLink(button) {
+  const form = modal.querySelector?.('#publish-form');
+  const input = form?.elements?.importUrl;
+  const status = modal.querySelector?.('.import-state');
+  const say = text => { if (status) status.textContent = text; };
+  const url = normalizeUrl(input?.value || '');
+  if (!form || !url) { say('Вставь ссылку, например store.steampowered.com/app/…'); input?.focus?.(); return; }
+  button.disabled = true;
+  say('Читаем страницу…');
+  try {
+    const { draft } = await apiCall('POST', '/api/link-preview', { url });
+    fillDraft(form, draft);
+    const done = `Заполнили по ${draft.source}${draft.ai ? ' · текст помог написать ИИ' : ''}`;
+    const images = publishMedia.length ? [] : (draft.images || []).slice(0, 6);
+    for (const [index, image] of images.entries()) {
+      say(`${done} · забираем картинки: ${index + 1} из ${images.length}…`);
+      try {
+        const saved = (await apiCall('POST', '/api/uploads/remote', { url: image })).url;
+        publishMedia.push({ id: `m${++mediaSeq}`, type: 'image', kind: 'image', url: saved, preview: saved, status: 'done' });
+        renderPicker();
+      } catch {}
+    }
+    say(`${done}${publishMedia.length ? ` · картинок: ${publishMedia.length}` : ''}${draft.page?.length ? ' · страница поста' : ''}. Проверь и поправь`);
+  } catch (error) {
+    say(error.message);
+  }
+  button.disabled = false;
+}
+
+/* Comments: replies, likes, pins, voice and a summary of the thread */
+
+function commentHtml(project, comment, reply = false) {
+  const ownProject = isMine(project.handle);
+  const name = comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name);
+  const face = ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null);
+  const id = escapeHtml(comment.id || '');
+  const pid = escapeHtml(project.id);
+  const live = online && Boolean(comment.id);
+  const actions = live ? [
+    me ? `<button data-action="reply-comment" data-id="${id}" data-project="${pid}" data-name="${escapeHtml(comment.name)}">Ответить</button>` : '',
+    ownProject && !reply ? `<button data-action="pin-comment" data-id="${id}" data-project="${pid}">${comment.pinned ? 'Открепить' : 'Закрепить'}</button>` : '',
+    comment.mine || ownProject ? `<button data-action="delete-comment" data-id="${id}" data-project="${pid}">Удалить</button>` : '',
+    me && !comment.mine && !ownProject ? `<button data-action="report" data-kind="comment" data-id="${id}" data-project="${pid}">Пожаловаться</button>` : ''
+  ].join('') : '';
+  const like = live ? `<button class="comment-like ${comment.liked ? 'on' : ''}" data-action="like-comment" data-id="${id}" data-project="${pid}" aria-pressed="${Boolean(comment.liked)}" aria-label="Нравится">${icon('heart')}${comment.likes ? `<b>${comment.likes}</b>` : ''}</button>` : '';
+  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text ? `<p>${escapeHtml(comment.text)}</p>` : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${actions ? `<div class="comment-actions">${actions}</div>` : ''}</div>${like}</div>`;
+}
+
+function commentsInner(project) {
+  const all = projectComments(project).filter(comment => !hiddenLocally.has(`c:${comment.id}`));
+  const roots = all.filter(comment => !comment.replyTo || !all.some(item => item.id === comment.replyTo));
+  roots.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)));
+  const list = roots.length
+    ? roots.map(root => commentHtml(project, root) + all.filter(item => item.replyTo === root.id).map(item => commentHtml(project, item, true)).join('')).join('')
+    : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
+  const pid = escapeHtml(project.id);
+  const digest = online && all.length >= 3 ? `<div class="digest" data-digest="${pid}"><button class="digest-btn" data-action="digest" data-id="${pid}">${icon('sparkle')}<span><b>О чём пишут</b><small>Короткий пересказ ${all.length} ${plural(all.length, 'комментария', 'комментариев', 'комментариев')}</small></span>${icon('chevronRight')}</button></div>` : '';
+  const replying = replyTarget?.projectId === project.id ? replyTarget : null;
+  const voice = online && me && typeof MediaRecorder === 'function' ? `<button type="button" class="cbtn" data-action="voice-rec" data-id="${pid}" aria-label="Записать голосовой комментарий">${icon('mic')}</button>` : '';
+  const placeholder = online && !me ? 'Войди, чтобы комментировать' : replying ? `Ответ ${replying.name}…` : 'Комментарий…';
+  return `${digest}<div class="comments">${list}</div><form id="comment-form" data-id="${pid}" class="composer sticky comment-composer">${replying ? `<div class="reply-bar">${icon('comment')}<span>Ответ <b>${escapeHtml(replying.name)}</b></span><button type="button" data-action="reply-cancel" aria-label="Отменить ответ">${icon('close')}</button></div>` : ''}<input type="hidden" name="replyTo" value="${escapeHtml(replying?.id || '')}"><input name="text" maxlength="1200" placeholder="${escapeHtml(placeholder)}" aria-label="Комментарий" autocomplete="off">${voice}<button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
+}
+
+function rerenderComments(id) {
+  const project = projectById(id);
+  const zone = modal.querySelector?.(`.comments-zone[data-comments="${id}"]`);
+  if (project && zone) zone.innerHTML = commentsInner(project);
+  else if (dialogContext?.kind === 'project' && dialogContext.id === id) openProject(id);
+  else if (dialogContext?.kind === 'comments' && dialogContext.id === id) openComments(id);
+}
+
+async function likeComment(projectId, id, button) {
+  if (needLogin('Чтобы ставить ♥, войди в аккаунт')) return;
+  const comment = projectById(projectId)?.comments?.find(item => item.id === id);
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(id)}/like`);
+    if (comment) Object.assign(comment, { liked: result.liked, likes: result.likes });
+    if (button?.isConnected) {
+      button.classList.toggle('on', result.liked);
+      button.setAttribute('aria-pressed', String(result.liked));
+      button.innerHTML = `${icon('heart')}${result.likes ? `<b>${result.likes}</b>` : ''}`;
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function commentAction(method, projectId, id, path) {
+  try {
+    const result = await apiCall(method, `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(id)}${path ? `/${path}` : ''}`);
+    replaceProject(result.project);
+    refresh();
+    rerenderComments(projectId);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function showDigest(id, button) {
+  const host = modal.querySelector?.(`.digest[data-digest="${id}"]`);
+  if (!host) return;
+  button.disabled = true;
+  host.classList.add('loading');
+  try {
+    const digest = await apiCall('GET', `/api/projects/${encodeURIComponent(id)}/comments/summary`);
+    host.innerHTML = `<div class="digest-card">${icon('sparkle')}<div><b>О чём пишут${digest.source === 'ai' ? ' <i class="ai-tag">ИИ</i>' : ''}</b><p>${escapeHtml(digest.summary)}</p>${digest.points?.length ? `<ul>${digest.points.map(point => `<li>${escapeHtml(point)}</li>`).join('')}</ul>` : ''}</div></div>`;
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message);
+  }
+  host.classList.remove('loading');
+}
+
+let voiceRec = null;
+let voicePlayer = null;
+
+async function startVoice(projectId) {
+  if (needLogin('Чтобы оставить голосовой, войди в аккаунт') || voiceRec) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { toast('Нет доступа к микрофону — разреши его в настройках сайта'); return; }
+  const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(item => MediaRecorder.isTypeSupported?.(item)) || '';
+  const recorder = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 48000 } : undefined);
+  const chunks = [];
+  voiceRec = { recorder, chunks, stream, projectId, start: Date.now(), timer: 0, send: false };
+  recorder.ondataavailable = event => { if (event.data?.size) chunks.push(event.data); };
+  recorder.onstop = () => finishVoice();
+  recorder.start(250);
+  const form = modal.querySelector?.('#comment-form');
+  form?.classList.add('recording');
+  form?.insertAdjacentHTML?.('afterbegin', `<div class="voice-rec"><i class="rec-dot"></i><b class="rec-time">0:00</b><span>Говори — до двух минут</span><button type="button" class="btn btn-ghost btn-sm" data-action="voice-cancel">Отмена</button><button type="button" class="btn btn-grad btn-sm" data-action="voice-stop">${icon('send')} Отправить</button></div>`);
+  voiceRec.timer = setInterval(() => {
+    if (!voiceRec) return;
+    const seconds = Math.floor((Date.now() - voiceRec.start) / 1000);
+    const clock = modal.querySelector?.('.rec-time');
+    if (clock) clock.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    if (seconds >= 120) stopVoice(true);
+  }, 250);
+}
+
+function stopVoice(send) {
+  if (!voiceRec) return;
+  voiceRec.send = send;
+  clearInterval(voiceRec.timer);
+  try { voiceRec.recorder.stop(); } catch { finishVoice(); }
+}
+
+async function finishVoice() {
+  const record = voiceRec;
+  voiceRec = null;
+  if (!record) return;
+  record.stream.getTracks().forEach(track => track.stop());
+  const form = modal.querySelector?.('#comment-form');
+  form?.classList.remove('recording');
+  form?.querySelector?.('.voice-rec')?.remove?.();
+  if (!record.send) return;
+  const duration = Math.round((Date.now() - record.start) / 1000);
+  if (duration < 1 || !record.chunks.length) { toast('Слишком коротко'); return; }
+  const blob = new Blob(record.chunks, { type: (record.recorder.mimeType || 'audio/webm').split(';')[0] });
+  try {
+    toast('Отправляем голосовое…');
+    const url = await uploadBlob(blob, 'audio');
+    const replyTo = replyTarget?.projectId === record.projectId ? replyTarget.id : '';
+    const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(record.projectId)}/comments`, { voice: url, duration, replyTo });
+    replyTarget = null;
+    replaceProject(project);
+    trackSignal(project, 'comment');
+    refresh();
+    rerenderComments(project.id);
+    toast('Голосовой комментарий отправлен');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function voiceHtml(url, duration = 0) {
+  const src = uploadUrl(url);
+  if (!src) return '';
+  let seed = 0;
+  for (const char of src) seed = (seed * 31 + char.charCodeAt(0)) >>> 0;
+  const bars = Array.from({ length: 26 }, (_, index) => `<i style="--h:${25 + ((seed >> (index % 24)) + index * 37) % 75}%"></i>`).join('');
+  const seconds = Math.max(0, Math.round(Number(duration) || 0));
+  return `<button class="voice-note" data-action="play-voice" data-src="${src}" aria-label="Голосовой комментарий, ${seconds} с">${icon('play', 'v-play')}${icon('pause', 'v-pause')}<span class="voice-wave">${bars}</span><small>${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}</small></button>`;
+}
+
+function playVoice(button) {
+  const src = button.dataset.src;
+  if (voicePlayer && voicePlayer.dataset?.src === src && !voicePlayer.paused) { voicePlayer.pause(); return; }
+  voicePlayer?.pause();
+  document.querySelectorAll?.('.voice-note.playing').forEach(item => item.classList.remove('playing'));
+  voicePlayer = new Audio(src);
+  voicePlayer.dataset.src = src;
+  button.classList.add('playing');
+  const bars = [...(button.querySelectorAll?.('.voice-wave i') || [])];
+  const paint = share => { const lit = Math.round(share * bars.length); bars.forEach((bar, index) => bar.classList.toggle('on', index < lit)); };
+  voicePlayer.ontimeupdate = () => paint(voicePlayer.duration && Number.isFinite(voicePlayer.duration) ? voicePlayer.currentTime / voicePlayer.duration : 0);
+  voicePlayer.onpause = () => button.classList.remove('playing');
+  voicePlayer.onended = () => { button.classList.remove('playing'); paint(0); };
+  voicePlayer.play().catch(() => { button.classList.remove('playing'); toast('Не получилось воспроизвести'); });
+}
+
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('beforeinstallprompt', event => {
+    event.preventDefault?.();
+    installPrompt = event;
+  });
+}
+
 async function boot() {
   if (canReachServer) {
     main.innerHTML = `<div class="boot">${logoLoaderHtml()}</div>`;
@@ -4111,6 +5100,7 @@ async function boot() {
   }
   render();
   if (online) connectEvents();
+  registerWorker().then(() => checkPush());
   // Back from Google / Yandex / GitHub: show what went wrong, or greet, and tidy the address.
   const params = typeof URLSearchParams === 'function' ? new URLSearchParams(location.search || '') : null;
   if (params?.has('auth_error')) toast(params.get('auth_error'));
