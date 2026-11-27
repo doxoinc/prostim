@@ -551,8 +551,6 @@ function afterRender(view, changedPage, current) {
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
   if (view === 'activity') loadActivity();
-  syncViewportGap();
-  setTimeout(syncViewportGap, 350);
   if (view !== 'feed') {
     if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) { if (view === 'inbox' && route().page) scrollChatEnd(); else window.scrollTo?.(0, 0); }
     return;
@@ -4037,24 +4035,6 @@ for (const name of ['focusin', 'focusout']) {
 }
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
 
-// An app opened from the home screen should fill the screen. On iPhone a page that does not scroll
-// (the feed) is sometimes laid out shorter than the screen by the status bar height, and everything
-// fixed to the bottom floats above an empty strip. The missing height is measured and the bottom bar,
-// the feed and sheets are moved down by it.
-function syncViewportGap() {
-  const standalone = Boolean(window.matchMedia?.('(display-mode: standalone)').matches) || navigator.standalone === true;
-  const screenSize = globalThis.screen;
-  let gap = 0;
-  if (standalone && screenSize && !keyboardOpen) {
-    const portrait = innerHeight >= innerWidth;
-    const full = portrait ? Math.max(screenSize.width, screenSize.height) : Math.min(screenSize.width, screenSize.height);
-    gap = Math.round(full - innerHeight);
-  }
-  document.documentElement?.style?.setProperty?.('--vp-gap', `${gap > 0 && gap <= 100 ? gap : 0}px`);
-}
-window.addEventListener?.('resize', () => syncViewportGap());
-window.addEventListener?.('orientationchange', () => setTimeout(syncViewportGap, 300));
-
 // The feed mode menu closes on any tap outside it, and on Escape.
 document.addEventListener('click', event => {
   if (!event.target?.closest?.('.mode-menu, [data-action="feed-modes"]')) toggleModeMenu(false);
@@ -4346,18 +4326,31 @@ function feedModeMenuHtml() {
   return `<div class="mode-menu" role="menu" aria-label="Что показывать в ленте" hidden>${feedModeOrder.map((key, index) => `<button role="menuitemradio" aria-checked="${key === feedMode}" class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}" style="--i:${index}">${feedModes.find(([id]) => id === key)[1]}</button>`).join('')}</div>`;
 }
 
+let modeMenuTimer = 0;
+
+// Opening: a thin line runs down from the dot by "Лента" and the modes fall out along it one by one.
+// Closing plays it backwards: the modes lift away and the line pulls back into the dot.
 function toggleModeMenu(open) {
   const menu = topbar.querySelector?.('.mode-menu');
   const toggle = topbar.querySelector?.('[data-action="feed-modes"]');
   if (!menu || !toggle) return;
-  const show = open ?? menu.hidden;
-  if (show && toggle.getBoundingClientRect && topbar.getBoundingClientRect) {
+  const isOpen = !menu.hidden && !menu.classList.contains('closing');
+  const show = open ?? !isOpen;
+  if (show === isOpen) return;
+  clearTimeout(modeMenuTimer);
+  if (show) {
     const link = toggle.getBoundingClientRect();
     const bar = topbar.getBoundingClientRect();
+    const gap = 6;
     menu.style.left = `${Math.round(link.left - bar.left)}px`;
-    menu.style.top = `${Math.round(link.bottom - bar.top + 8)}px`;
+    menu.style.top = `${Math.round(link.bottom - bar.top + gap)}px`;
+    menu.style.setProperty('--lead', `${Math.round(link.height / 2 + gap)}px`);
+    menu.classList.remove('closing');
+    menu.hidden = false;
+  } else {
+    menu.classList.add('closing');
+    modeMenuTimer = setTimeout(() => { menu.hidden = true; menu.classList.remove('closing'); }, 280);
   }
-  menu.hidden = !show;
   toggle.setAttribute('aria-expanded', String(show));
   toggle.classList.toggle('open', show);
 }
@@ -4381,7 +4374,17 @@ function followingEntries(list) {
 
 function setFeedMode(mode) {
   if (!feedModes.some(([key]) => key === mode)) return;
-  toggleModeMenu(false);
+  const menu = topbar.querySelector?.('.mode-menu');
+  if (menu && !menu.hidden && !menu.classList.contains('closing')) {
+    menu.querySelectorAll('button').forEach(button => button.classList.toggle('on', button.dataset.mode === mode));
+    toggleModeMenu(false);
+    setTimeout(() => applyFeedMode(mode), 240);
+    return;
+  }
+  applyFeedMode(mode);
+}
+
+function applyFeedMode(mode) {
   if (mode === feedMode && feedOrder) { refreshFeed(); return; }
   feedMode = mode;
   try { storage.setItem(FEED_MODE_KEY, mode); } catch {}
@@ -5596,6 +5599,7 @@ if (typeof window.addEventListener === 'function') {
 
 async function boot() {
   applyTheme();
+  if (isIos() && isStandalone()) document.documentElement?.classList?.add?.('ios-app');
   window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change', () => applyTheme());
   if (readSetting(SOUND_KEY, '0') === '1') feedMuted = false;
   if (canReachServer) {
