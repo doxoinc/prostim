@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanSteam, repoChecks, steamReadiness, publisherShouldNotice, taskFromComment, taskFromDigest, taskFromFeedback, demoTaskPrompt, demoUrlFromText, promptFromComment, updateFromTask } from '../src/ecosystem.js';
+import { cleanSteam, repoChecks, steamReadiness, publisherShouldNotice, taskFromComment, taskFromDigest, taskFromFeedback, demoTaskPrompt, demoUrlFromText, promptFromComment, updateFromTask, cleanPlaytest, cleanTestResults, testReportText, testTally, playtestDraft, PLAYTEST_STEPS } from '../src/ecosystem.js';
 
 test('a repository file list says what a Steam release already has', () => {
   const checks = repoChecks([
@@ -16,12 +16,13 @@ test('a repository file list says what a Steam release already has', () => {
 test('readiness for Steam adds up the checklist, the feed and the repository', () => {
   const project = { steam: { checklist: { build: true, trailer: true, text: false } } };
   const without = steamReadiness(project, { watchers: 12, stats: { plays: 5, wishlists: 10 }, retention: 0.5 });
-  assert.equal(without.total, 10, 'six checklist items and four feed goals');
+  assert.equal(without.total, 11, 'six checklist items and five feed goals');
   assert.equal(without.done, 5, 'build, trailer, watchers, retention and Steam clicks');
-  assert.equal(without.percent, 50);
+  assert.equal(without.percent, 45);
+  assert.equal(steamReadiness(project, { watchers: 12, stats: { plays: 5, wishlists: 10 }, retention: 0.5, reports: 5 }).done, 6, 'five tester reports count');
   assert.equal(without.items.find(item => item.id === 'plays').share, 0.25);
   const withRepo = steamReadiness(project, { watchers: 12, repo: { readme: true, license: false, screens: false, buildFiles: true } });
-  assert.equal(withRepo.total, 14);
+  assert.equal(withRepo.total, 15);
   assert.equal(withRepo.done, 5, 'build, trailer, watchers, README and build files');
 });
 
@@ -84,4 +85,27 @@ test('a comment as a task in the project context: the thread, the files and wher
   assert.match(prompt, /Файлы в корне проекта: project\.godot, scenes\//);
   assert.match(prompt, /Из README: Игра про смотрителя маяка/);
   assert.match(prompt, /перечисли, что уточнить у игрока/);
+});
+
+test('a playtest keeps clean steps, known access and sane places; a report reads step by step', () => {
+  const steps = Array.from({ length: 14 }, (_, index) => `${index + 1}. Шаг ${index + 1}`).join('\n');
+  const playtest = cleanPlaytest({ title: '  Первые\n5 минут ', steps, access: 'root', slots: 500, build: 'x.io', notes: 'a\n\n\n\nb' }, {}, url => `https://${url}`);
+  assert.equal(playtest.title, 'Первые 5 минут');
+  assert.equal(playtest.steps.length, PLAYTEST_STEPS);
+  assert.equal(playtest.steps[0], 'Шаг 1', 'numbering is taken off');
+  assert.equal(playtest.access, 'none');
+  assert.equal(playtest.slots, 50);
+  assert.equal(playtest.build, 'https://x.io');
+  assert.equal(playtest.notes, 'a\n\nb');
+  const results = cleanTestResults([{ ok: true }, { ok: 'yes', note: 'x'.repeat(400) }, { ok: false, note: 'вылет' }], ['Открой', 'Пройди', 'Выйди']);
+  assert.deepEqual(results.map(item => item.ok), [true, null, false], 'only true and false count as marks');
+  assert.equal(results[1].note.length, 300);
+  assert.deepEqual(testTally(results), { passed: 1, failed: 1, total: 3 });
+  const text = testReportText({ title: 'Тест', platform: 'Android', version: '0.4' }, results, 'В целом приятно');
+  assert.match(text, /^Тест-задание «Тест»: не прошло 1 из 3\./);
+  assert.match(text, /Где проверял: Android, версия 0\.4\./);
+  assert.match(text, /✗ 3\. Выйди — вылет/);
+  assert.match(text, /В целом приятно$/);
+  assert.equal(playtestDraft({ title: 'Ровер', demo: 'https://x.itch.io/r' }).build, 'https://x.itch.io/r');
+  assert.match(playtestDraft({ title: 'Ровер' }).steps[0], /билд/);
 });

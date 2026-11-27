@@ -35,7 +35,8 @@ export const feedSteamGoals = [
   { id: 'watchers', icon: 'bell', title: 'Следят за проектом', goal: 10 },
   { id: 'plays', icon: 'play', title: 'Сыграли в демо', goal: 20 },
   { id: 'retention', icon: 'clock', title: 'Досматривают пост', goal: 40, unit: '%' },
-  { id: 'wishlists', icon: 'gamepad', title: 'Переходы в Steam', goal: 10 }
+  { id: 'wishlists', icon: 'gamepad', title: 'Переходы в Steam', goal: 10 },
+  { id: 'reports', icon: 'check', title: 'Отчёты тестеров', goal: 5 }
 ];
 
 export const repoSteamItems = [
@@ -62,9 +63,9 @@ export function repoChecks(entries) {
   };
 }
 
-export function steamReadiness(project, { watchers = 0, stats = {}, retention = 0, repo = null } = {}) {
+export function steamReadiness(project, { watchers = 0, stats = {}, retention = 0, repo = null, reports = 0 } = {}) {
   const checklist = project?.steam?.checklist || {};
-  const values = { watchers, plays: Number(stats.plays) || 0, retention: Math.round(retention * 100), wishlists: Number(stats.wishlists) || 0 };
+  const values = { watchers, plays: Number(stats.plays) || 0, retention: Math.round(retention * 100), wishlists: Number(stats.wishlists) || 0, reports: Number(reports) || 0 };
   const manual = manualSteamItems.map(item => ({ ...item, kind: 'manual', done: Boolean(checklist[item.id]) }));
   const feed = feedSteamGoals.map(item => ({ ...item, kind: 'feed', value: values[item.id], done: values[item.id] >= item.goal, share: Math.min(1, values[item.id] / item.goal) }));
   const code = repo ? repoSteamItems.map(item => ({ ...item, kind: 'repo', done: Boolean(repo[item.id]) })) : [];
@@ -83,12 +84,75 @@ export function publisherShouldNotice(project, quality, { watchers = 0, saves = 
 /* Sparks: a small reward for helping authors */
 
 export const sparkRules = {
-  accepted: { amount: 20, label: 'Автор принял отчёт' },
-  pinned: { amount: 10, label: 'Комментарий закрепили' },
-  tasked: { amount: 10, label: 'Отзыв взяли в работу' },
-  fixed: { amount: 15, label: 'Отчёт учли в обновлении' }
+  accepted: { amount: 20, label: 'Автор принял отчёт', hint: 'Автор отметил твой отчёт или комментарий: «Помогло»' },
+  tasked: { amount: 10, label: 'Отзыв взяли в работу', hint: 'Автор отдал твой отзыв ИИ-агенту' },
+  fixed: { amount: 15, label: 'Отчёт учли в обновлении', hint: 'Исправление вышло в обновлении проекта' },
+  pinned: { amount: 10, label: 'Комментарий закрепили', hint: 'Автор закрепил твой комментарий сверху' }
 };
 export const sparkPrices = { boostDay: 100, plusWeek: 300 };
+
+/* Playtests: the author hands players a task, a build, a prompt and, if wanted, the project folder in
+   ИИ-мир; the players send back a report step by step. One open playtest per project. */
+
+export const playtestAccess = [
+  ['none', 'Только билд', 'Тестер получает ссылку, шаги и промпт'],
+  ['view', 'Смотреть папку', 'Видит задачи ИИ и файлы проекта в ИИ-мире'],
+  ['run', 'Ставить задачи ИИ', 'Может сам запускать промпт в папке проекта']
+];
+export const PLAYTEST_STEPS = 10;
+export const PLAYTEST_SLOTS = 50;
+
+const playtestLine = (value, max) => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+const playtestBlock = (value, max) => String(value ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, max);
+
+// What the author writes; `link` makes a web address safe or empty (the server and the browser pass their own).
+export function cleanPlaytest(value, current = {}, link = url => url) {
+  const source = value && typeof value === 'object' ? value : {};
+  const steps = (Array.isArray(source.steps) ? source.steps : String(source.steps ?? '').split('\n'))
+    .map(step => playtestLine(step, 200).replace(/^(\d+[.)]|[-•*])\s*/, '')).filter(Boolean).slice(0, PLAYTEST_STEPS);
+  const access = playtestAccess.some(([key]) => key === source.access) ? source.access : 'none';
+  return {
+    title: playtestLine(source.title, 100),
+    steps,
+    build: link(playtestLine(source.build, 500)) || '',
+    platform: playtestLine(source.platform, 60),
+    version: playtestLine(source.version, 24),
+    notes: playtestBlock(source.notes, 1000),
+    prompt: playtestBlock(source.prompt, 2000),
+    access,
+    slots: Math.max(1, Math.min(PLAYTEST_SLOTS, Math.round(Number(source.slots) || current.slots || 10)))
+  };
+}
+
+// A tester's report: each step passed, failed or skipped, with a note.
+export function cleanTestResults(value, steps) {
+  const list = Array.isArray(value) ? value : [];
+  return steps.map((step, index) => {
+    const item = list[index] && typeof list[index] === 'object' ? list[index] : {};
+    return { step, ok: item.ok === true ? true : item.ok === false ? false : null, note: playtestLine(item.note, 300) };
+  });
+}
+
+export function testTally(results) {
+  return { passed: results.filter(item => item.ok === true).length, failed: results.filter(item => item.ok === false).length, total: results.length };
+}
+
+// The report as a comment: readable for people and complete for an AI task made from it.
+export function testReportText(playtest, results, text = '', env = {}) {
+  const { passed, failed, total } = testTally(results);
+  const head = `Тест-задание «${playtest.title}»: ${failed ? `не прошло ${failed} из ${total}` : passed === total ? `всё прошло (${total} из ${total})` : `прошло ${passed} из ${total}`}.`;
+  const where = [env.platform || playtest.platform, playtest.version ? `версия ${playtest.version}` : ''].filter(Boolean).join(', ');
+  const lines = results.map((item, index) => `${item.ok === true ? '✓' : item.ok === false ? '✗' : '–'} ${index + 1}. ${item.step}${item.note ? ` — ${item.note}` : ''}`);
+  return [head, where ? `Где проверял: ${where}.` : '', lines.join('\n'), playtestBlock(text, 1200)].filter(Boolean).join('\n').slice(0, 2400);
+}
+
+// A first draft of the playtest from the post: what to check depends on what the project has.
+export function playtestDraft(project) {
+  const steps = project?.demo
+    ? ['Открой демо и пройди обучение', 'Поиграй 5 минут и попробуй всё, что видишь на экране', 'Запиши, где застрял или что было непонятно', 'Проверь звук, управление и что игра не тормозит']
+    : ['Скачай или открой билд по ссылке', 'Запусти и пройди первые 5 минут', 'Запиши, где застрял или что было непонятно', 'Проверь, что ничего не вылетает'];
+  return { title: `Первые 5 минут в «${String(project?.title || 'игре').slice(0, 60)}»`, steps, build: project?.demo || '', platform: '', version: '', notes: '', prompt: '', access: 'none', slots: 10 };
+}
 
 /* Drafts between the parts */
 

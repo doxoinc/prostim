@@ -5,7 +5,7 @@ import { trustLevels, levelTier, levelTiers, helpLevels, helpPoints, helpAreas, 
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
 import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds, PLUS_DISCOUNT, profileBanners, profileAccents, MOTION_VIDEO_LIMIT } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
-import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices } from './ecosystem.js';
+import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices, playtestAccess, playtestDraft, PLAYTEST_STEPS } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
 import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons, sortComments, commentSorts, feedbackKinds, reviewTags, commentLabels } from './social.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, imageRatios, focusStyle, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
@@ -1027,7 +1027,7 @@ function mediaInner(project, reason = '') {
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}${steamBadgeHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}${steamBadgeHtml(project)}${playtestChipHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
 }
 
 // The post's own call to action, right on the card: «Играть» for a demo that runs in the browser,
@@ -1224,13 +1224,20 @@ function authorsList() {
 function renderSearch() {
   const all = projects();
   const tiles = Object.entries(categoryNames).map(([id, label]) => `<a class="cat-tile cat-${id}" href="#/feed/${id}">${icon(categoryIcons[id])}<span>${label}<small>${all.filter(project => project.category === id).length}</small></span></a>`).join('');
-  return `<div class="page"><h1 class="sr-only">Обзор</h1><label class="search-box">${icon('search')}<input type="search" name="search" placeholder="Игры, приложения, авторы" aria-label="Поиск" value="${escapeHtml(search)}" autocomplete="off"></label><div class="cat-tiles">${tiles}</div><h2 class="row-title">Авторы</h2><div class="creators" id="search-authors">${creatorsHtml()}</div><h2 class="row-title">Проекты</h2><div id="search-results">${searchResults()}</div></div>`;
+  return `<div class="page"><h1 class="sr-only">Обзор</h1><label class="search-box">${icon('search')}<input type="search" name="search" placeholder="Игры, приложения, авторы" aria-label="Поиск" value="${escapeHtml(search)}" autocomplete="off"></label><div class="cat-tiles">${tiles}</div>${playtestsRowHtml()}<h2 class="row-title">Авторы</h2><div class="creators" id="search-authors">${creatorsHtml()}</div><h2 class="row-title">Проекты</h2><div id="search-results">${searchResults()}</div></div>`;
+}
+
+function playtestsRowHtml() {
+  if (!online) return '';
+  const open = projects().filter(project => project.playtest?.open && !isMine(project.handle) && visibleInFeed(project));
+  if (!open.length) return '';
+  return `<button class="playtests-row" data-action="playtests"><span class="row-mark">${icon('users')}</span><span><b>Тест-задания · ${open.length}</b><small>Проверь игру по шагам и получи искры</small></span><em class="pt-reward">${icon('sparkle')}+${sparkRules.accepted.amount}</em></button>`;
 }
 
 function creatorsHtml() {
   const authors = authorsList();
   if (!authors.length) return `<p class="muted-line">Авторов не нашли</p>`;
-  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}${plusBadge(userByHandle(project.handle))}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small', true)}</div>`).join('');
+  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}${plusBadge(userByHandle(project.handle))}</b><small class="creator-sub">@${escapeHtml(project.handle)}</small></button>${followPill(project.handle, 'small', true)}</div>`).join('');
 }
 
 /* Inbox */
@@ -1384,6 +1391,7 @@ let authResendTimer = 0;
 const providerIcons = {
   google: '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 8 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2A11.9 11.9 0 0 1 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3a12 12 0 0 1-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>',
   yandex: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="12" fill="#FC3F1D"/><path fill="#fff" d="M13.3 6.5h-1c-1.9 0-2.8.95-2.8 2.35 0 1.6.68 2.33 2.08 3.28l1.15.78-3.32 4.97H7.5l2.98-4.44C8.76 12.2 7.8 11 7.8 9c0-2.53 1.76-4.26 5.11-4.26h3.31V18.1H13.3V6.5z"/></svg>',
+  apple: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.37 12.73c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.82-.81-3-.79-1.54.02-2.97.9-3.76 2.28-1.61 2.79-.41 6.91 1.15 9.17.77 1.1 1.68 2.34 2.87 2.3 1.15-.05 1.59-.74 2.98-.74 1.39 0 1.78.74 3 .72 1.24-.02 2.03-1.12 2.78-2.23.88-1.28 1.24-2.52 1.26-2.59-.03-.01-2.42-.93-2.44-3.69zM14.1 5.98c.63-.77 1.06-1.83.94-2.89-.91.04-2.02.61-2.67 1.37-.58.67-1.1 1.76-.96 2.8 1.02.08 2.06-.52 2.69-1.28z"/></svg>',
   github: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>'
 };
 
@@ -1392,7 +1400,9 @@ const emailSignIn = () => online && Boolean(remote?.config?.email);
 function authProvidersHtml(verb = 'Войти') {
   const list = online ? remote?.config?.providers || [] : [];
   if (!list.length) return '';
-  return `<div class="auth-social">${list.map(provider => `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || icon('user')}<span>${verb} через ${escapeHtml(provider.label)}</span></a>`).join('')}</div><div class="auth-or"><span>или</span></div>`;
+  // Google and Apple get a full row; with more providers the rest sit two in a row with short labels.
+  const many = list.length > 2;
+  return `<div class="auth-social ${many ? 'many' : ''}">${list.map((provider, index) => `<a class="social-btn ${escapeHtml(provider.id)} ${many && index >= 2 ? 'half' : ''}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start" aria-label="${verb} через ${escapeHtml(provider.label)}">${providerIcons[provider.id] || icon('user')}<span>${many && index >= 2 ? escapeHtml(provider.label) : `${verb} через ${escapeHtml(provider.label)}`}</span></a>`).join('')}</div><div class="auth-or"><span>или</span></div>`;
 }
 
 function authCodeHtml() {
@@ -1415,7 +1425,7 @@ function authFormHtml(mode) {
   const submit = register ? (withEmail ? 'Получить код на почту' : 'Создать аккаунт') : 'Войти';
   const extra = register
     ? `<p class="fine">Ник: латиница, цифры и _. Его видят другие люди.${withEmail ? ' На почту придёт код подтверждения.' : ''}</p>`
-    : withEmail ? '<button type="button" class="link-btn" data-action="auth-mode" data-id="code">Войти по коду из письма, без пароля</button>' : '';
+    : withEmail ? '<button type="button" class="link-btn" data-action="auth-mode" data-id="code">Забыл пароль? Войди по коду из письма</button>' : '';
   return `${authProvidersHtml(register ? 'Продолжить' : 'Войти')}${tabs}<form id="auth-form" class="form" data-mode="${mode}">${fields}<input name="password" type="password" minlength="6" maxlength="200" placeholder="Пароль" aria-label="Пароль" autocomplete="${register ? 'new-password' : 'current-password'}" required><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${submit}</button>${extra}</form>`;
 }
 
@@ -1767,13 +1777,17 @@ function accountHtml() {
   const linked = providers.map(provider => account.providers.includes(provider.id)
     ? `<span class="social-btn linked ${escapeHtml(provider.id)}">${providerIcons[provider.id] || ''}<span>${escapeHtml(provider.label)} подключён</span>${icon('check')}</span>`
     : `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || ''}<span>Подключить ${escapeHtml(provider.label)}</span></a>`).join('');
-  return mail || linked ? `<section class="account-block">${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>` : '';
+  // A password: set one after signing up through a provider, change it, or replace a forgotten one right
+  // after coming in by a mailed code.
+  const free = !account.hasPassword || account.passwordReset;
+  const password = `<form id="password-form" class="form password-form"><h3>${account.hasPassword ? 'Пароль' : 'Задать пароль'}</h3><p class="fine">${account.hasPassword ? (account.passwordReset ? 'Ты вошёл по коду — можно задать новый пароль без старого.' : 'Забыл пароль? Выйди и войди по коду из письма — тогда старый не понадобится.') : 'Чтобы входить и по нику с паролем.'}</p>${free ? '' : '<input class="field" name="current" type="password" maxlength="200" placeholder="Старый пароль" aria-label="Старый пароль" autocomplete="current-password" required>'}<div class="inline-field"><input class="field" name="password" type="password" minlength="6" maxlength="200" placeholder="${account.hasPassword ? 'Новый пароль' : 'Пароль'}" aria-label="Новый пароль" autocomplete="new-password" required><button class="btn btn-ghost" type="submit">Сохранить</button></div><p class="form-error" role="alert"></p></form>`;
+  return `<section class="account-block">${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}${password}</section>`;
 }
 
 function openEditProfile() {
   if (!me) return;
   avatarDraft = null;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form><button class="set-row" data-action="account-sheet"><span class="row-mark">${icon('send')}</span><span><b>Вход и почта</b><small>Почта, Google, Яндекс ID, GitHub</small></span>${icon('chevronRight')}</button></div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form><button class="set-row" data-action="account-sheet"><span class="row-mark">${icon('send')}</span><span><b>Вход и почта</b><small>Почта, Google, Apple, Яндекс ID, GitHub</small></span>${icon('chevronRight')}</button></div>`);
   clearInterval(authResendTimer);
   if (authFlow?.purpose === 'link') authResendTimer = setInterval(tickAuthResend, 1000);
 }
@@ -2543,14 +2557,14 @@ function openProject(id) {
   const mine = isMine(project.handle);
   const theme = cleanTheme(project.theme);
   ensureFonts(fontFamiliesFor(project));
-  const write = mine ? '' : `<a class="btn btn-ghost" href="#/inbox/${encodeURIComponent(project.handle)}">${icon('inbox')} Написать</a>`;
+  const write = mine ? '' : `<a class="btn btn-ghost btn-square" href="#/inbox/${encodeURIComponent(project.handle)}" aria-label="Написать автору" title="Написать автору">${icon('inbox')}</a>`;
   const edit = mine && (online || project.handle === 'me') ? `<button class="btn btn-ghost" data-action="edit-project" data-id="${projectId}">${icon('pen')} Редактировать</button>` : '';
   const remove = mine && online ? `<button class="btn btn-ghost btn-square" data-action="delete-project" data-id="${projectId}" aria-label="Удалить проект">${icon('trash')}</button>` : '';
   const promotion = mine && online ? promotionHtml(project) : '';
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)}${plusBadge(userByHandle(project.handle))} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${projectHubHtml(project) || promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)}${plusBadge(userByHandle(project.handle))}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot"><div data-playtest>${playtestCardHtml(project)}</div>${projectHubHtml(project) || promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${watchButton(project)}${write}${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button>`}<button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   if (gallery) loopTrack(gallery, 0, index => syncGalleryDots(gallery, index));
 }
@@ -3519,6 +3533,18 @@ document.addEventListener('click', async event => {
   else if (action === 'share') openShare(id);
   else if (action === 'feed-mode') setFeedMode(target.dataset.mode);
   else if (action === 'hub-tab') { hubTab = target.dataset.tab || 'feed'; rerenderHub(id); }
+  else if (action === 'playtest-join') joinPlaytest(id, target);
+  else if (action === 'playtest-open') openPlaytest(id);
+  else if (action === 'playtest-edit') openPlaytestEditor(id);
+  else if (action === 'playtest-run') runPlaytestPrompt(id);
+  else if (action === 'playtests') openPlaytestsList();
+  else if (action === 'playtest-close') { if (confirm('Закрыть набор тестеров? Отчёты останутся в «Отзывах», доступ к папке у тестеров пропадёт.')) playtestCall(id, 'playtest', { open: false }, 'Набор закрыт'); }
+  else if (action === 'playtest-leave') { closeLayer(); playtestCall(id, 'playtest/leave', {}, 'Ты больше не тестер этого проекта'); }
+  else if (action === 'playtest-invite') {
+    const project = projectById(target.dataset.project);
+    if (!project?.playtest?.open) { toast('Сначала создай тест-задание — потом позовёшь людей'); openPlaytestEditor(target.dataset.project); }
+    else playtestCall(target.dataset.project, 'playtest/invite', { handle: target.dataset.handle }, result => result.again ? 'Уже звал — второе приглашение не пришлём' : `@${target.dataset.handle} получит приглашение в тестеры`);
+  }
   else if (action === 'hub-open') { hubTab = target.dataset.tab || 'steam'; navigateToProject(id); }
   else if (action === 'hub-link') hubCall(id, 'link', { workspaceId: target.dataset.workspace || '' }, target.dataset.workspace ? 'Пост связан с папкой в ИИ-мире' : 'Связь убрана');
   else if (action === 'hub-digest-task') hubDigestTask(id);
@@ -3938,6 +3964,19 @@ document.addEventListener('submit', async event => {
     try {
       const { payment } = await apiCall('POST', '/api/promotions', { projectId: form.dataset.id, plan: data.get('plan') });
       handlePayment(payment);
+    } catch (error) {
+      formError(form, error.message);
+      if (submit) submit.disabled = false;
+    }
+    return;
+  }
+  if (form.id === 'password-form') {
+    if (submit) submit.disabled = true;
+    try {
+      await apiCall('POST', '/api/me/password', { current: String(data.get('current') || ''), password: String(data.get('password') || '') });
+      await reloadAll({ rerender: false });
+      openAccountSheet();
+      toast('Пароль сохранён');
     } catch (error) {
       formError(form, error.message);
       if (submit) submit.disabled = false;
@@ -4677,7 +4716,8 @@ function hubStat(iconName, value, label) {
 function hubFeedHtml(project) {
   const stats = cleanStats(statsFor(project));
   const pid = escapeHtml(project.id);
-  return `<div class="hub-stats">${hubStat('bell', project.watchers || 0, 'следят')}${hubStat('repost', project.reposts || 0, 'репостов')}${hubStat('play', stats.plays, 'сыграли')}${hubStat('gamepad', stats.wishlists, 'в Steam')}${hubStat('comment', commentCount(project), 'комментариев')}</div><div class="hub-actions"><button class="btn btn-ghost btn-sm" data-action="new-update" data-id="${pid}">${icon('plus')} Обновление</button><button class="btn btn-ghost btn-sm" data-action="share" data-id="${pid}">${icon('share')} Поделиться</button></div>${promotionHtml(project)}`;
+  const testers = project.playtest?.open ? project.playtest.taken : testReports(project).length;
+  return `<div class="hub-stats">${hubStat('bell', project.watchers || 0, 'следят')}${hubStat('repost', project.reposts || 0, 'репостов')}${hubStat('comment', commentCount(project), 'комментариев')}${hubStat('play', stats.plays, 'сыграли')}${hubStat('gamepad', stats.wishlists, 'в Steam')}<button class="hub-stat" data-action="hub-tab" data-id="${pid}" data-tab="testers">${icon('users')}<b>${testers}</b><small>${project.playtest?.open ? 'тестеров' : 'отчётов тестеров'}</small></button></div>${promotionHtml(project)}`;
 }
 
 function ownedWorkspaces() {
@@ -4704,7 +4744,7 @@ function hubCodeHtml(project) {
 function projectReadiness(project) {
   const stats = cleanStats(statsFor(project));
   const quality = projectQuality({ ...project, votes: voteCount(project), saves: savesCount(project) }, stats);
-  return steamReadiness(project, { watchers: project.watchers || 0, stats, retention: quality.impressions >= 20 ? quality.retention : 0, repo: project.repo });
+  return steamReadiness(project, { watchers: project.watchers || 0, stats, retention: quality.impressions >= 20 ? quality.retention : 0, repo: project.repo, reports: testReports(project).length });
 }
 
 function hubSteamHtml(project) {
@@ -4734,8 +4774,9 @@ function hubSteamHtml(project) {
 function projectHubHtml(project) {
   if (!online || !me || !isMine(project.handle)) return '';
   const fresh = playerFeedback(project).filter(comment => !comment.resolved && !comment.tasked).length;
-  const tabs = [['feed', 'flame', 'Лента'], ['reviews', 'star', 'Отзывы', fresh], ['code', 'code', 'Код и ИИ'], ['steam', 'gamepad', 'Steam']];
-  const body = hubTab === 'code' ? hubCodeHtml(project) : hubTab === 'steam' ? hubSteamHtml(project) : hubTab === 'reviews' ? hubFeedbackHtml(project) : hubFeedHtml(project);
+  const newReports = testReports(project).filter(comment => comment.test?.current && !comment.accepted && !comment.tasked && !comment.resolved).length;
+  const tabs = [['feed', 'flame', 'Лента'], ['reviews', 'star', 'Отзывы', fresh], ['testers', 'users', 'Тестеры', newReports], ['code', 'code', 'Код и ИИ'], ['steam', 'gamepad', 'Steam']];
+  const body = hubTab === 'code' ? hubCodeHtml(project) : hubTab === 'steam' ? hubSteamHtml(project) : hubTab === 'reviews' ? hubFeedbackHtml(project) : hubTab === 'testers' ? hubTestersHtml(project) : hubFeedHtml(project);
   return `<section class="hub" data-hub="${escapeHtml(project.id)}"><div class="hub-tabs" role="tablist" aria-label="Проект">${tabs.map(([key, iconName, label, count]) => `<button role="tab" aria-selected="${hubTab === key}" class="${hubTab === key ? 'on' : ''}" data-action="hub-tab" data-id="${escapeHtml(project.id)}" data-tab="${key}">${icon(iconName)}<span>${label}</span>${count ? `<i class="tab-count">${count > 99 ? '99+' : count}</i>` : ''}</button>`).join('')}</div><div class="hub-body">${demoDraftHtml(project)}${body}</div></section>`;
 }
 
@@ -4882,6 +4923,216 @@ async function hubDigestTask(id) {
   if (result?.task) toast('Отзывы ушли в ИИ-мир: агент составит план правок');
 }
 
+/* Playtests: the author hands players a task, a build, a prompt and maybe the project folder; reports come
+   back step by step and go on like any feedback — accept, give to the AI, ship in an update */
+
+function testReports(project) {
+  return projectComments(project).filter(comment => comment.test);
+}
+
+function playtestFactsHtml(test) {
+  return [test.platform, test.version ? `версия ${test.version}` : '', `${test.taken} из ${test.slots} ${plural(test.slots, 'места', 'мест', 'мест')}`, test.reports ? `${test.reports} ${plural(test.reports, 'отчёт', 'отчёта', 'отчётов')}` : ''].filter(Boolean).map(escapeHtml).join(' · ');
+}
+
+// On the post, for players: what to test, the reward and one button.
+function playtestCardHtml(project) {
+  const test = project.playtest;
+  if (!online || !test?.open || isMine(project.handle)) return '';
+  const pid = escapeHtml(project.id);
+  const left = Math.max(0, test.slots - test.taken);
+  const state = test.reported ? 'отчёт отправлен' : test.joined ? 'ты тестер' : left ? 'нужны тестеры' : 'места закончились';
+  const button = test.joined
+    ? `<button class="btn btn-grad btn-block" data-action="playtest-open" data-id="${pid}">${icon(test.reported ? 'refresh' : 'check')} ${test.reported ? 'Изменить отчёт' : 'Открыть задание и отчитаться'}</button>`
+    : left ? `<button class="btn btn-grad btn-block" data-action="playtest-join" data-id="${pid}">${icon('users')} Стать тестером</button>` : '';
+  const steps = test.steps.slice(0, 4).map(step => `<li>${escapeHtml(step)}</li>`).join('') + (test.steps.length > 4 ? `<li class="more">и ещё ${test.steps.length - 4}</li>` : '');
+  return `<section class="playtest-card"><div class="pt-head"><span class="pt-mark">${icon('check')}</span><span><small>Тест-задание · ${state}</small><b>${escapeHtml(test.title)}</b></span><em class="pt-reward" title="За принятый отчёт">${icon('sparkle')}+${sparkRules.accepted.amount}</em></div><ol class="pt-steps">${steps}</ol><p class="pt-meta">${playtestFactsHtml(test)}</p>${button}<p class="pt-note">Автор получит отчёт по шагам${test.access !== 'none' ? ' и откроет тебе папку проекта в ИИ-мире' : ''}. Примет — +${sparkRules.accepted.amount} искр, учтёт в обновлении — ещё +${sparkRules.fixed.amount}.</p></section>`;
+}
+
+function playtestChipHtml(project) {
+  const test = project.playtest;
+  if (!test?.open || isMine(project.handle) || (test.taken >= test.slots && !test.joined)) return '';
+  return `<button class="test-chip" data-action="open-project" data-id="${escapeHtml(project.id)}">${icon('users')}<span>${test.joined ? 'Ты тестер' : 'Ищут тестеров'}</span><b>${icon('sparkle')}+${sparkRules.accepted.amount}</b></button>`;
+}
+
+async function joinPlaytest(projectId, button) {
+  if (needLogin('Чтобы стать тестером, войди в аккаунт')) return;
+  if (button) button.disabled = true;
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/playtest/join`);
+    replaceProject(result.project);
+    rerenderOpenProject(projectId);
+    if (result.project.playtest?.workspaceId) refreshWorkspaces().catch(() => {});
+    openPlaytest(projectId);
+    toast('Ты в тестерах — вот задание');
+  } catch (error) {
+    if (button) button.disabled = false;
+    toast(error.message);
+  }
+}
+
+// The tester's sheet: the build and everything around it, then the report step by step.
+function openPlaytest(projectId) {
+  const project = projectById(projectId);
+  const test = project?.playtest;
+  if (!test?.joined) return;
+  const previous = testReports(project).find(comment => comment.mine && comment.test?.current);
+  const results = previous?.test?.results || test.steps.map(step => ({ step, ok: null, note: '' }));
+  const build = test.build || '';
+  const isDemo = build && build === project.demo;
+  const open = build ? (isDemo ? `<button class="btn btn-primary btn-block" data-action="play-demo" data-id="${escapeHtml(project.id)}">${icon('play')} Играть в браузере</button>` : externalLink(build, 'btn btn-primary btn-block', `${icon('download')} Открыть билд`)) : '<p class="pt-note">Автор не дал ссылку на билд — спроси в комментариях.</p>';
+  const facts = [['monitor', test.platform], ['tag', test.version ? `Версия ${test.version}` : '']].filter(([, value]) => value).map(([mark, value]) => `<span>${icon(mark)}${escapeHtml(value)}</span>`).join('');
+  const workspace = test.workspaceId ? (ai.workspaces || []).find(item => item.id === test.workspaceId) : null;
+  const folder = test.workspaceId ? `<a class="pt-folder" href="#/ai/w/${encodeURIComponent(test.workspaceId)}" data-action="layer-close">${icon('folder')}<span><b>Папка проекта в ИИ-мире</b><small>${test.access === 'run' ? 'Можно смотреть и ставить задачи ИИ' : 'Можно смотреть задачи и файлы'}${workspace?.device ? ` · ${workspace.device.online ? 'компьютер в сети' : 'компьютер не в сети'}` : ''}</small></span>${icon('chevronRight')}</a>` : '';
+  const prompt = test.prompt ? `<div class="pt-prompt"><b>${icon('sparkle')} Промпт для ИИ</b><pre>${escapeHtml(test.prompt)}</pre><div class="pt-prompt-actions"><button class="btn btn-ghost btn-sm" data-action="copy" data-copy="${escapeHtml(test.prompt)}">${icon('doc')} Скопировать</button>${test.workspaceId && test.access === 'run' ? `<button class="btn btn-ghost btn-sm" data-action="playtest-run" data-id="${escapeHtml(project.id)}">${icon('send')} Запустить в папке</button>` : ''}</div></div>` : '';
+  const rows = results.map((item, index) => `<div class="pt-step" data-step="${index}"><span class="pt-step-text"><i>${index + 1}</i>${escapeHtml(item.step)}</span><div class="pt-verdict" role="radiogroup" aria-label="Шаг ${index + 1}"><button type="button" role="radio" class="ok ${item.ok === true ? 'on' : ''}" aria-checked="${item.ok === true}" data-ok="1">${icon('check')}Прошло</button><button type="button" role="radio" class="bad ${item.ok === false ? 'on' : ''}" aria-checked="${item.ok === false}" data-ok="0">${icon('close')}Не прошло</button></div><input class="field pt-step-note" maxlength="300" placeholder="${item.ok === false ? 'Что пошло не так?' : 'Заметка — необязательно'}" aria-label="Заметка к шагу ${index + 1}" value="${escapeHtml(item.note || '')}"></div>`).join('');
+  const agent = navigator.userAgent || '';
+  const guess = /iphone|ipad/i.test(agent) ? 'iPhone, Safari' : /android/i.test(agent) ? 'Android' : /mac/i.test(agent) ? 'Mac' : /win/i.test(agent) ? 'Windows' : '';
+  const dialog = openLayer(`<div class="crop playtest-sheet"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><b id="layer-title">Тест-задание</b><span></span></div><div class="pt-scroll"><h3 class="pt-title">${escapeHtml(test.title)}</h3><p class="pt-sub">«${escapeHtml(project.title)}» · ${escapeHtml(project.author)}</p><section class="pt-env"><h4>Среда</h4>${open}${facts ? `<div class="pt-facts">${facts}</div>` : ''}${test.notes ? `<p class="pt-notes">${escapeHtml(test.notes)}</p>` : ''}${folder}${prompt}</section><section class="pt-report"><h4>Отчёт по шагам</h4>${rows}<textarea class="field pt-text" rows="3" maxlength="1200" placeholder="Общее впечатление, где застрял, что добавить" aria-label="Общий отзыв">${escapeHtml(previous?.test?.note || '')}</textarea><input class="field pt-platform" maxlength="60" placeholder="Где проверял: телефон, браузер, ПК" aria-label="Где проверял" value="${escapeHtml(previous?.test?.platform || guess)}"><div class="pt-shots"><label class="pt-shot-add">${icon('image')}<span>Скриншоты · до 4</span><input class="file-cover" type="file" accept="image/*" multiple data-pt-shots></label><div class="pt-shot-list"></div></div><p class="form-error" role="alert"></p><button class="btn btn-grad btn-block pt-send">${icon('send')} ${previous ? 'Обновить отчёт' : 'Отправить отчёт'}</button>${previous ? '' : `<button class="text-link pt-leave" data-action="playtest-leave" data-id="${escapeHtml(project.id)}">Отказаться от задания</button>`}</section></div></div>`, 'playtest');
+  const shots = (previous?.images || []).map(url => ({ preview: uploadUrl(url) || url, url }));
+  const drawShots = () => { dialog.querySelector('.pt-shot-list').innerHTML = shots.map((shot, index) => `<span class="pt-shot ${shot.url ? '' : 'loading'}"><img src="${escapeHtml(shot.preview)}" alt=""><button type="button" class="icon-btn" data-shot="${index}" aria-label="Убрать">${icon('close')}</button></span>`).join(''); };
+  drawShots();
+  dialog.querySelectorAll('.pt-step').forEach(row => row.querySelectorAll('[data-ok]').forEach(button => button.addEventListener('click', () => {
+    const on = !button.classList.contains('on');
+    row.querySelectorAll('[data-ok]').forEach(item => { item.classList.toggle('on', on && item === button); item.setAttribute('aria-checked', String(on && item === button)); });
+    const note = row.querySelector('.pt-step-note');
+    note.placeholder = on && button.dataset.ok === '0' ? 'Что пошло не так?' : 'Заметка — необязательно';
+    if (on && button.dataset.ok === '0') note.focus({ preventScroll: true });
+  })));
+  dialog.querySelector('[data-pt-shots]').addEventListener('change', async event => {
+    const files = [...event.target.files].filter(file => file.type.startsWith('image/')).slice(0, Math.max(0, 4 - shots.length));
+    event.target.value = '';
+    for (const file of files) {
+      const shot = { preview: URL.createObjectURL(file), url: '' };
+      shots.push(shot);
+      drawShots();
+      try {
+        shot.url = await uploadBlob(file.type === 'image/gif' ? file : await imageToBlob(file, 1800), 'image');
+      } catch (error) {
+        shots.splice(shots.indexOf(shot), 1);
+        toast(error.message);
+      }
+      drawShots();
+    }
+  });
+  dialog.querySelector('.pt-shot-list').addEventListener('click', event => {
+    const index = event.target.closest?.('[data-shot]')?.dataset.shot;
+    if (index !== undefined) { shots.splice(Number(index), 1); drawShots(); }
+  });
+  dialog.querySelector('.pt-send').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const report = [...dialog.querySelectorAll('.pt-step')].map(row => {
+      const chosen = row.querySelector('[data-ok].on');
+      return { ok: chosen ? chosen.dataset.ok === '1' : null, note: row.querySelector('.pt-step-note').value };
+    });
+    const error = dialog.querySelector('.form-error');
+    if (!report.some(item => item.ok !== null)) { error.textContent = 'Отметь хотя бы один шаг: прошло или нет'; return; }
+    if (shots.some(shot => !shot.url)) { error.textContent = 'Подожди, скриншоты ещё загружаются'; return; }
+    button.disabled = true;
+    try {
+      const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/playtest/report`, { results: report, text: dialog.querySelector('.pt-text').value, platform: dialog.querySelector('.pt-platform').value, images: shots.map(shot => shot.url) });
+      replaceProject(result.project);
+      closeLayer();
+      rerenderOpenProject(projectId);
+      toast(`Отчёт у автора. Примет — получишь ${sparkRules.accepted.amount} искр`);
+    } catch (failure) {
+      button.disabled = false;
+      error.textContent = failure.message;
+    }
+  });
+}
+
+// The author writes or edits the playtest: steps, build, platform, notes for the setup, a prompt, folder access.
+function openPlaytestEditor(projectId) {
+  const project = projectById(projectId);
+  if (!project) return;
+  const current = project.playtest?.open ? project.playtest : null;
+  const draft = current || playtestDraft(project);
+  const linked = Boolean(project.workspaceId);
+  const access = linked ? draft.access || 'none' : 'none';
+  const accessRows = linked
+    ? `<div class="pt-access" role="radiogroup">${playtestAccess.map(([key, label, hint]) => `<label class="pt-access-item"><input type="radio" name="access" value="${key}" ${access === key ? 'checked' : ''}><span><b>${label}</b><small>${hint}</small></span></label>`).join('')}</div><p class="pt-note">Доступ получают только те, кто взял задание, и он пропадает, когда ты закрываешь набор.</p>`
+    : '<p class="pt-note">Свяжи пост с папкой во вкладке «Код и ИИ» — тогда тестерам можно будет открыть папку проекта.</p>';
+  const dialog = openLayer(`<div class="crop playtest-editor"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">${current ? 'Тест-задание' : 'Новое тест-задание'}</b><span></span></div><form class="form pt-form"><label class="pt-label">Что проверить<input class="field" name="title" maxlength="100" required value="${escapeHtml(draft.title)}" placeholder="Например: первые 5 минут на телефоне"></label><label class="pt-label">Шаги · по одному в строке, до ${PLAYTEST_STEPS}<textarea class="field" name="steps" rows="5" maxlength="2200" required>${escapeHtml(draft.steps.join('\n'))}</textarea></label><h4 class="pt-group">Среда</h4><label class="pt-label">Билд или демо<input class="field" name="build" maxlength="500" value="${escapeHtml(draft.build || project.demo || '')}" placeholder="Демо, itch.io, TestFlight, APK, Google Drive" inputmode="url" autocapitalize="none" spellcheck="false"></label><div class="pt-pair"><label class="pt-label">Платформа<input class="field" name="platform" maxlength="60" value="${escapeHtml(draft.platform || '')}" placeholder="Android, iOS, ПК"></label><label class="pt-label">Версия<input class="field" name="version" maxlength="24" value="${escapeHtml(draft.version || '')}" placeholder="0.4.1"></label></div><label class="pt-label">Как поставить и что знать<textarea class="field" name="notes" rows="3" maxlength="1000" placeholder="Тестовый аккаунт, как установить, известные баги">${escapeHtml(draft.notes || '')}</textarea></label><label class="pt-label">Промпт для ИИ · необязательно<textarea class="field" name="prompt" rows="3" maxlength="2000" placeholder="Тестер скопирует его своему ИИ или запустит в папке проекта: «Собери билд под мою систему и проверь, что игра стартует»">${escapeHtml(draft.prompt || '')}</textarea></label><h4 class="pt-group">Папка проекта в ИИ-мире</h4>${accessRows}<label class="pt-label pt-slots">Мест для тестеров<input class="field" name="slots" type="number" min="1" max="50" value="${Number(draft.slots) || 10}"></label><p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit">${icon('send')} ${current ? 'Сохранить задание' : 'Открыть набор тестеров'}</button></form></div>`, 'playtest');
+  dialog.querySelector('.pt-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/playtest`, { title: data.get('title'), steps: data.get('steps'), build: data.get('build'), platform: data.get('platform'), version: data.get('version'), notes: data.get('notes'), prompt: data.get('prompt'), access: data.get('access') || 'none', slots: Number(data.get('slots')) || 10 });
+      replaceProject(result.project);
+      closeLayer();
+      hubTab = 'testers';
+      rerenderHub(projectId);
+      toast(current ? 'Задание обновлено' : 'Набор открыт: пост помечен в ленте «Ищут тестеров»');
+    } catch (error) {
+      button.disabled = false;
+      form.querySelector('.form-error').textContent = error.message;
+    }
+  });
+}
+
+function hubTestersHtml(project) {
+  const pid = escapeHtml(project.id);
+  const test = project.playtest?.open ? project.playtest : null;
+  const reports = testReports(project);
+  if (!test) {
+    return `<p class="hub-hint">Дай игрокам задание: что проверить по шагам, ссылку на билд, промпт для ИИ и, если нужно, доступ к папке проекта в ИИ-мире. Отчёты придут сюда и в «Отзывы» — их можно принять, отдать ИИ и закрыть обновлением. Тестеры получают искры.</p><button class="btn btn-grad btn-block" data-action="playtest-edit" data-id="${pid}">${icon('plus')} Создать тест-задание</button>${reports.length ? `<p class="hub-hint">Отчётов по прошлым заданиям: ${reports.length}. Они во вкладке «Отзывы».</p>` : ''}`;
+  }
+  const rows = (test.testers || []).map(person => {
+    const status = person.reportId
+      ? `<span class="pt-tally"><i class="ok">${icon('check')}${person.passed || 0}</i><i class="bad">${icon('close')}${person.failed || 0}</i>${person.accepted ? `<i class="acc">${icon('sparkle')}</i>` : ''}</span>`
+      : `<small class="pt-wait">ещё тестирует</small>`;
+    const open = person.reportId ? `data-action="comment-menu" data-id="${escapeHtml(person.reportId)}" data-project="${pid}"` : `data-action="profile" data-handle="${escapeHtml(person.handle)}"`;
+    return `<button class="helper-row" ${open}>${avatar(person)}<span><b>${escapeHtml(person.name)}</b><small>${person.reportId ? `отчёт ${escapeHtml(timeAgo(person.reportedAt) || '')}${person.accepted ? ' · принят' : ''}` : `взял ${escapeHtml(timeAgo(person.joinedAt) || 'только что')}`}</small></span>${status}</button>`;
+  }).join('');
+  const access = test.access !== 'none' ? ` · ${test.access === 'run' ? 'тестеры ставят задачи ИИ' : 'тестеры видят папку'}` : '';
+  return `<div class="pt-hubhead"><span><b>${escapeHtml(test.title)}</b><small>${playtestFactsHtml(test)}${access}</small></span><button class="btn btn-ghost btn-sm" data-action="playtest-edit" data-id="${pid}">${icon('pen')} Изменить</button></div><div class="hub-group"><h4>Тестеры</h4>${rows ? `<div class="helpers">${rows}</div>` : '<p class="hub-hint">Пока никто не взял задание. Пост помечен в ленте «Ищут тестеров». Позови тех, кто уже комментирует: удерживай комментарий → «Позвать в тестеры».</p>'}</div>${rows ? `<p class="hub-hint">${icon('more')} Нажми на отчёт: «Помогло» даст тестеру ${sparkRules.accepted.amount} искр, «В задачу ИИ» отправит его агенту.</p>` : ''}<button class="btn btn-ghost btn-block" data-action="playtest-close" data-id="${pid}">${icon('close')} Закрыть набор</button>`;
+}
+
+async function playtestCall(projectId, path, body, done) {
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/${path}`, body);
+    if (result.project) replaceProject(result.project);
+    rerenderHub(projectId);
+    rerenderOpenProject(projectId);
+    if (done) toast(typeof done === 'function' ? done(result) : done);
+    return result;
+  } catch (error) {
+    toast(error.message);
+    return null;
+  }
+}
+
+// Redraws the parts of the open post sheet that a playtest changes: its card and the comments.
+function rerenderOpenProject(projectId) {
+  if (!modal.open || dialogContext?.kind !== 'project' || dialogContext.id !== projectId) return;
+  const project = projectById(projectId);
+  const card = modal.querySelector?.('[data-playtest]');
+  if (card && project) card.innerHTML = playtestCardHtml(project);
+  rerenderComments(projectId);
+}
+
+// The prompt from the playtest goes into the task field of the project folder.
+function runPlaytestPrompt(projectId) {
+  const test = projectById(projectId)?.playtest;
+  if (!test?.workspaceId || !test.prompt) return;
+  ai.draft = test.prompt;
+  closeLayer();
+  if (modal.open) modal.close();
+  location.hash = `#/ai/w/${encodeURIComponent(test.workspaceId)}`;
+  toast('Промпт в поле задачи — проверь и отправь');
+}
+
+// Open playtests across the feed: where to earn sparks.
+function openPlaytestsList() {
+  const list = projects().filter(project => project.playtest?.open && !isMine(project.handle) && visibleInFeed(project))
+    .sort((a, b) => Number(b.playtest.joined) - Number(a.playtest.joined) || (b.playtest.updatedAt || 0) - (a.playtest.updatedAt || 0));
+  const rows = list.map(project => `<button class="set-row" data-action="open-project" data-id="${escapeHtml(project.id)}"><span class="row-mark">${icon(project.playtest.joined ? 'check' : 'users')}</span><span><b>${escapeHtml(project.playtest.title)}</b><small>«${escapeHtml(project.title)}» · ${playtestFactsHtml(project.playtest)}</small></span><em class="pt-reward">${icon('sparkle')}+${sparkRules.accepted.amount}</em></button>`).join('');
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Тест-задания</h2><p class="hub-hint">Авторы просят проверить игры и приложения по шагам. Отчёт, который автор примет, приносит ${sparkRules.accepted.amount} искр, а если по нему выйдет обновление — ещё ${sparkRules.fixed.amount}.</p>${rows ? `<div class="hub-list">${rows}</div>` : emptyState('users', 'Сейчас открытых заданий нет', '', 'Загляни позже или подпишись на авторов — новые задания придут в уведомлениях')}</div>`, { kind: 'playtests' });
+}
+
 /* A comment becomes an AI task; a finished task becomes an update */
 
 function openCommentTask(projectId, commentId) {
@@ -4961,9 +5212,9 @@ async function boostGift(projectId, pay, button) {
 function openSparks() {
   if (!me) return;
   const log = (remote?.account?.sparkLog || []).map(entry => `<div class="spark-row"><span>${escapeHtml(entry.label)}<small>${timeAgo(entry.at) || ''}</small></span><b class="${entry.amount < 0 ? 'minus' : ''}">${entry.amount > 0 ? '+' : ''}${entry.amount}</b></div>`).join('');
-  const rules = Object.values(sparkRules).map(rule => `<li><b>+${rule.amount}</b>${escapeHtml(rule.label)}</li>`).join('');
+  const rules = Object.values(sparkRules).map(rule => `<li><b>+${rule.amount}</b><span>${escapeHtml(rule.label)}${rule.hint ? `<small>${escapeHtml(rule.hint)}</small>` : ''}</span></li>`).join('');
   const balance = sparksBalance();
-  showDialog(`<div class="sheet-body sparks"><span class="spark-mark">${icon('sparkle')}</span><h2 id="modal-title">${balance} ${plural(balance, 'искра', 'искры', 'искр')}</h2><p class="hub-hint">Искры дают авторы за помощь: принятые отчёты о багах, полезные отзывы и закреплённые комментарии.</p><h3 class="set-title">Как получить</h3><ul class="spark-rules">${rules}</ul><h3 class="set-title">На что потратить</h3><button class="gift-row" data-action="plus-sparks" ${balance >= sparkPrices.plusWeek ? '' : 'disabled'}><span class="plus-mark small">${icon('crown')}</span><span><b>Неделя Плюса</b><small>${sparkPrices.plusWeek} искр</small></span>${icon('chevronRight')}</button><div class="gift-row muted"><span class="row-mark">${icon('megaphone')}</span><span><b>День продвижения поста</b><small>${sparkPrices.boostDay} искр · кнопка «Продвинуть» на странице своего поста</small></span></div>${log ? `<h3 class="set-title">История</h3><div class="spark-log">${log}</div>` : ''}</div>`, { kind: 'sparks' });
+  showDialog(`<div class="sheet-body sparks"><span class="spark-mark">${icon('sparkle')}</span><h2 id="modal-title">${balance} ${plural(balance, 'искра', 'искры', 'искр')}</h2><p class="hub-hint">Искры дают авторы за помощь: принятые отчёты о багах, полезные отзывы и закреплённые комментарии.</p><h3 class="set-title">Как получить</h3><ul class="spark-rules">${rules}</ul><button class="gift-row" data-action="playtests"><span class="row-mark">${icon('users')}</span><span><b>Тест-задания</b><small>Проверь игру по шагам — за принятый отчёт +${sparkRules.accepted.amount}</small></span>${icon('chevronRight')}</button><h3 class="set-title">На что потратить</h3><button class="gift-row" data-action="plus-sparks" ${balance >= sparkPrices.plusWeek ? '' : 'disabled'}><span class="plus-mark small">${icon('crown')}</span><span><b>Неделя Плюса</b><small>${sparkPrices.plusWeek} искр</small></span>${icon('chevronRight')}</button><div class="gift-row muted"><span class="row-mark">${icon('megaphone')}</span><span><b>День продвижения поста</b><small>${sparkPrices.boostDay} искр · кнопка «Продвинуть» на странице своего поста</small></span></div>${log ? `<h3 class="set-title">История</h3><div class="spark-log">${log}</div>` : ''}</div>`, { kind: 'sparks' });
 }
 
 async function plusForSparks(button) {
@@ -5204,7 +5455,7 @@ function renderSettings() {
   const section = (title, body) => body ? `<section class="set-section"><h2>${title}</h2>${body}</section>` : '';
   const privacy = remote?.account?.privacy || { messages: 'all', comments: 'all', reposts: true };
   const account = online ? [
-    settingsRow('data-action="account-sheet"', 'send', 'Вход и почта', remote?.account?.email || 'Почта, Google, Яндекс ID, GitHub'),
+    settingsRow('data-action="account-sheet"', 'send', 'Вход и почта', remote?.account?.email || 'Почта, Google, Apple, Яндекс ID, GitHub'),
     plusRowHtml(),
     settingsRow('data-action="sparks-sheet"', 'sparkle', 'Искры', `${sparksBalance()} ${plural(sparksBalance(), 'искра', 'искры', 'искр')} · награды за помощь авторам`)
   ].join('') : '';
@@ -5458,7 +5709,7 @@ function openBlockFocus(index) {
 
 /* Notifications: the activity list, web push and installing the app */
 
-const noticeIcons = { follow: 'user', like: 'up', repost: 'repost', comment: 'comment', reply: 'comment', 'comment-like': 'heart', pin: 'pin', update: 'bell', post: 'sparkle', accepted: 'check', tasked: 'sparkle', fixed: 'check', review: 'star', 'task-done': 'code', 'demo-ready': 'play', publisher: 'crown', steam: 'gamepad' };
+const noticeIcons = { follow: 'user', like: 'up', repost: 'repost', comment: 'comment', reply: 'comment', 'comment-like': 'heart', pin: 'pin', update: 'bell', post: 'sparkle', accepted: 'check', tasked: 'sparkle', fixed: 'check', review: 'star', 'task-done': 'code', 'demo-ready': 'play', publisher: 'crown', steam: 'gamepad', tester: 'users', 'test-report': 'check', 'tester-invite': 'sparkle' };
 const pushState = { subscribed: false, checked: false };
 const PUSH_ASK_KEY = 'prostim-push-ask';
 let workerRegistration = null;
@@ -6210,7 +6461,15 @@ function commentHtml(project, comment, reply = false) {
     : ownProject && !comment.mine && kindLabels[comment.kind] ? commentTagHtml(comment.kind, true) : '';
   const helped = !comment.byAuthor && (comment.accepted || comment.tasked || comment.resolved)
     ? `<span class="helped-line">${icon('check')}<b>${comment.label === 'solution' && comment.accepted ? 'Решение помогло' : 'Помог проекту'}</b>${comment.resolved ? '<small>учтено в обновлении</small>' : comment.tasked ? '<small>автор отдал ИИ в работу</small>' : ''}</span>` : '';
-  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}" data-project="${pid}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}${help}${label}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.review ? reviewLineHtml(comment.review) : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${helped}${actions}</div>${like}</div>`;
+  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}" data-project="${pid}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}${help}${label}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.test ? testReportHtml(comment) : comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.review ? reviewLineHtml(comment.review) : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${helped}${actions}</div>${like}</div>`;
+}
+
+// A tester's report in the thread: the playtest, each step with its mark and note, the words, the screenshots.
+function testReportHtml(comment) {
+  const test = comment.test;
+  const steps = test.results.map((item, index) => `<li class="${item.ok === true ? 'ok' : item.ok === false ? 'bad' : 'skip'}">${icon(item.ok === true ? 'check' : item.ok === false ? 'close' : 'minus')}<span>${index + 1}. ${escapeHtml(item.step)}${item.note ? `<small>${escapeHtml(item.note)}</small>` : ''}</span></li>`).join('');
+  const shots = (comment.images || []).map(url => uploadUrl(url)).filter(Boolean).map(src => `<button class="bubble-image" data-action="view-chat-image" data-src="${src}" aria-label="Открыть скриншот"><img src="${src}" alt="Скриншот" loading="lazy"></button>`).join('');
+  return `<div class="test-report"><span class="test-head">${icon('users')}<span>${escapeHtml(test.title)}</span><b class="ok">${icon('check')}${test.passed}</b>${test.failed ? `<b class="bad">${icon('close')}${test.failed}</b>` : ''}</span><ol>${steps}</ol>${test.note ? `<p>${escapeHtml(test.note)}</p>` : ''}${test.platform ? `<small class="test-where">${icon('monitor')}${escapeHtml(test.platform)}</small>` : ''}${shots ? `<div class="test-shots">${shots}</div>` : ''}</div>`;
 }
 
 const kindLabels = Object.fromEntries(commentLabels);
@@ -6263,6 +6522,7 @@ function openCommentMenu(projectId, commentId, point = null) {
   const authorRows = own ? [
     !comment.replyTo ? row('pin-comment', 'pin', comment.pinned ? 'Открепить' : 'Закрепить сверху') : '',
     !comment.mine && project.workspaceId ? row('comment-task', 'code', comment.tasked ? 'Ещё задачу ИИ' : 'В задачу ИИ как есть') : '',
+    !comment.mine && comment.handle && !comment.test ? row('playtest-invite', 'users', 'Позвать в тестеры', `data-handle="${escapeHtml(comment.handle)}"`) : '',
     !comment.mine ? `<button role="menuitem" class="cmenu-plus" data-action="comment-prompt" ${attrs}>${icon('sparkle')}<span>Промпт с ИИ<small>разберёт отзыв в контексте проекта</small></span><i class="plus-chip">${icon('crown')}Плюс</i></button>` : ''
   ].join('') : '';
   const dangerRows = [
@@ -6422,8 +6682,11 @@ function commentsInner(project) {
 function rerenderComments(id) {
   const project = projectById(id);
   const zone = modal.querySelector?.(`.comments-zone[data-comments="${id}"]`);
-  if (project && zone) zone.innerHTML = commentsInner(project);
-  else if (dialogContext?.kind === 'project' && dialogContext.id === id) openProject(id);
+  if (project && zone) {
+    zone.innerHTML = commentsInner(project);
+    const count = zone.previousElementSibling?.matches?.('.sheet-sub') ? zone.previousElementSibling.querySelector('span') : null;
+    if (count) count.textContent = commentCount(project);
+  } else if (dialogContext?.kind === 'project' && dialogContext.id === id) openProject(id);
   else if (dialogContext?.kind === 'comments' && dialogContext.id === id) openComments(id);
 }
 

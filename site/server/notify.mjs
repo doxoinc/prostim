@@ -7,7 +7,7 @@ import { pushEndpointAllowed, sendPush } from './push.mjs';
 
 export const noticeGroups = {
   messages: { label: 'Сообщения', hint: 'Новые сообщения в чатах', types: ['message'] },
-  comments: { label: 'Комментарии', hint: 'Комментарии, ответы, лайки и закрепы', types: ['comment', 'reply', 'comment-like', 'pin', 'accepted', 'tasked', 'fixed', 'review'] },
+  comments: { label: 'Комментарии', hint: 'Комментарии, ответы, лайки и закрепы', types: ['comment', 'reply', 'comment-like', 'pin', 'accepted', 'tasked', 'fixed', 'review', 'tester', 'test-report', 'tester-invite'] },
   likes: { label: 'Поддержка и репосты', hint: 'Кто поддержал и поделился', types: ['like', 'repost'] },
   follows: { label: 'Подписчики', hint: 'Новые подписчики', types: ['follow'] },
   updates: { label: 'Обновления проектов', hint: 'Новые проекты и обновления тех, за кем следишь', types: ['update', 'post', 'publisher', 'steam', 'task-done', 'demo-ready'] }
@@ -62,6 +62,9 @@ export function noticeText(item, nameOf, projectTitle) {
     case 'steam': return item.snippet ? `«${title}»: ${item.snippet}` : `«${title}» в Steam`;
     case 'fixed': return `«${title}»: твой отзыв учли в обновлении — +15 искр${quote}`;
     case 'review': return more ? `${who} и ещё ${more} оценили демо «${title}»` : `${who} оценивает демо «${title}»${quote}`;
+    case 'tester': return more ? `${who} и ещё ${more} взяли тест-задание «${title}»` : `${who} берёт тест-задание «${title}»${quote}`;
+    case 'test-report': return `${who} прислал отчёт по тесту «${title}»${quote}`;
+    case 'tester-invite': return `${who} зовёт тебя тестером «${title}»${quote} — за принятый отчёт +20 искр`;
     case 'task-done': return `ИИ закончил задачу по «${title}» — можно опубликовать обновление${quote}`;
     case 'demo-ready': return `Новая веб-версия «${title}» собрана — поставь её в пост`;
     default: return item.snippet || 'Новое событие';
@@ -69,7 +72,7 @@ export function noticeText(item, nameOf, projectTitle) {
 }
 
 // Types that pile up into one row ("Аня и ещё 3 поддерживают…") while unread.
-const groupable = ['like', 'repost', 'comment-like', 'follow', 'review'];
+const groupable = ['like', 'repost', 'comment-like', 'follow', 'review', 'tester'];
 
 export function createNotifier(options) {
   const { D, save, live, env, keys, nameOf, projectTitle } = options;

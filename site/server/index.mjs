@@ -11,10 +11,10 @@ import { cleanStats, cleanTaste, emptyTaste, projectQuality, recordSignal, recor
 import { cleanDemoUrl, cleanFocus, cleanPostFields, normalizeUrl } from '../src/page.js';
 import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 import { codeLetter, createMailer } from './mail.mjs';
-import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
+import { appleName, authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
 import { aiLimits, boostPlan, boostPrice, cleanLookChoice, lookView, MOTION_VIDEO_LIMIT, plusPlan, profileAccents, profileBanners } from '../src/ads.js';
-import { cleanSteam, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback } from '../src/ecosystem.js';
+import { cleanPlaytest, cleanSteam, cleanTestResults, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback, testReportText, testTally } from '../src/ecosystem.js';
 import { cleanFeedPrefs, cleanLabel, cleanReview, commentDigest, commentKind, demoRating, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
 import { vapidKeys } from './push.mjs';
@@ -195,6 +195,7 @@ function projectView(project, meId) {
     saves: project.saves.length,
     stats: cleanStats(D.feedStats[project.id]),
     demoBlocked: Boolean(project.demoBlocked),
+    playtest: project.playtest?.open !== false || project.ownerId === meId ? playtestView(project, meId) : null,
     demoRating: demoRating(project.comments.filter(comment => !comment.hidden)),
     lastUpdateAt: project.lastUpdateAt || 0,
     updates: (project.updates || []).map(update => ({ id: update.id, title: update.title, text: update.text || '', version: update.version || '', image: update.image || '', createdAt: update.createdAt })),
@@ -210,7 +211,8 @@ function projectView(project, meId) {
       voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId),
       byAuthor: comment.userId ? comment.userId === project.ownerId : comment.name === owner.name, mention: D.users[comment.mentionId]?.handle || '',
       accepted: Boolean(comment.accepted), taskId: project.ownerId === meId ? comment.taskId || '' : '', tasked: Boolean(comment.taskId),
-      kind: commentKind(comment), label: comment.label || '', review: comment.review || null, resolved: comment.resolved || ''
+      kind: commentKind(comment), label: comment.label || '', review: comment.review || null, resolved: comment.resolved || '',
+      test: comment.test ? { title: comment.test.title, current: comment.test.id === project.playtest?.id, results: comment.test.results, note: comment.test.note || '', platform: comment.test.platform || '', ...testTally(comment.test.results) } : null, images: comment.images || []
     }))
   };
 }
@@ -385,6 +387,18 @@ function on(method, pattern, handler) {
   routes.push({ method, regex: new RegExp(`^${pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`), handler });
 }
 
+// A form the browser posts from another site (Apple's sign-in answer).
+async function readForm(request, limit = 16 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > limit) fail(413, 'Слишком большой запрос');
+    chunks.push(chunk);
+  }
+  return Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString('utf8')));
+}
+
 async function readJson(request, limit = 64 * 1024) {
   const chunks = [];
   let size = 0;
@@ -440,9 +454,11 @@ const writeLimit = limiter(240, 60 * 1000);
 
 /* Auth and profile */
 
-async function startSession(request, user) {
+// `via` says how the person proved who they are: a fresh sign-in by a mailed code or a provider lets them
+// set a new password without the old one ("forgot the password").
+async function startSession(request, user, via = 'password') {
   const raw = token();
-  D.sessions[sha256(raw)] = { userId: user.id, createdAt: Date.now(), expiresAt: Date.now() + SESSION_DAYS * 864e5 };
+  D.sessions[sha256(raw)] = { userId: user.id, via, createdAt: Date.now(), expiresAt: Date.now() + SESSION_DAYS * 864e5 };
   for (const [key, session] of Object.entries(D.sessions)) if (session.expiresAt < Date.now()) delete D.sessions[key];
   db.save();
   return { 'Set-Cookie': sessionCookie(request, raw, SESSION_DAYS * 86400) };
@@ -549,12 +565,12 @@ on('POST', '/api/auth/email/verify', async ({ request, body, user }) => {
     if (userByEmail(email)) fail(409, 'Эта почта уже привязана к аккаунту — войди по ней');
     if (userByHandle(entry.pending.handle)) fail(409, 'Этот ник уже заняли, пока ты вводил код — выбери другой');
     const created = createUser({ ...entry.pending, email });
-    return { body: { ok: true, created: true }, headers: await startSession(request, created) };
+    return { body: { ok: true, created: true }, headers: await startSession(request, created, 'code') };
   }
   if (entry.purpose === 'login') {
     const owner = userByEmail(email);
     if (!owner) fail(404, 'Аккаунта с этой почтой нет');
-    return { body: { ok: true }, headers: await startSession(request, owner) };
+    return { body: { ok: true }, headers: await startSession(request, owner, 'code') };
   }
   needUser(user);
   if (entry.pending?.userId !== user.id) fail(403, 'Код выписан для другого аккаунта');
@@ -596,6 +612,18 @@ on('GET', '/api/auth/oauth/:provider/start', async ({ request, response, params 
   return redirect(response, url, [oauthCookie(request, `${state}.${params.provider}`, 600)]);
 });
 
+// Apple posts the answer as a form from its own site. Cookies with SameSite=Lax don't come with a cross-site
+// POST, so the answer is turned into the GET callback below: that navigation carries them.
+on('POST', '/api/auth/oauth/:provider/callback', async ({ response, params, body }) => {
+  const back = new URLSearchParams();
+  for (const key of ['code', 'state', 'error']) if (body[key]) back.set(key, String(body[key]).slice(0, 2000));
+  const name = appleName(body.user);
+  if (name) back.set('name', name);
+  response.writeHead(303, { Location: `/api/auth/oauth/${encodeURIComponent(params.provider)}/callback?${back}`, 'Cache-Control': 'no-store' });
+  response.end();
+  return null;
+});
+
 on('GET', '/api/auth/oauth/:provider/callback', async ({ request, response, params, query, user }) => {
   const provider = params.provider;
   const clear = oauthCookie(request, '', 0);
@@ -604,7 +632,7 @@ on('GET', '/api/auth/oauth/:provider/callback', async ({ request, response, para
   if (query.get('error') || !query.get('code')) return redirect(response, authError(`Вход через ${oauthLabel(provider)} отменён`), [clear]);
   let profile;
   try {
-    profile = await oauthProfile(provider, { code: query.get('code'), redirectUri: `${siteOrigin(request)}/api/auth/oauth/${provider}/callback` });
+    profile = await oauthProfile(provider, { code: query.get('code'), name: query.get('name') || '', redirectUri: `${siteOrigin(request)}/api/auth/oauth/${provider}/callback` });
   } catch (error) {
     console.error(error.message);
     return redirect(response, authError(`Вход через ${oauthLabel(provider)} не удался, попробуй ещё раз`), [clear]);
@@ -616,10 +644,29 @@ on('GET', '/api/auth/oauth/:provider/callback', async ({ request, response, para
     if (email && !account.email) { account.email = email; account.emailVerified = true; }
   } else {
     const name = cleanText(profile.name, 40) || profile.login || 'Без имени';
-    account = createUser({ handle: freeHandle(profile.login, email.split('@')[0], name), name, email, oauth: { [provider]: profile.id } });
+    const mailbox = email.endsWith('@privaterelay.appleid.com') ? '' : email.split('@')[0];
+    account = createUser({ handle: freeHandle(profile.login, mailbox, name), name, email, oauth: { [provider]: profile.id } });
   }
-  const session = await startSession(request, account);
+  const session = await startSession(request, account, 'oauth');
   return redirect(response, '/#/me', [clear, session['Set-Cookie']]);
+});
+
+function freshSignIn(request) {
+  const session = D.sessions[sha256(parseCookies(request.headers.cookie).ps_session || '')];
+  return Boolean(session && ['code', 'oauth'].includes(session.via) && Date.now() - session.createdAt < 15 * 60 * 1000);
+}
+
+// Set or change the password. The old one is needed, unless the person has just come in by a mailed code or
+// a provider: that is the way back for someone who forgot it.
+on('POST', '/api/me/password', async ({ request, user, body }) => {
+  needUser(user);
+  if (!authLimit(clientIp(request))) fail(429, 'Слишком много попыток, подожди немного');
+  const password = String(body.password || '');
+  if (password.length < 6 || password.length > 200) fail(400, 'Пароль: минимум 6 символов');
+  if (user.passwordHash && !freshSignIn(request) && !(await verifyPassword(String(body.current || ''), user.passwordHash))) fail(403, 'Старый пароль не подходит');
+  user.passwordHash = await hashPassword(password);
+  db.save();
+  return { ok: true };
 });
 
 on('POST', '/api/auth/logout', async ({ request }) => {
@@ -855,7 +902,7 @@ on('POST', '/api/me/look', async ({ user, body }) => {
   return { me: publicUser(user) };
 });
 
-on('GET', '/api/bootstrap', async ({ user }) => {
+on('GET', '/api/bootstrap', async ({ request, user }) => {
   const stats = userStats();
   const meId = user?.id;
   return {
@@ -871,7 +918,7 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
-    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'], plusTrial: plusTrialOpen(user), plusPrice: plusPriceFor(user), plusTrialNow: Boolean(hasPlus(user) && user.plus?.trial) } : null,
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), passwordReset: Boolean(user.passwordHash && freshSignIn(request)), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'], plusTrial: plusTrialOpen(user), plusPrice: plusPriceFor(user), plusTrialNow: Boolean(hasPlus(user) && user.plus?.trial) } : null,
     activity: meId ? { unread: notifier.unread(meId) } : { unread: 0 },
     watching: meId ? D.projects.filter(project => (project.watchers || []).includes(meId)).map(project => project.id) : [],
     reposted: meId ? D.projects.filter(project => (project.reposts || []).includes(meId)).map(project => project.id) : [],
@@ -1256,6 +1303,163 @@ on('POST', '/api/projects/:id/comments/:cid/accept', async ({ user, params }) =>
   }
   db.save();
   return { project: projectView(project, user.id) };
+});
+
+/* Playtests: the author gives players a task, a build, a prompt and maybe the project folder; reports come
+   back as comments, so the same loop (accept → AI task → update) works for them. */
+
+function playtestView(project, meId) {
+  const test = project.playtest;
+  if (!test) return null;
+  const owner = project.ownerId === meId;
+  const mine = (test.testers || []).find(item => item.userId === meId);
+  const reports = project.comments.filter(comment => comment.test?.id === test.id && !comment.hidden);
+  const view = {
+    id: test.id, title: test.title, steps: test.steps, platform: test.platform, version: test.version, slots: test.slots,
+    open: test.open !== false, taken: (test.testers || []).length, reports: reports.length, createdAt: test.createdAt, updatedAt: test.updatedAt || test.createdAt,
+    access: test.access, joined: Boolean(mine), reported: Boolean(mine?.reportId)
+  };
+  // The environment is for the people who took the task, and the author.
+  if (owner || mine) Object.assign(view, { build: test.build || project.demo || '', notes: test.notes, prompt: test.prompt, workspaceId: test.access !== 'none' ? project.workspaceId || '' : '' });
+  if (owner) {
+    view.testers = (test.testers || []).map(item => {
+      const report = reports.find(comment => comment.id === item.reportId);
+      return { ...personRef(item.userId), joinedAt: item.joinedAt, reportId: item.reportId || '', reportedAt: item.reportedAt || 0, accepted: Boolean(report?.accepted), ...(report?.test ? testTally(report.test.results) : {}) };
+    });
+  }
+  return view;
+}
+
+// The testers' folder access follows the playtest: granted, changed or taken back with it. Shares the
+// owner gave by hand (without `via`) are never touched.
+function syncPlaytestShares(project) {
+  const workspace = project.workspaceId ? D.workspaces[project.workspaceId] : null;
+  const test = project.playtest;
+  if (!workspace || !test) return;
+  const role = test.open !== false && test.access !== 'none' ? test.access : '';
+  const testers = new Set((test.testers || []).map(item => item.userId));
+  const touched = new Set();
+  workspace.shares = (workspace.shares || []).flatMap(share => {
+    if (share.via !== project.id) return [share];
+    touched.add(share.userId);
+    if (!role || !testers.has(share.userId)) return [];
+    return [{ ...share, role }];
+  });
+  if (role) {
+    for (const userId of testers) {
+      if (roleFor(workspace, userId)) continue;
+      workspace.shares.push({ userId, role, via: project.id });
+      touched.add(userId);
+    }
+  }
+  if (touched.size) pushTo([...touched], 'workspaces', {});
+}
+
+// Folder access that came with a playtest goes away with it.
+function revokePlaytestShare(project, userId) {
+  const workspace = project.workspaceId ? D.workspaces[project.workspaceId] : null;
+  if (!workspace) return;
+  const before = (workspace.shares || []).length;
+  workspace.shares = (workspace.shares || []).filter(share => !(share.userId === userId && share.via === project.id));
+  if (workspace.shares.length !== before) pushTo([userId], 'workspaces', {});
+}
+
+on('POST', '/api/projects/:id/playtest', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  if (body.open === false) {
+    if (project.playtest) {
+      project.playtest.open = false;
+      syncPlaytestShares(project);
+    }
+    db.save();
+    return { project: projectView(project, user.id) };
+  }
+  const fields = cleanPlaytest(body, project.playtest || {}, value => safeHttpUrl(normalizeUrl(value)));
+  if (!fields.title) fail(400, 'Назови задание: что проверить');
+  if (!fields.steps.length) fail(400, 'Добавь хотя бы один шаг');
+  if (fields.access !== 'none' && !project.workspaceId) fail(400, 'Доступ к папке — когда пост связан с папкой в ИИ-мире');
+  const current = project.playtest?.open !== false && project.playtest;
+  const now = Date.now();
+  // Editing keeps the testers; a closed playtest starts over.
+  project.playtest = current ? { ...current, ...fields, updatedAt: now } : { id: `pt-${randomUUID().slice(0, 8)}`, ...fields, open: true, createdAt: now, testers: [] };
+  syncPlaytestShares(project);
+  if (!project.seeking?.includes('testers')) project.seeking = [...(project.seeking || []), 'testers'];
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+on('POST', '/api/projects/:id/playtest/join', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (!visibleTo(project, user.id)) fail(404, 'Проект не найден');
+  const test = project.playtest;
+  if (!test || test.open === false) fail(404, 'Тест-задание уже закрыто');
+  if (project.ownerId === user.id) fail(400, 'Это твой проект');
+  if (blockedEither(project.ownerId, user.id)) fail(403, 'Автор ограничил тебе доступ');
+  test.testers ||= [];
+  if (!test.testers.some(item => item.userId === user.id)) {
+    if (test.testers.length >= test.slots) fail(409, 'Места тестеров закончились');
+    test.testers.push({ userId: user.id, joinedAt: Date.now() });
+    syncPlaytestShares(project);
+    notifier.notify(project.ownerId, { type: 'tester', actorId: user.id, projectId: project.id, url: `/#/project/${project.id}` });
+    db.save();
+  }
+  return { project: projectView(project, user.id) };
+});
+
+on('POST', '/api/projects/:id/playtest/leave', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  const test = project.playtest;
+  if (test) {
+    test.testers = (test.testers || []).filter(item => item.userId !== user.id || item.reportId);
+    revokePlaytestShare(project, user.id);
+    db.save();
+  }
+  return { project: projectView(project, user.id) };
+});
+
+on('POST', '/api/projects/:id/playtest/report', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  const test = project.playtest;
+  const tester = test?.testers?.find(item => item.userId === user.id);
+  if (!test || !tester) fail(403, 'Сначала возьми тест-задание');
+  if (test.open === false) fail(400, 'Автор уже закрыл набор тестеров');
+  if (!commentLimit(user.id)) fail(429, 'Слишком часто, подожди немного');
+  const results = cleanTestResults(body.results, test.steps);
+  if (!results.some(item => item.ok !== null)) fail(400, 'Отметь хотя бы один шаг');
+  const images = (Array.isArray(body.images) ? body.images : []).slice(0, 4).map(url => ownedUpload(url, user, 'image').url);
+  const note = cleanText(body.text, 1200);
+  const platform = cleanText(body.platform, 60);
+  const text = testReportText(test, results, note, { platform });
+  const tally = testTally(results);
+  const previous = project.comments.find(comment => comment.id === tester.reportId);
+  // A second report replaces the first: the author sees the latest state, not two threads.
+  if (previous) project.comments = project.comments.filter(comment => comment.id !== previous.id && comment.replyTo !== previous.id);
+  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], label: tally.failed ? 'bug' : 'review', test: { id: test.id, title: test.title, results, note, platform }, ...(images.length ? { images } : {}) };
+  project.comments.push(comment);
+  Object.assign(tester, { reportId: comment.id, reportedAt: comment.createdAt });
+  db.save();
+  notifier.notify(project.ownerId, { type: 'test-report', actorId: user.id, projectId: project.id, snippet: tally.failed ? `не прошло ${tally.failed} из ${tally.total}` : `всё прошло: ${tally.passed} из ${tally.total}`, url: `/#/project/${project.id}` });
+  return { project: projectView(project, user.id), comment: comment.id };
+});
+
+// The author asks someone from the comments to test: a notice with the task, nothing more.
+on('POST', '/api/projects/:id/playtest/invite', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  if (!project.playtest || project.playtest.open === false) fail(400, 'Сначала создай тест-задание');
+  const target = userByHandle(String(body.handle || '').replace(/^@/, '')) || fail(404, 'Пользователь не найден');
+  if (target.id === user.id) fail(400, 'Это ты');
+  if (blockedEither(user.id, target.id)) fail(403, 'Нельзя позвать этого человека');
+  project.playtest.invited ||= [];
+  if (project.playtest.invited.includes(target.id)) return { ok: true, again: true };
+  project.playtest.invited.push(target.id);
+  db.save();
+  notifier.notify(target.id, { type: 'tester-invite', actorId: user.id, projectId: project.id, snippet: project.playtest.title, url: `/#/project/${project.id}` });
+  return { ok: true };
 });
 
 // The person who wrote a comment says what it is: a bug, an idea, a review, a question or a solution.
@@ -2141,10 +2345,11 @@ const server = http.createServer(async (request, response) => {
     if (!route) return sendJson(response, 404, { error: 'Не найдено' });
     try {
       const isAgent = pathname.startsWith('/api/agent/');
-      if (!isAgent && !['/api/uploads', '/api/files'].includes(pathname) && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
+      const formPost = request.method === 'POST' && /^\/api\/auth\/oauth\/[^/]+\/callback$/.test(pathname);
+      if (!isAgent && !formPost && !['/api/uploads', '/api/files'].includes(pathname) && !['GET', 'HEAD'].includes(request.method) && !String(request.headers['content-type'] || '').startsWith('application/json')) fail(415, 'Нужен JSON');
       const params = route.regex.exec(pathname).groups || {};
       const needsBody = ['POST', 'PATCH', 'DELETE'].includes(request.method) && !['/api/projects', '/api/uploads', '/api/files', '/api/agent/reply', '/api/agent/events'].includes(pathname) && !(request.method === 'PATCH' && /^\/api\/projects\/[^/]+$/.test(pathname));
-      const body = needsBody ? await readJson(request) : {};
+      const body = formPost ? await readForm(request) : needsBody ? await readJson(request) : {};
       const result = await route.handler({ request, response, params, query: url.searchParams, body, user: isAgent ? null : currentUser(request), device: isAgent ? currentDevice(request) : null });
       if (result === null) return;
       if (result.body && result.headers) sendJson(response, 200, result.body, result.headers);
@@ -2192,7 +2397,12 @@ on('GET', '/api/events', async ({ request, response, user }) => {
   return null;
 });
 
-server.listen(PORT, HOST, () => console.log(`про.стим: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`));
+server.listen(PORT, HOST, () => {
+  console.log(`про.стим: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
+  // What the sign-in screen will offer: visible in the Render logs right after a deploy.
+  console.log(`Почта: ${mailer.kind || 'не настроена'}${mailer.real ? ` (от ${mailer.from.email})` : ''} · вход через: ${oauthProviders().join(', ') || 'только ник и почта'}`);
+  if (mailer.kind === 'smtp' && process.env.RENDER) console.log('Письма идут по SMTP: на бесплатном плане Render порты 25, 465 и 587 закрыты — нужен платный план или RESEND_API_KEY / BREVO_API_KEY.');
+});
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, async () => {

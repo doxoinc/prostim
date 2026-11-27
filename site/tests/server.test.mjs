@@ -27,6 +27,12 @@ function startOauthMock() {
       if (form.get('code') !== 'good-code' || form.get('client_secret') !== 'gsecret') { response.writeHead(400); return response.end('{}'); }
       return json({ access_token: 'g-token' });
     }
+    if (url.pathname === '/apple/token') {
+      const form = new URLSearchParams(body);
+      if (form.get('code') !== 'apple-code' || form.get('client_secret') !== 'asecret') { response.writeHead(400); return response.end('{}'); }
+      const claims = Buffer.from(JSON.stringify({ iss: 'https://appleid.apple.com', aud: 'aid', sub: 'apple-001', email: 'x7f3q@privaterelay.appleid.com', email_verified: 'true', is_private_email: 'true' })).toString('base64url');
+      return json({ access_token: 'a-token', id_token: `e30.${claims}.sig` });
+    }
     if (url.pathname === '/google/userinfo') {
       if (request.headers.authorization !== 'Bearer g-token') { response.writeHead(401); return response.end('{}'); }
       return json({ sub: 'g-123', email: 'Ivan.Petrov@gmail.com', email_verified: true, name: 'Иван Петров' });
@@ -46,7 +52,7 @@ async function lastCode(email) {
 test.before(async () => {
   dataDir = await mkdtemp(path.join(os.tmpdir(), 'prostim-test-'));
   const mockUrl = await startOauthMock();
-  server = spawn(process.execPath, [path.join(root, 'server/index.mjs')], { env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, DATABASE_URL: '', MAIL_TRANSPORT: 'outbox', GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsecret', OAUTH_MOCK_URL: mockUrl, YOOKASSA_SHOP_ID: '', YOOKASSA_SECRET_KEY: '', PAYMENTS_TEST: '' }, stdio: 'pipe' });
+  server = spawn(process.execPath, [path.join(root, 'server/index.mjs')], { env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, DATABASE_URL: '', MAIL_TRANSPORT: 'outbox', GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsecret', APPLE_CLIENT_ID: 'aid', APPLE_CLIENT_SECRET: 'asecret', OAUTH_MOCK_URL: mockUrl, YOOKASSA_SHOP_ID: '', YOOKASSA_SECRET_KEY: '', PAYMENTS_TEST: '' }, stdio: 'pipe' });
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try { if ((await fetch(`${base}/healthz`)).ok) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -342,7 +348,110 @@ test('Google sign-in checks the state, creates the account once and finds it aga
   const refused = await fetch(`${base}/api/auth/oauth/google/callback?code=stolen&state=${badState}`, { redirect: 'manual', headers: { Cookie: badCode.headers.get('set-cookie').split(';')[0] } });
   assert.match(refused.headers.get('location'), /auth_error/);
   assert.match((await fetch(`${base}/api/auth/oauth/github/start`, { redirect: 'manual' })).headers.get('location'), /auth_error/, 'providers without keys are off');
-  assert.deepEqual((await client()('GET', '/api/bootstrap')).body.config.providers, [{ id: 'google', label: 'Google' }]);
+  assert.deepEqual((await client()('GET', '/api/bootstrap')).body.config.providers, [{ id: 'google', label: 'Google' }, { id: 'apple', label: 'Apple' }]);
+});
+
+test('Apple sign-in: the posted answer becomes a GET with the cookie, the name comes from the form', async () => {
+  const started = await fetch(`${base}/api/auth/oauth/apple/start`, { redirect: 'manual' });
+  const target = new URL(started.headers.get('location'));
+  assert.equal(target.pathname, '/apple/authorize');
+  assert.equal(target.searchParams.get('response_mode'), 'form_post');
+  assert.match(target.search, /scope=name%20email/, 'scopes are joined with %20');
+  const state = target.searchParams.get('state');
+  const cookie = started.headers.get('set-cookie').split(';')[0];
+  // Apple posts a form from its own site: no cookie comes with it.
+  const posted = await fetch(`${base}/api/auth/oauth/apple/callback`, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code: 'apple-code', state, user: JSON.stringify({ name: { firstName: 'Ольга', lastName: 'Смирнова' } }) }) });
+  assert.equal(posted.status, 303);
+  const back = new URL(posted.headers.get('location'), base);
+  assert.equal(back.pathname, '/api/auth/oauth/apple/callback');
+  assert.equal(back.searchParams.get('name'), 'Ольга Смирнова');
+  const done = await fetch(back, { redirect: 'manual', headers: { Cookie: cookie } });
+  assert.equal(done.headers.get('location'), '/#/me');
+  const session = done.headers.getSetCookie().find(item => item.startsWith('ps_session=')).split(';')[0];
+  const boot = await fetch(`${base}/api/bootstrap`, { headers: { Cookie: session } }).then(response => response.json());
+  assert.equal(boot.me.name, 'Ольга Смирнова');
+  assert.doesNotMatch(boot.me.handle, /x7f3q/, 'a private relay address does not become the nick');
+  assert.deepEqual(boot.account.providers, ['apple']);
+  assert.equal(boot.account.hasPassword, false);
+  const set = await fetch(`${base}/api/me/password`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: session }, body: JSON.stringify({ password: 'apple-pass1' }) });
+  assert.equal(set.status, 200, 'an account from a provider can set a password');
+});
+
+test('password: changing needs the old one, a fresh code sign-in replaces a forgotten one', async () => {
+  const ip = { 'X-Forwarded-For': '10.7.0.1' };
+  const kate = client();
+  await kate('POST', '/api/auth/email/start', { purpose: 'register', email: 'kate@example.com', handle: 'kate', name: 'Катя', password: 'first-pass' }, ip);
+  await kate('POST', '/api/auth/email/verify', { email: 'kate@example.com', code: await lastCode('kate@example.com') }, ip);
+  const byPassword = client();
+  await byPassword('POST', '/api/auth/login', { handle: 'kate', password: 'first-pass' }, ip);
+  assert.equal((await byPassword('GET', '/api/bootstrap')).body.account.passwordReset, false);
+  assert.equal((await byPassword('POST', '/api/me/password', { password: 'second-pass' }, ip)).status, 403, 'the old password is needed');
+  assert.equal((await byPassword('POST', '/api/me/password', { current: 'first-pass', password: 'second-pass' }, ip)).status, 200);
+  const forgot = client();
+  await forgot('POST', '/api/auth/email/start', { purpose: 'login', email: 'kate@example.com' }, ip);
+  await forgot('POST', '/api/auth/email/verify', { email: 'kate@example.com', code: await lastCode('kate@example.com') }, ip);
+  assert.equal((await forgot('GET', '/api/bootstrap')).body.account.passwordReset, true);
+  assert.equal((await forgot('POST', '/api/me/password', { password: 'third-pass' }, ip)).status, 200, 'right after a code sign-in the old password is not needed');
+  assert.equal((await client()('POST', '/api/auth/login', { handle: 'kate', password: 'third-pass' }, ip)).status, 200);
+});
+
+test('playtests: the author hands out a task and the folder, testers report step by step', async () => {
+  const author = client();
+  const tester = client();
+  const late = client();
+  await author('POST', '/api/auth/register', { handle: 'ptauthor', name: 'Автор', password: 'secret12' }, { 'X-Forwarded-For': '10.8.0.1' });
+  await tester('POST', '/api/auth/register', { handle: 'pttester', name: 'Тестер', password: 'secret12' }, { 'X-Forwarded-For': '10.8.0.2' });
+  await late('POST', '/api/auth/register', { handle: 'ptlate', name: 'Опоздал', password: 'secret12' }, { 'X-Forwarded-For': '10.8.0.3' });
+  const { project } = (await author('POST', '/api/projects', { title: 'Ровер', summary: 'Марсоход', category: 'games', images: [] })).body;
+  const id = project.id;
+  assert.equal((await author('POST', `/api/projects/${id}/playtest`, { title: 'Первые 5 минут', steps: 'Открой\nПройди обучение', access: 'run' })).status, 400, 'folder access needs a linked folder');
+  const { code } = (await author('POST', '/api/devices/pair-code')).body;
+  const claim = await fetch(`${base}/api/agent/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Mac', allow: 'edit' }) }).then(response => response.json());
+  const hello = await fetch(`${base}/api/agent/hello`, { method: 'POST', headers: { Authorization: `Bearer ${claim.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ engines: [], workspaces: [{ key: 'rover', name: 'rover' }], allow: 'edit' }) }).then(response => response.json());
+  const workspaceId = hello.workspaces.rover;
+  await author('POST', `/api/projects/${id}/link`, { workspaceId });
+  const made = await author('POST', `/api/projects/${id}/playtest`, { title: 'Первые 5 минут', steps: '1. Открой билд\n2. Пройди обучение\n\n', build: 'example.itch.io/rover', platform: 'Android', version: '0.4', notes: 'Логин test / test', prompt: 'Собери билд', access: 'run', slots: 1 });
+  assert.equal(made.status, 200);
+  assert.deepEqual(made.body.project.playtest.steps, ['Открой билд', 'Пройди обучение']);
+  assert.equal(made.body.project.playtest.build, 'https://example.itch.io/rover');
+  assert.ok(made.body.project.seeking.includes('testers'), 'the post says it looks for testers');
+  const outside = (await tester('GET', '/api/bootstrap')).body.projects.find(item => item.id === id).playtest;
+  assert.equal(outside.title, 'Первые 5 минут');
+  assert.equal(outside.prompt, undefined, 'the environment is only for testers');
+  assert.equal((await tester('GET', `/api/workspaces/${workspaceId}`)).status, 404);
+  const joined = await tester('POST', `/api/projects/${id}/playtest/join`);
+  assert.equal(joined.body.project.playtest.prompt, 'Собери билд');
+  assert.equal(joined.body.project.playtest.notes, 'Логин test / test');
+  assert.equal((await tester('GET', `/api/workspaces/${workspaceId}`)).body.workspace.role, 'run', 'the tester gets the folder');
+  assert.equal((await late('POST', `/api/projects/${id}/playtest/join`)).status, 409, 'no free places');
+  assert.equal((await late('POST', `/api/projects/${id}/playtest/report`, { results: [{ ok: true }] })).status, 403);
+  assert.equal((await tester('POST', `/api/projects/${id}/playtest/report`, { results: [] })).status, 400, 'at least one step is marked');
+  const report = await tester('POST', `/api/projects/${id}/playtest/report`, { results: [{ ok: true }, { ok: false, note: 'вылет на 2 уровне' }], text: 'Красиво', platform: 'Pixel 7' });
+  assert.equal(report.status, 200);
+  const comment = report.body.project.comments.find(item => item.id === report.body.comment);
+  assert.equal(comment.kind, 'bug', 'a failed step makes it a bug report');
+  assert.deepEqual([comment.test.passed, comment.test.failed], [1, 1]);
+  assert.equal(comment.test.note, 'Красиво');
+  assert.match(comment.text, /✗ 2\. Пройди обучение — вылет на 2 уровне/);
+  const again = await tester('POST', `/api/projects/${id}/playtest/report`, { results: [{ ok: true }, { ok: true }] });
+  assert.equal(again.body.project.comments.filter(item => item.test).length, 1, 'a new report replaces the old one');
+  const view = (await author('GET', '/api/bootstrap')).body.projects.find(item => item.id === id).playtest;
+  assert.equal(view.testers[0].handle, 'pttester');
+  assert.equal(view.testers[0].passed, 2);
+  const notices = (await author('GET', '/api/notifications')).body.items.map(item => item.type);
+  assert.ok(notices.includes('tester') && notices.includes('test-report'));
+  const accepted = await author('POST', `/api/projects/${id}/comments/${again.body.comment}/accept`);
+  assert.equal(accepted.status, 200);
+  assert.equal((await tester('GET', '/api/bootstrap')).body.account.sparks, 20, 'an accepted report pays sparks');
+  assert.equal((await author('POST', `/api/projects/${id}/playtest/invite`, { handle: 'ptlate' })).body.ok, true);
+  assert.equal((await author('POST', `/api/projects/${id}/playtest/invite`, { handle: 'ptlate' })).body.again, true, 'one invite per person');
+  assert.ok((await late('GET', '/api/notifications')).body.items.some(item => item.type === 'tester-invite'));
+  await author('POST', `/api/projects/${id}/playtest`, { title: 'Первые 5 минут', steps: 'Открой билд\nПройди обучение', access: 'view', slots: 1 });
+  assert.equal((await tester('GET', `/api/workspaces/${workspaceId}`)).body.workspace.role, 'view', 'a changed access reaches the testers who took the task');
+  await author('POST', `/api/projects/${id}/playtest`, { open: false });
+  assert.equal((await tester('POST', `/api/projects/${id}/playtest/report`, { results: [{ ok: true }] })).status, 400, 'no reports after the playtest is closed');
+  assert.equal((await tester('GET', `/api/workspaces/${workspaceId}`)).status, 404, 'closing takes the folder back');
+  assert.equal((await tester('GET', '/api/bootstrap')).body.projects.find(item => item.id === id).playtest, null);
 });
 
 test('promotion: paid in test mode, shown to others between posts, never to Plus subscribers', async () => {

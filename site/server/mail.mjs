@@ -6,18 +6,34 @@ import path from 'node:path';
 
 // Letters from the studio mailbox: a code to confirm an e-mail or to sign in.
 // Transports, picked by environment variables:
-//   RESEND_API_KEY or BREVO_API_KEY — e-mail over HTTPS (works on Render's free plan, which blocks SMTP ports);
-//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS — any mailbox with SMTP (Yandex 360, Gmail, Mail.ru);
+//   RESEND_API_KEY, BREVO_API_KEY or SENDGRID_API_KEY — e-mail over HTTPS (works on Render's free plan,
+//   which blocks SMTP ports);
+//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS — any mailbox with SMTP (Yandex 360, Gmail, Mail.ru). The
+//   names other projects use work too: EMAIL_* or MAIL_* (HOST, PORT, USER, PASS or PASSWORD), and
+//   GMAIL_USER with GMAIL_APP_PASSWORD, which needs no host;
 //   MAIL_TRANSPORT=outbox — letters go to <data>/outbox.jsonl (tests, local runs);
 //   nothing outside hosting — letters are printed to the console.
-// MAIL_FROM is the sender, for example: Vorkuta Games <noreply@vorkutagames.ru>.
+// MAIL_FROM (or EMAIL_FROM) is the sender, for example: Warkuda Games <noreply@warkudagames.com>.
+export function smtpSettings(env = process.env) {
+  const pick = (...names) => names.map(name => env[name]).find(Boolean) || '';
+  const user = pick('SMTP_USER', 'EMAIL_USER', 'MAIL_USER', 'MAIL_USERNAME', 'GMAIL_USER');
+  const pass = pick('SMTP_PASS', 'SMTP_PASSWORD', 'EMAIL_PASS', 'EMAIL_PASSWORD', 'MAIL_PASS', 'MAIL_PASSWORD', 'GMAIL_APP_PASSWORD', 'GMAIL_PASS');
+  const gmail = Boolean(env.GMAIL_USER) || /@(gmail|googlemail)\.com$/i.test(user);
+  const host = pick('SMTP_HOST', 'EMAIL_HOST', 'MAIL_HOST') || (gmail && pass ? 'smtp.gmail.com' : '');
+  const port = Number(pick('SMTP_PORT', 'EMAIL_PORT', 'MAIL_PORT')) || 465;
+  const secureFlag = pick('SMTP_SECURE', 'EMAIL_SECURE', 'MAIL_SECURE');
+  return host ? { host, port, user, pass, secure: secureFlag ? secureFlag !== 'false' : port === 465 } : null;
+}
+
 export function createMailer(env = process.env, dataDir = '.') {
   const hosted = env.NODE_ENV === 'production' || Boolean(env.RENDER);
+  const smtp = smtpSettings(env);
   const kind = env.MAIL_TRANSPORT
-    || (env.RESEND_API_KEY ? 'resend' : env.BREVO_API_KEY ? 'brevo' : env.SMTP_HOST ? 'smtp' : hosted ? '' : 'console');
-  const from = parseAddress(env.MAIL_FROM || (env.SMTP_USER ? `про.стим <${env.SMTP_USER}>` : 'про.стим <noreply@localhost>'));
+    || (env.RESEND_API_KEY ? 'resend' : env.BREVO_API_KEY ? 'brevo' : env.SENDGRID_API_KEY ? 'sendgrid' : smtp ? 'smtp' : hosted ? '' : 'console');
+  const sender = env.MAIL_FROM || env.EMAIL_FROM || env.SMTP_FROM;
+  const from = parseAddress(sender || (smtp?.user ? `про.стим <${smtp.user}>` : 'про.стим <noreply@localhost>'));
   // A real mailbox means accounts must confirm their address; the outbox and console are for development.
-  const real = ['resend', 'brevo', 'smtp'].includes(kind);
+  const real = ['resend', 'brevo', 'sendgrid', 'smtp'].includes(kind);
 
   async function send({ to, subject, text, html }) {
     if (kind === 'resend') {
@@ -26,8 +42,11 @@ export function createMailer(env = process.env, dataDir = '.') {
     if (kind === 'brevo') {
       return post('https://api.brevo.com/v3/smtp/email', { 'api-key': env.BREVO_API_KEY }, { sender: { name: from.name || undefined, email: from.email }, to: [{ email: to }], subject, textContent: text, htmlContent: html });
     }
+    if (kind === 'sendgrid') {
+      return post('https://api.sendgrid.com/v3/mail/send', { Authorization: `Bearer ${env.SENDGRID_API_KEY}` }, { personalizations: [{ to: [{ email: to }] }], from: { email: from.email, ...(from.name ? { name: from.name } : {}) }, subject, content: [{ type: 'text/plain', value: text }, { type: 'text/html', value: html }] });
+    }
     if (kind === 'smtp') {
-      return smtpSend({ host: env.SMTP_HOST, port: Number(env.SMTP_PORT) || 465, user: env.SMTP_USER, pass: env.SMTP_PASS, secure: env.SMTP_SECURE ? env.SMTP_SECURE !== 'false' : (Number(env.SMTP_PORT) || 465) === 465 }, from, to, subject, text, html);
+      return smtpSend(smtp, from, to, subject, text, html);
     }
     if (kind === 'outbox') {
       return appendFile(path.join(dataDir, 'outbox.jsonl'), `${JSON.stringify({ to, subject, text, at: Date.now() })}\n`);
@@ -39,7 +58,7 @@ export function createMailer(env = process.env, dataDir = '.') {
     throw new Error('Отправка писем не настроена');
   }
 
-  return { kind, configured: Boolean(kind), real, from, send };
+  return { kind, configured: Boolean(kind), real, from, smtp, send };
 }
 
 async function post(url, headers, body) {
