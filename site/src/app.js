@@ -6,8 +6,8 @@ import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
 import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
-import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons } from './social.js';
-import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
+import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons, sortComments, commentSorts } from './social.js';
+import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, imageRatios, focusStyle, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
 
 const main = document.querySelector('main');
 const topbar = document.querySelector('#topbar');
@@ -101,7 +101,7 @@ const photos = {
 const categoryNames = { games: 'Игры', apps: 'Приложения', tools: 'Инструменты' };
 const categoryIcons = { games: 'gamepad', apps: 'grid', tools: 'code' };
 const services = [['feed', 'Лента'], ['steam', 'Steam'], ['ai', 'ИИ-мир']];
-const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', activity: 'Уведомления', me: 'Профиль', u: 'Автор' };
+const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', activity: 'Уведомления', me: 'Профиль', settings: 'Настройки', u: 'Автор' };
 const localMe = { handle: 'me', name: 'Вы', author: 'Вы', initials: 'Я', color: '#e5e1d8' };
 const number = new Intl.NumberFormat('ru-RU');
 const money = value => `$${number.format(Math.round(value))}`;
@@ -427,6 +427,7 @@ function render(force = true) {
     else if (view === 'search') main.innerHTML = renderSearch();
     else if (view === 'inbox') main.innerHTML = renderInbox(current.page);
     else if (view === 'activity') main.innerHTML = renderActivity();
+    else if (view === 'settings') main.innerHTML = renderSettings();
     else if (view === 'me') main.innerHTML = online && !me ? renderAuthPage() : renderProfile(myHandle(), current.page);
     else if (view === 'u') main.innerHTML = isMine(current.page) ? renderProfile(myHandle(), current.extra) : renderProfile(current.page, current.extra);
     else main.innerHTML = renderFeed();
@@ -457,8 +458,10 @@ function renderChrome(view, current) {
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
     const title = thread ? thread.name : view === 'u' ? `@${current.page}` : view === 'me' && online && !me ? 'Вход' : sectionTitles[view];
-    const back = thread || view === 'u';
-    const end = view === 'activity' ? (online && me ? `<button class="top-bell" data-action="notify-settings" aria-label="Настройки уведомлений">${icon('gear')}</button>` : '') : bellHtml();
+    const back = thread || view === 'u' || view === 'settings';
+    const gear = `<a class="top-bell" href="#/settings" aria-label="Настройки">${icon('gear')}</a>`;
+    const end = view === 'activity' ? (online && me ? `<button class="top-bell" data-action="notify-settings" aria-label="Настройки уведомлений">${icon('gear')}</button>` : '')
+      : view === 'me' && (!online || me) ? `<span class="top-actions">${bellHtml()}${gear}</span>` : view === 'settings' ? '' : bellHtml();
     topbar.innerHTML = `${back ? `<button class="top-back" data-action="back" aria-label="Назад">${icon('chevronLeft')}</button>` : ''}<span class="top-title">${escapeHtml(title)}</span>${end}`;
   }
   const unread = unreadCount();
@@ -493,7 +496,7 @@ function placeServicesBar() {
   servicesBarX = x;
 }
 
-const routeOrder = { feed: 0, steam: 1, ai: 2, search: 3, inbox: 4, activity: 4.5, me: 5, u: 6 };
+const routeOrder = { feed: 0, steam: 1, ai: 2, search: 3, inbox: 4, activity: 4.5, me: 5, settings: 5.5, u: 6 };
 
 // New content slides in from the side we are moving to; inside a section it just fades up.
 function animateRoute(before, after) {
@@ -644,10 +647,17 @@ function syncFeedVideo(item) {
     });
   }
   video.muted = feedMuted;
-  if (item.classList.contains('in-view') && !modal.open) video.play?.().catch(() => {}); else video.pause?.();
+  if (item.classList.contains('in-view') && !modal.open && !dataSaver) video.play?.().catch(() => {}); else video.pause?.();
 }
 
+// Every picture of a post keeps its chosen point in view, in the feed, on the page and in thumbnails.
 function mediaHtml(item, title, mode) {
+  const html = rawMediaHtml(item, title, mode);
+  const style = mode === 'player' ? '' : focusStyle(item.focus);
+  return style ? html.replace(/<(img|video) /, `<$1 style="${style}" `) : html;
+}
+
+function rawMediaHtml(item, title, mode) {
   if (item.type === 'video') {
     const poster = uploadUrl(item.poster);
     if (mode === 'still') return poster ? `<div class="scene photo upload"><img src="${poster}" alt="${escapeHtml(title)}" loading="lazy" draggable="false"><span class="play-mark">${icon('play')}</span></div>` : `<div class="scene photo upload"><video src="${item.url}#t=0.5" muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
@@ -739,10 +749,17 @@ function feedPool() {
 
 function buildFeedOrder() {
   const { list, empty } = feedPool();
-  const ranked = rankFeed(list, rankOptions(feedSeed, pinnedProjectId));
   const adState = { since: 0, next: 0 };
-  const entries = [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(item => ({ id: item.project.id, reason: item.reason === 'repost' && item.by ? `repost:${item.by}` : item.reason }))];
-  feedOrder = { key: feedCategory, rounds: 1, done: false, adState, entries: placeAds(entries, feedAds(), adState) };
+  let entries;
+  if (feedMode === 'following') {
+    const mine = followingEntries(list);
+    const rest = rankFeed(list.filter(project => !mine.some(entry => entry.id === project.id)), rankOptions(feedSeed)).map(feedEntry);
+    entries = mine.length ? [...mine, { sep: 'following-end' }, ...rest] : [{ sep: 'following-empty' }, ...rest];
+  } else {
+    const ranked = rankFeed(list, { ...rankOptions(feedSeed, pinnedProjectId), mode: feedMode });
+    entries = [...(empty ? [{ sep: 'empty' }] : []), ...ranked.map(feedEntry)];
+  }
+  feedOrder = { key: feedKey(), rounds: 1, done: false, adState, entries: placeAds(entries, feedAds(), adState) };
 }
 
 // Promoted posts the server picked for this viewer (none for Plus subscribers). Now and then про.стим
@@ -823,7 +840,7 @@ function extendFeedNear(item) {
     const shown = { ...taste, seen: { ...taste.seen } };
     const now = Date.now();
     feedOrder.entries.forEach(entry => { if (entry.id && !shown.seen[entry.id]) shown.seen[entry.id] = { n: 1, last: now, done: 0 }; });
-    added = rankFeed(list, { ...rankOptions(feedSeed + feedOrder.rounds), taste: shown }).map(entry => ({ id: entry.project.id, reason: 'again' }));
+    added = rankFeed(list, { ...rankOptions(feedSeed + feedOrder.rounds), taste: shown, mode: feedMode === 'discover' ? 'discover' : 'foryou' }).map(entry => ({ id: entry.project.id, reason: feedMode === 'discover' ? entry.reason : 'again' }));
     const lastId = [...feedOrder.entries].reverse().find(entry => entry.id)?.id;
     if (added.length > 1 && added[0].id === lastId) [added[0], added[1]] = [added[1], added[0]];
     if (feedOrder.rounds === 2) added.unshift({ sep: 'end' });
@@ -836,6 +853,8 @@ function extendFeedNear(item) {
 }
 
 function feedEndHtml(kind) {
+  if (kind === 'following-empty') return `<section class="feed-item feed-end"><div class="end-card"><span class="end-icon muted">${icon('users')}</span><h2>В подписках пока пусто</h2><p>Подпишись на авторов или нажми «Следить» на проекте — их новинки и обновления будут здесь. Ниже — рекомендации.</p><div class="end-actions"><a class="btn btn-ghost" href="#/search">Найти авторов</a><button class="btn btn-primary" data-action="feed-mode" data-mode="foryou">Для тебя</button></div><span class="end-hint">${icon('chevronDown')}</span></div></section>`;
+  if (kind === 'following-end') return `<section class="feed-item feed-end"><div class="end-card"><span class="end-icon">${icon('check')}</span><h2>Ты всё посмотрел в подписках</h2><p>Дальше — рекомендации для тебя</p><div class="end-actions"><button class="btn btn-ghost" data-action="feed-mode" data-mode="discover">${icon('search')} Открытия</button></div><span class="end-hint">${icon('chevronDown')}</span></div></section>`;
   if (kind === 'empty') return `<section class="feed-item feed-end"><div class="end-card"><span class="end-icon muted">${icon(categoryIcons[feedCategory] || 'search')}</span><h2>Здесь пока пусто</h2><p>Ниже — проекты из других разделов</p><div class="end-actions"><a class="btn btn-ghost" href="#/feed">Вся лента</a><button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать</button></div><span class="end-hint">${icon('chevronDown')}</span></div></section>`;
   const final = kind === 'final';
   return `<section class="feed-item feed-end"><div class="end-card"><span class="end-icon">${icon('check')}</span><h2>${final ? 'На сегодня всё' : 'Новое закончилось'}</h2><p>${final ? 'Загляни позже или покажи свой проект' : 'Дальше — лучшее из того, что ты видел'}</p><div class="end-actions"><button class="btn btn-primary" data-action="feed-refresh">${icon('refresh')} Обновить</button><button class="btn btn-ghost" data-action="publish">${icon('plus')} Свой проект</button></div>${final ? '' : `<span class="end-hint">${icon('chevronDown')}</span>`}</div></section>`;
@@ -849,10 +868,10 @@ function feedEntryHtml(entry) {
 }
 
 function renderFeed() {
-  if (!feedOrder || feedOrder.key !== feedCategory) buildFeedOrder();
+  if (!feedOrder || feedOrder.key !== feedKey()) buildFeedOrder();
   const items = feedOrder.entries.map(feedEntryHtml).join('') || `<section class="feed-item">${emptyState('search', 'Здесь пока пусто', `<button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать первым</button>`)}</section>`;
   const chip = feedCategory === 'all' ? '' : `<a class="filter-chip" href="#/feed" aria-label="Сбросить фильтр «${categoryNames[feedCategory]}»">${icon(categoryIcons[feedCategory])}${categoryNames[feedCategory]}${icon('close')}</a>`;
-  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span><i class="ptr-mark">${logoMark}</i>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
+  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span><i class="ptr-mark">${logoMark}</i>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${feedModesHtml()}${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
 }
 
 function feedItem(project, reason = '', ad = '') {
@@ -1415,6 +1434,7 @@ async function finishAuth(created) {
   render();
   window.scrollTo?.(0, 0);
   toast(created ? `Добро пожаловать, ${me?.name || ''}!` : 'С возвращением!');
+  if (remote?.account?.onboarding) openOnboarding();
 }
 
 /* Profile and reputation */
@@ -1517,7 +1537,7 @@ function renderProfile(handle, tab) {
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
   const badges = `${levelChip(person)}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${mine ? interestsCardHtml() : ''}${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1553,17 +1573,13 @@ function accountHtml() {
   const linked = providers.map(provider => account.providers.includes(provider.id)
     ? `<span class="social-btn linked ${escapeHtml(provider.id)}">${providerIcons[provider.id] || ''}<span>${escapeHtml(provider.label)} подключён</span>${icon('check')}</span>`
     : `<a class="social-btn ${escapeHtml(provider.id)}" href="/api/auth/oauth/${encodeURIComponent(provider.id)}/start">${providerIcons[provider.id] || ''}<span>Подключить ${escapeHtml(provider.label)}</span></a>`).join('');
-  const login = mail || linked ? `<section class="account-block"><h3>Вход и почта</h3>${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>` : '';
-  const settings = `<section class="account-block"><h3>Уведомления и лента</h3><button class="plus-row" data-action="notify-settings"><span class="row-mark">${icon('bell')}</span><span><b>Уведомления</b><small>Push, тихие часы и что присылать</small></span>${icon('chevronRight')}</button><button class="plus-row" data-action="feed-prefs"><span class="row-mark">${icon('gear')}</span><span><b>Твоя лента</b><small>Больше, меньше или никогда — по темам и авторам</small></span>${icon('chevronRight')}</button></section>`;
-  const blocked = blockedList();
-  const blockedHtml = blocked.length ? `<section class="account-block"><h3>Заблокированные</h3>${blocked.map(handle => `<div class="account-row">${icon('ban')}<span><b>@${escapeHtml(handle)}</b></span><button class="btn btn-ghost btn-sm" data-action="block" data-handle="${escapeHtml(handle)}">Разблокировать</button></div>`).join('')}</section>` : '';
-  return `${login}${settings}<section class="account-block"><h3>Подписка</h3>${plusRowHtml()}</section>${blockedHtml}`;
+  return mail || linked ? `<section class="account-block">${mail}${linked ? `<div class="auth-social">${linked}</div>` : ''}</section>` : '';
 }
 
 function openEditProfile() {
   if (!me) return;
   avatarDraft = null;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form>${accountHtml()}</div>`);
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Профиль</h2><form id="profile-form" class="form"><div class="avatar-edit">${avatarEditInner()}</div><input name="name" maxlength="40" value="${escapeHtml(me.name)}" placeholder="Имя" aria-label="Имя" required><textarea name="bio" rows="3" maxlength="300" placeholder="О себе: чем занимаешься, что делаешь" aria-label="О себе">${escapeHtml(me.bio || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить</button></form><button class="set-row" data-action="account-sheet"><span class="row-mark">${icon('send')}</span><span><b>Вход и почта</b><small>Почта, Google, Яндекс ID, GitHub</small></span>${icon('chevronRight')}</button></div>`);
   clearInterval(authResendTimer);
   if (authFlow?.purpose === 'link') authResendTimer = setInterval(tickAuthResend, 1000);
 }
@@ -2262,14 +2278,6 @@ function commentsHtml(project) {
   return `<div class="comments-zone" data-comments="${escapeHtml(project.id)}">${commentsInner(project)}</div>`;
 }
 
-function oldCommentsHtml(project) {
-  const comments = projectComments(project);
-  const list = comments.length
-    ? comments.map(comment => `<div class="comment">${ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null)}<div><b>${comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name)}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small><p>${escapeHtml(comment.text)}</p></div></div>`).join('')
-    : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
-  return `<div class="comments">${list}</div><form id="comment-form" data-id="${escapeHtml(project.id)}" class="composer sticky"><input name="text" maxlength="1200" placeholder="${online && !me ? 'Войди, чтобы комментировать' : 'Комментарий…'}" aria-label="Комментарий" autocomplete="off" required><button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
-}
-
 // Interest of a post: support, saves and how much of it people actually watch.
 function interestHtml(project) {
   const stats = cleanStats(statsFor(project));
@@ -2282,19 +2290,6 @@ function interestHtml(project) {
     ['eye', number.format(stats.impressions), 'показов']
   ];
   return `<div class="interest"><div class="interest-head"><span>${icon('flame')} Интерес</span><i class="interest-meter"><i style="width:${score}%"></i></i><b>${score}</b></div><div class="interest-stats">${items.map(([iconName, value, label]) => `<span>${icon(iconName)}<b>${value}</b><small>${label}</small></span>`).join('')}</div></div>`;
-}
-
-function interestsCardHtml() {
-  const taste = currentTaste();
-  const top = topInterests(taste, 6);
-  const max = top[0]?.weight || 1;
-  const label = item => item.kind === 'cat' ? categoryNames[item.value] || item.value : item.kind === 'author' ? `@${item.value}` : `#${item.value}`;
-  const iconFor = item => item.kind === 'cat' ? categoryIcons[item.value] || 'grid' : item.kind === 'author' ? 'user' : 'tag';
-  const confidence = Math.round(tasteConfidence(taste) * 100);
-  const chips = top.length
-    ? `<div class="taste-chips">${top.map(item => `<span class="taste-chip" style="--w:${Math.max(0.2, item.weight / max).toFixed(2)}">${icon(iconFor(item))}${escapeHtml(label(item))}</span>`).join('')}</div>`
-    : `<p class="taste-empty">Листай ленту — интересы появятся сами</p>`;
-  return `<section class="taste-card"><div class="taste-head"><span class="taste-title">${icon('sparkle')} Лента знает тебя</span><span class="taste-level"><i style="width:${confidence}%"></i></span><b>${confidence}%</b><button class="icon-btn" data-action="feed-prefs" aria-label="Настроить ленту" title="Настроить ленту">${icon('gear')}</button>${top.length ? `<button class="icon-btn" data-action="reset-taste" aria-label="Сбросить интересы" title="Сбросить">${icon('refresh')}</button>` : ''}</div>${chips}</section>`;
 }
 
 const linkCta = { steam: 'В Steam', vkplay: 'В VK Play', itch: 'На itch.io', gog: 'В GOG', github: 'Код на GitHub', gitlab: 'Код на GitLab', appstore: 'В App Store', gplay: 'В Google Play', rustore: 'В RuStore', telegram: 'В Telegram', discord: 'В Discord', youtube: 'На YouTube', vk: 'Во VK', figma: 'В Figma' };
@@ -2566,7 +2561,7 @@ const MEDIA_ACCEPT = 'image/*,video/mp4,video/quicktime,video/webm';
 function mediaVisual(item) {
   const poster = item.posterPreview || item.posterUrl;
   if (item.type === 'video') return `${poster ? `<img src="${escapeHtml(poster)}" alt="">` : `<video src="${escapeHtml(item.preview)}#t=0.1" muted playsinline preload="metadata"></video>`}<span class="play-mark small">${icon('play')}</span>`;
-  return `<img src="${escapeHtml(item.preview)}" alt="">`;
+  return `<img src="${escapeHtml(item.preview)}" alt=""${item.focus ? ` style="${focusStyle(item.focus)}"` : ''}>`;
 }
 
 function mediaStateHtml(item, big = false) {
@@ -2588,7 +2583,7 @@ function imagePickerHtml() {
     : busy ? `<span class="pick-summary">${icon('refresh')} Загружаем: ${busy} из ${publishMedia.length}</span>`
     : `<span class="pick-summary done">${icon('check')} Готово: ${publishMedia.length} ${plural(publishMedia.length, 'файл', 'файла', 'файлов')}</span>`;
   const thumbs = rest.map((item, index) => `<span class="pick-thumb" data-media="${item.id}">${mediaVisual(item)}${mediaStateHtml(item)}<button type="button" class="pick-make-cover" data-action="media-cover" data-index="${index + 1}" aria-label="Сделать обложкой"></button><button type="button" class="pick-remove" data-action="remove-image" data-index="${index + 1}" aria-label="Убрать">${icon('close')}</button></span>`).join('');
-  return `<div class="pick-cover" data-media="${cover.id}">${mediaVisual(cover)}<em>${icon('image')} Обложка</em>${mediaStateHtml(cover, true)}<button type="button" class="pick-remove" data-action="remove-image" data-index="0" aria-label="Убрать">${icon('close')}</button></div><div class="pick-strip">${thumbs}${publishMedia.length < 8 ? `<label class="pick-add">${input}${icon('plus')}<small>Ещё</small></label>` : ''}</div><p class="pick-status">${summary}${rest.length ? '<span>Нажми на миниатюру — она станет обложкой</span>' : ''}</p>`;
+  return `<div class="pick-cover" data-media="${cover.id}">${mediaVisual(cover)}<em>${icon('image')} Обложка</em><button type="button" class="pick-focus" data-action="media-focus" data-index="0">${icon('eye')} Кадр в ленте</button>${mediaStateHtml(cover, true)}<button type="button" class="pick-remove" data-action="remove-image" data-index="0" aria-label="Убрать">${icon('close')}</button></div><div class="pick-strip">${thumbs}${publishMedia.length < 8 ? `<label class="pick-add">${input}${icon('plus')}<small>Ещё</small></label>` : ''}</div><p class="pick-status">${summary}${rest.length ? '<span>Нажми на миниатюру — она станет обложкой</span>' : ''}</p>`;
 }
 
 function plural(count, one, few, many) {
@@ -2777,7 +2772,7 @@ function openPublish(projectId = '') {
   const project = projectId ? projectById(projectId) : null;
   if (projectId && (!project || !isMine(project.handle))) return;
   clearPublishMedia();
-  if (project) publishMedia = projectMedia(project).map(item => ({ id: `m${++mediaSeq}`, type: item.type, kind: item.type, url: item.url, preview: item.url, posterUrl: uploadUrl(item.poster), status: 'done' }));
+  if (project) publishMedia = projectMedia(project).map(item => ({ id: `m${++mediaSeq}`, type: item.type, kind: item.type, url: item.url, preview: item.url, posterUrl: uploadUrl(item.poster), status: 'done', ...(item.focus ? { focus: item.focus } : {}) }));
   postDraft = {
     id: project?.id || '', step: 1, selected: -1,
     theme: cleanTheme(project?.theme),
@@ -2847,7 +2842,10 @@ function blockToolsHtml(block, index) {
   const button = (key, value, label, on, extra = '') => `<button type="button" class="${on ? 'on' : ''}" data-action="pe-style" data-key="${key}" data-value="${value}" data-index="${index}" ${extra}>${label}</button>`;
   const weight = Number(block.weight) || (block.type === 'heading' ? 800 : 400);
   const order = `<div class="pe-seg">${button('move', -1, icon('chevronUp'), false, `aria-label="Выше" ${index ? '' : 'disabled'}`)}${button('move', 1, icon('chevronDown'), false, `aria-label="Ниже" ${index < postDraft.blocks.length - 1 ? '' : 'disabled'}`)}${button('delete', 1, icon('trash'), false, 'aria-label="Удалить блок"')}</div>`;
-  if (!textual) return `<div class="pe-tools"><div class="pe-tool-row">${order}</div></div>`;
+  if (!textual) {
+    const shape = block.type === 'image' && !block.uploading ? `<div class="pe-seg">${Object.entries(imageRatios).map(([key, label]) => button('ratio', key, label, (block.ratio || '') === key)).join('')}</div>${block.ratio ? `<button type="button" class="pe-focus" data-action="pe-focus" data-index="${index}">${icon('eye')} Кадр</button>` : ''}` : '';
+    return `<div class="pe-tools"><div class="pe-tool-row">${order}${shape}</div></div>`;
+  }
   const colors = `<div class="swatches small"><button type="button" class="swatch none ${block.color ? '' : 'on'}" data-action="pe-style" data-key="color" data-value="" data-index="${index}" aria-label="Цвет текста страницы"></button>${pageColors.map(color => `<button type="button" class="swatch ${block.color === color ? 'on' : ''}" style="--sw:${color}" data-action="pe-style" data-key="color" data-value="${color}" data-index="${index}" aria-label="Цвет ${color}"></button>`).join('')}<label class="swatch custom ${block.color && !pageColors.includes(block.color) ? 'on' : ''}"><input type="color" data-pe-color="${index}" value="${block.color || '#ffffff'}" aria-label="Свой цвет текста"></label></div>`;
   return `<div class="pe-tools"><div class="pe-tool-row"><div class="pe-seg">${Object.entries(pageSizes).map(([key, label]) => button('size', key, label, (block.size || 'm') === key, `aria-label="Размер ${label}"`)).join('')}</div><div class="pe-seg">${Object.entries(pageWeights).map(([key, label]) => button('weight', key, 'Аа', weight === Number(key), `style="font-weight:${key}" aria-label="${label}" title="${label}"`)).join('')}</div><div class="pe-seg">${button('align', '', icon('alignLeft'), block.align !== 'center', 'aria-label="По левому краю"')}${button('align', 'center', icon('alignCenter'), block.align === 'center', 'aria-label="По центру"')}</div>${order}</div>${fontChips(block.font || '', 'pe-style', index)}${colors}</div>`;
 }
@@ -2863,7 +2861,8 @@ function editBlockHtml(block, index) {
   else if (block.type === 'quote') body = `<div class="pb-quote-shell">${area('text', block.text || '', 'Цитата или отзыв')}${input('author', 'Кто сказал')}</div>`;
   else if (block.type === 'image' || block.type === 'video') {
     const source = block.preview || uploadUrl(block.url);
-    const media = block.type === 'video' ? `<video src="${escapeHtml(source)}" muted playsinline controls preload="metadata"></video>` : `<img src="${escapeHtml(source)}" alt="">`;
+    const shaped = block.ratio ? ` style="aspect-ratio:${block.ratio.replace(':', ' / ')};object-fit:cover;${focusStyle(block.focus)}"` : '';
+    const media = block.type === 'video' ? `<video src="${escapeHtml(source)}" muted playsinline controls preload="metadata"></video>` : `<img src="${escapeHtml(source)}" alt=""${shaped}>`;
     const state = block.uploading ? `<span class="pe-uploading">${icon('refresh')} Загружаем… ${Math.round((block.progress || 0) * 100)}%</span>` : block.error ? `<span class="pe-upload-error">${icon('close')} ${escapeHtml(block.error)} — удали блок и попробуй снова</span>` : '';
     body = `<figure class="pb pb-media ${block.uploading ? 'uploading' : ''} ${block.error ? 'failed' : ''}">${media}${state}</figure>${block.error ? '' : input('caption', 'Подпись · необязательно')}`;
   } else if (block.type === 'button') {
@@ -2978,6 +2977,7 @@ function styleBlock(index, key, value) {
     renderPageEditor();
     return;
   }
+  if (key === 'ratio' && !value) delete block.focus;
   if (key === 'weight') block.weight = Number(value);
   else if (value) block[key] = value;
   else delete block[key];
@@ -3220,6 +3220,23 @@ document.addEventListener('click', async event => {
     }
   } else if (action === 'comments') openComments(id);
   else if (action === 'share') openShare(id);
+  else if (action === 'feed-mode') setFeedMode(target.dataset.mode);
+  else if (action === 'comment-sort') {
+    commentSort = target.dataset.sort || 'best';
+    try { storage.setItem(COMMENT_SORT_KEY, commentSort); } catch {}
+    rerenderComments(id);
+  }
+  else if (action === 'thread-open') { openThreads.add(id); rerenderComments(target.dataset.project); }
+  else if (action === 'ob-pick') pickOnboarding(target);
+  else if (action === 'ob-next') { if (onboard && onboard.step < (onboard.last || 3)) { onboard.step += 1; openOnboarding(); } else finishOnboarding(false); }
+  else if (action === 'ob-back') { if (onboard) { onboard.step = Math.max(1, onboard.step - 1); openOnboarding(); } }
+  else if (action === 'ob-skip') finishOnboarding(true);
+  else if (action === 'set-option') chooseSetting(target.dataset.name, target.dataset.value);
+  else if (action === 'account-sheet') openAccountSheet();
+  else if (action === 'blocked-sheet') openBlockedSheet();
+  else if (action === 'layer-close') closeLayer();
+  else if (action === 'media-focus') openMediaFocus(Number(target.dataset.index) || 0);
+  else if (action === 'pe-focus') openBlockFocus(Number(target.dataset.index));
   else if (action === 'share-native') await shareProject(id);
   else if (action === 'share-to') shareTo(id, target.dataset.handle, target);
   else if (action === 'repost') toggleRepost(id);
@@ -3364,7 +3381,7 @@ document.addEventListener('click', async event => {
   } else if (action === 'auth-back') {
     const link = authFlow?.purpose === 'link';
     authFlow = null;
-    if (link) openEditProfile(); else refreshAuth();
+    if (link) openAccountSheet(); else refreshAuth();
   } else if (action === 'auth-resend') {
     if (!authFlow) return;
     target.disabled = true;
@@ -3569,7 +3586,7 @@ document.addEventListener('submit', async event => {
       if (authFlow.purpose === 'link') {
         authFlow = null;
         await reloadAll({ rerender: false });
-        openEditProfile();
+        openAccountSheet();
         toast('Почта привязана');
       } else await finishAuth(authFlow.purpose === 'register');
     } catch (error) {
@@ -3595,7 +3612,7 @@ document.addEventListener('submit', async event => {
     if (submit) submit.disabled = true;
     try {
       await startEmailCode('link', { email: value('email') });
-      openEditProfile();
+      openAccountSheet();
     } catch (error) {
       formError(form, error.message);
       if (submit) submit.disabled = false;
@@ -3635,7 +3652,7 @@ document.addEventListener('submit', async event => {
         const media = [];
         for (const item of publishMedia) {
           const poster = item.type === 'video' ? item.posterUrl || (item.poster ? (item.posterUrl = await uploadBlob(item.poster, 'image').catch(() => '')) : '') : '';
-          media.push({ url: item.url, ...(poster ? { poster } : {}) });
+          media.push({ url: item.url, ...(poster ? { poster } : {}), ...(item.focus ? { focus: item.focus } : {}) });
         }
         if (submit) submit.textContent = editing ? 'Сохраняем…' : 'Публикуем…';
         const { project } = await apiCall(editing ? 'PATCH' : 'POST', editing ? `/api/projects/${encodeURIComponent(editing)}` : '/api/projects', { ...fields, media, video: value('video') });
@@ -3697,8 +3714,9 @@ document.addEventListener('submit', async event => {
     const id = form.dataset.id;
     if (online) {
       try {
-        const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/comments`, { text: value('text'), replyTo: value('replyTo') });
-        replaceProject(project);
+        const result = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/comments`, { text: value('text'), replyTo: value('replyTo') });
+        replaceProject(result.project);
+        freshComment = result.comment || '';
       } catch (error) { toast(error.message); return; }
     } else {
       state.comments[id] ||= [];
@@ -3708,9 +3726,14 @@ document.addEventListener('submit', async event => {
     trackSignal(projectById(id), 'comment');
     const answered = Boolean(replyTarget);
     replyTarget = null;
+    const posted = freshComment ? projectById(id)?.comments?.find(item => item.id === freshComment) : null;
+    if (posted?.replyTo) openThreads.add(posted.replyTo);
     refresh();
     rerenderComments(id);
-    modal.querySelector?.('.comments .comment:last-child, .comments .comment.fresh')?.scrollIntoView?.({ block: 'nearest' });
+    const fresh = freshComment ? modal.querySelector?.(`.comment[data-comment="${freshComment}"]`) : null;
+    fresh?.classList.add('fresh');
+    fresh?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    freshComment = '';
     maybeAskPush(answered ? 'Сообщить, когда ответят снова?' : 'Сообщить, когда тебе ответят?');
   } else if (form.id === 'application-form') {
     if (!value('title') || !value('description') || !value('contact')) return;
@@ -3884,6 +3907,7 @@ document.addEventListener('input', event => {
 document.addEventListener('change', async event => {
   const changed = event.target;
   if (changed?.dataset?.notify) { saveNotifyPref(changed.dataset.notify, changed.checked); return; }
+  if (changed?.dataset?.setting) { toggleSetting(changed.dataset.setting, changed.checked); return; }
   if (changed?.dataset?.demoInput !== undefined) { checkDemoField(changed); return; }
   if (changed?.dataset?.updateImage !== undefined) { attachUpdateImage(changed); return; }
   const target = event.target;
@@ -3912,12 +3936,14 @@ document.addEventListener('change', async event => {
     target.closest?.('.chip-radio')?.querySelectorAll?.(`input[name="${target.name}"]`).forEach(input => { if (input !== target) input.checked = false; });
   }
   else if (target.name === 'avatar-file' && target.files?.[0]) {
-    try {
-      const blob = await imageToBlob(target.files[0], 400, true);
+    const file = target.files[0];
+    target.value = '';
+    if (!file.type.startsWith('image/')) { toast('Это не картинка'); return; }
+    openCropper({ file, aspect: 1, round: true, size: 512, title: 'Аватарка', onDone: blob => {
       avatarDraft = { blob, preview: URL.createObjectURL(blob) };
       const holder = modal.querySelector?.('.avatar-edit');
       if (holder) holder.innerHTML = avatarEditInner();
-    } catch (error) { toast(error.message); }
+    } });
   }
 });
 
@@ -4253,6 +4279,407 @@ document.addEventListener('visibilitychange', () => {
     if (current.section === 'ai' && current.page === 'w') loadWorkspace(current.extra, { force: true });
   }
 });
+
+/* Feed modes: recommendations, following, discovery */
+
+const FEED_MODE_KEY = 'prostim-feed-mode';
+const feedModes = [['following', 'Подписки'], ['foryou', 'Для тебя'], ['discover', 'Открытия']];
+let feedMode = (() => { try { const saved = storage.getItem(FEED_MODE_KEY); return feedModes.some(([key]) => key === saved) ? saved : 'foryou'; } catch { return 'foryou'; } })();
+const feedKey = () => `${feedMode}:${feedCategory}`;
+
+function feedModesHtml() {
+  return `<nav class="feed-modes" aria-label="Что показывать в ленте">${feedModes.map(([key, label]) => `<button class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}" aria-pressed="${key === feedMode}">${label}</button>`).join('')}</nav>`;
+}
+
+const feedEntry = item => ({ id: item.project.id, reason: item.reason === 'repost' && item.by ? `repost:${item.by}` : item.reason });
+
+// Following: posts of people I follow, projects I watch and reposts by people I follow, newest activity first.
+function followingEntries(list) {
+  const reposts = repostMap();
+  const watching = watchingList();
+  const taste = currentTaste();
+  return list
+    .filter(project => !isMine(project.handle) && (state.follows.includes(project.handle) || watching.includes(project.id) || reposts.has(project.id)))
+    .map(project => ({ project, at: Math.max(Number(project.createdAt) || 0, Number(project.lastUpdateAt) || 0) }))
+    .sort((left, right) => right.at - left.at)
+    .map(({ project }) => ({
+      id: project.id,
+      reason: project.lastUpdateAt && project.lastUpdateAt > (taste.seen[project.id]?.last || 0) ? 'update' : reposts.has(project.id) && !state.follows.includes(project.handle) ? `repost:${reposts.get(project.id)}` : 'follow'
+    }));
+}
+
+function setFeedMode(mode) {
+  if (!feedModes.some(([key]) => key === mode)) return;
+  if (mode === feedMode && feedOrder) { refreshFeed(); return; }
+  feedMode = mode;
+  try { storage.setItem(FEED_MODE_KEY, mode); } catch {}
+  endView();
+  feedOrder = null;
+  feedScrollTop = 0;
+  render();
+  document.querySelector('#feed')?.scrollTo?.({ top: 0 });
+}
+
+/* First run after sign-up: what the person is into */
+
+const onboardTags = ['Инди', 'Пиксель-арт', 'Roguelike', 'Кооператив', 'Хоррор', 'Головоломки', 'Стратегии', 'RPG', 'Платформер', 'Симулятор', 'Визуальная новелла', 'Шутер', 'Казуальные', 'Мобильные', 'VR', 'Мультиплеер', 'ИИ', 'Open source', 'Продуктивность', 'Дизайн', 'Музыка', 'Образование', 'Инструменты разработчика', 'Геймдев'];
+const onboardGoals = [['play', 'Играю', 'gamepad'], ['make', 'Делаю игры', 'code'], ['apps', 'Делаю приложения', 'grid'], ['team', 'Ищу команду', 'users'], ['publish', 'Хочу издать игру', 'rocket']];
+let onboard = null;
+
+function onboardingTags() {
+  const counts = new Map();
+  for (const project of projects()) for (const tag of visibleTags(project)) counts.set(tag, (counts.get(tag) || 0) + 1);
+  const catalog = [...counts.entries()].sort((left, right) => right[1] - left[1]).map(([tag]) => tag);
+  const seen = new Set();
+  return [...onboardTags, ...catalog].filter(tag => { const key = tag.toLocaleLowerCase('ru'); if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 32);
+}
+
+function onboardingPeople() {
+  return (remote?.users || []).filter(user => !user.official && !isMine(user.handle) && !state.follows.includes(user.handle) && user.projects > 0)
+    .sort((left, right) => (right.followers - left.followers) || (right.projects - left.projects)).slice(0, 8);
+}
+
+function openOnboarding() {
+  onboard ||= { step: 1, categories: new Set(), goals: new Set(), tags: new Set(), follows: new Set() };
+  const last = onboardingPeople().length ? 3 : 2;
+  const step = Math.min(onboard.step, last);
+  const pressed = (group, value) => onboard[group].has(value);
+  const chip = (group, value, label, iconName = '') => `<button type="button" class="ob-chip ${pressed(group, value) ? 'on' : ''}" data-action="ob-pick" data-group="${group}" data-value="${escapeHtml(value)}" aria-pressed="${pressed(group, value)}">${iconName ? icon(iconName) : ''}${escapeHtml(label)}</button>`;
+  let body;
+  if (step === 1) {
+    const hints = { games: 'Инди, демо и геймдев', apps: 'Сервисы и мобильные', tools: 'Для разработчиков и авторов' };
+    body = `<h2 id="modal-title">Что тебе интересно?</h2><p class="fine">Так лента с первого дня покажет нужное, а дальше подстроится сама.</p><div class="ob-tiles">${Object.entries(categoryNames).map(([id, name]) => `<button type="button" class="ob-tile ${pressed('categories', id) ? 'on' : ''}" data-action="ob-pick" data-group="categories" data-value="${id}" aria-pressed="${pressed('categories', id)}">${icon(categoryIcons[id])}<b>${name}</b><small>${hints[id] || ''}</small></button>`).join('')}</div><h3 class="ob-sub">Чем занимаешься?</h3><div class="ob-chips">${onboardGoals.map(([value, label, iconName]) => chip('goals', value, label, iconName)).join('')}</div>`;
+  } else if (step === 2) {
+    body = `<h2 id="modal-title">Какие темы и жанры?</h2><p class="fine">Выбери несколько — чем больше, тем точнее первая лента.</p><div class="ob-chips">${onboardingTags().map(tag => chip('tags', tag.toLocaleLowerCase('ru'), tag)).join('')}</div>`;
+  } else {
+    body = `<h2 id="modal-title">Подпишись на авторов</h2><p class="fine">Их проекты и обновления будут во вкладке «Подписки».</p><div class="ob-people">${onboardingPeople().map(person => `<div class="ob-person">${avatar(person, 'lg')}<span><b>${escapeHtml(person.name)}</b><small>@${escapeHtml(person.handle)} · ${person.projects} ${plural(person.projects, 'проект', 'проекта', 'проектов')}</small></span><button type="button" class="follow-pill small ${pressed('follows', person.handle) ? 'on' : ''}" data-action="ob-pick" data-group="follows" data-value="${escapeHtml(person.handle)}" aria-pressed="${pressed('follows', person.handle)}">${pressed('follows', person.handle) ? 'Вы подписаны' : 'Подписаться'}</button></div>`).join('')}</div>`;
+  }
+  const dots = `<div class="ob-steps" aria-hidden="true">${Array.from({ length: last }, (_, index) => `<i class="${index + 1 === step ? 'on' : index + 1 < step ? 'done' : ''}"></i>`).join('')}</div>`;
+  showDialog(`<div class="sheet-body onboarding">${dots}${body}<div class="ob-bar">${step > 1 ? `<button class="btn btn-ghost btn-square" data-action="ob-back" aria-label="Назад">${icon('chevronLeft')}</button>` : `<button class="btn btn-ghost" data-action="ob-skip">Пропустить</button>`}<button class="btn btn-grad" data-action="ob-next">${step < last ? `Дальше ${icon('chevronRight')}` : `${icon('check')} Готово`}</button></div></div>`, { kind: 'onboarding' });
+  onboard.step = step;
+  onboard.last = last;
+}
+
+function pickOnboarding(target) {
+  if (!onboard) return;
+  const group = onboard[target.dataset.group];
+  const value = target.dataset.value;
+  if (!group || !value) return;
+  if (group.has(value)) group.delete(value); else group.add(value);
+  const on = group.has(value);
+  target.classList.toggle('on', on);
+  target.setAttribute('aria-pressed', String(on));
+  if (target.dataset.group === 'follows') target.textContent = on ? 'Вы подписаны' : 'Подписаться';
+}
+
+async function finishOnboarding(skip) {
+  const payload = skip || !onboard ? { skip: true } : { categories: [...onboard.categories], goals: [...onboard.goals], tags: [...onboard.tags], follows: [...onboard.follows] };
+  onboard = null;
+  if (modal.open) modal.close();
+  dialogContext = null;
+  try { await apiCall('POST', '/api/me/onboarding', payload); } catch (error) { toast(error.message); }
+  if (remote?.account) remote.account.onboarding = false;
+  feedOrder = null;
+  await reloadAll({ rerender: false });
+  if (route().section !== 'feed') go('#/feed');
+  render();
+  if (!skip) toast('Лента настроена под тебя — дальше она будет учиться сама');
+}
+
+/* Comments: sorting and threads */
+
+const COMMENT_SORT_KEY = 'prostim-comment-sort';
+let commentSort = (() => { try { const saved = storage.getItem(COMMENT_SORT_KEY); return commentSorts.some(([key]) => key === saved) ? saved : 'best'; } catch { return 'best'; } })();
+const openThreads = new Set();
+let freshComment = '';
+
+/* Settings: account, privacy, notifications, feed, look */
+
+const THEME_KEY = 'prostim-theme';
+const SAVER_KEY = 'prostim-saver';
+const SOUND_KEY = 'prostim-sound';
+const readSetting = (key, fallback) => { try { return storage.getItem(key) ?? fallback; } catch { return fallback; } };
+let dataSaver = readSetting(SAVER_KEY, '0') === '1';
+
+function currentTheme() {
+  const value = readSetting(THEME_KEY, 'auto');
+  return ['auto', 'dark', 'light'].includes(value) ? value : 'auto';
+}
+
+function applyTheme(value = currentTheme()) {
+  document.documentElement?.setAttribute?.('data-theme', value);
+  const light = value === 'light' || (value === 'auto' && Boolean(window.matchMedia?.('(prefers-color-scheme: light)').matches));
+  document.querySelector('meta[name="theme-color"]')?.setAttribute?.('content', light ? '#f6f5f2' : '#0c0e0d');
+}
+
+function settingsSeg(name, options, current) {
+  return `<div class="seg" role="radiogroup">${options.map(([value, label]) => `<button role="radio" aria-checked="${value === current}" class="${value === current ? 'on' : ''}" data-action="set-option" data-name="${name}" data-value="${value}">${label}</button>`).join('')}</div>`;
+}
+
+function settingsRow(attrs, iconName, title, hint = '', end = icon('chevronRight')) {
+  return `<button class="set-row" ${attrs}><span class="row-mark">${icon(iconName)}</span><span><b>${title}</b>${hint ? `<small>${hint}</small>` : ''}</span>${end}</button>`;
+}
+
+function settingsToggle(key, iconName, title, hint, on) {
+  return `<label class="toggle-row"><input type="checkbox" data-setting="${key}" ${on ? 'checked' : ''}><span>${icon(iconName)}<b>${title}</b><small>${hint}</small></span><i class="toggle" aria-hidden="true"></i></label>`;
+}
+
+function renderSettings() {
+  if (online && !me) return `<div class="page narrow">${loginCard('Войди, чтобы настроить аккаунт, уведомления и приватность')}</div>`;
+  const person = me || localMe;
+  const section = (title, body) => body ? `<section class="set-section"><h2>${title}</h2>${body}</section>` : '';
+  const privacy = remote?.account?.privacy || { messages: 'all', comments: 'all', reposts: true };
+  const account = online ? [
+    settingsRow('data-action="account-sheet"', 'send', 'Вход и почта', remote?.account?.email || 'Почта, Google, Яндекс ID, GitHub'),
+    plusRowHtml()
+  ].join('') : '';
+  const blocked = blockedList();
+  const privacyHtml = online ? `<div class="set-field"><b>Кто может писать мне</b>${settingsSeg('messages', [['all', 'Все'], ['following', 'Мои подписки'], ['nobody', 'Никто']], privacy.messages)}<small>Тот, кто уже написал тебе первым, сможет ответить</small></div><div class="set-field"><b>Кто комментирует мои проекты</b>${settingsSeg('comments', [['all', 'Все'], ['following', 'Мои подписки']], privacy.comments)}</div>${settingsToggle('reposts', 'repost', 'Показывать мои репосты', 'Вкладка «Репосты» в профиле и пометка в ленте у подписчиков', privacy.reposts !== false)}${settingsRow('data-action="blocked-sheet"', 'ban', 'Заблокированные', blocked.length ? `${blocked.length} ${plural(blocked.length, 'человек', 'человека', 'человек')}` : 'Никого')}` : '';
+  const notices = online ? settingsRow('data-action="notify-settings"', 'bell', 'Уведомления', pushState.subscribed ? 'Push включены на этом устройстве' : 'Push, тихие часы и что присылать') : '';
+  const feed = `${settingsRow('data-action="feed-prefs"', 'sparkle', 'Твоя лента', 'Темы и авторы: больше, меньше или никогда')}${settingsToggle('sound', 'music', 'Звук видео в ленте', 'Видео в ленте начинают играть со звуком', readSetting(SOUND_KEY, '0') === '1')}${settingsToggle('saver', 'download', 'Экономия трафика', 'Видео не играют сами, следующие посты не грузятся заранее', dataSaver)}${settingsRow('data-action="reset-taste"', 'refresh', 'Начать ленту заново', 'Забыть, что лента узнала о тебе', '')}`;
+  const look = `<div class="set-field"><b>Тема</b>${settingsSeg('theme', [['auto', 'Как на устройстве'], ['dark', 'Тёмная'], ['light', 'Светлая']], currentTheme())}</div>`;
+  const leave = online && me ? `<button class="set-row danger" data-action="logout"><span class="row-mark">${icon('external')}</span><span><b>Выйти из аккаунта</b></span></button>` : '';
+  return `<div class="page narrow settings"><h1 class="sr-only">Настройки</h1><button class="set-profile" data-action="edit-profile">${avatar(person, 'lg')}<span><b>${escapeHtml(person.name)}</b><small>@${escapeHtml(person.handle === 'me' ? 'вы' : person.handle)} · Редактировать профиль</small></span>${icon('chevronRight')}</button>${section('Аккаунт', account)}${section('Конфиденциальность', privacyHtml)}${section('Уведомления', notices)}${section('Лента', feed)}${section('Оформление', look)}${section('Приложение', installHtml())}${leave ? `<section class="set-section">${leave}</section>` : ''}</div>`;
+}
+
+function rerenderSettings() {
+  if (route().section === 'settings') main.innerHTML = renderSettings();
+}
+
+async function savePrivacy(patch) {
+  if (!remote?.account) return;
+  remote.account.privacy = { ...(remote.account.privacy || {}), ...patch };
+  try {
+    const result = await apiCall('PATCH', '/api/me', { privacy: patch });
+    updateUser(result.me);
+    toast('Сохранено');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function chooseSetting(name, value) {
+  if (name === 'theme') {
+    try { storage.setItem(THEME_KEY, value); } catch {}
+    applyTheme(value);
+  } else if (name === 'messages' || name === 'comments') savePrivacy({ [name]: value });
+  rerenderSettings();
+}
+
+function toggleSetting(key, on) {
+  if (key === 'reposts') savePrivacy({ reposts: on });
+  else if (key === 'saver') {
+    dataSaver = on;
+    try { storage.setItem(SAVER_KEY, on ? '1' : '0'); } catch {}
+  } else if (key === 'sound') {
+    feedMuted = !on;
+    try { storage.setItem(SOUND_KEY, on ? '1' : '0'); } catch {}
+  }
+}
+
+function openAccountSheet() {
+  if (!me) return;
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Вход и почта</h2>${accountHtml() || '<p class="fine">Вход по почте и через сервисы на этом сервере не настроен.</p>'}</div>`, { kind: 'account' });
+  clearInterval(authResendTimer);
+  if (authFlow?.purpose === 'link') authResendTimer = setInterval(tickAuthResend, 1000);
+}
+
+function openBlockedSheet() {
+  const blocked = blockedList();
+  const rows = blocked.map(handle => `<div class="account-row">${icon('ban')}<span><b>@${escapeHtml(handle)}</b></span><button class="btn btn-ghost btn-sm" data-action="block" data-handle="${escapeHtml(handle)}">Разблокировать</button></div>`).join('');
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Заблокированные</h2>${rows ? `<div class="blocked-list">${rows}</div>` : '<p class="fine">Никого. Заблокировать можно в меню «…» на посте или в профиле.</p>'}</div>`, { kind: 'blocked' });
+}
+
+/* A second layer above the sheet: cropping a picture, choosing what stays in view */
+
+let layer = null;
+
+function openLayer(html, kind) {
+  if (!layer) {
+    layer = document.createElement('dialog');
+    layer.className = 'layer';
+    layer.setAttribute('aria-labelledby', 'layer-title');
+    document.body.appendChild(layer);
+  }
+  layer.dataset.kind = kind;
+  layer.innerHTML = html;
+  if (!layer.open) layer.showModal();
+  return layer;
+}
+
+function closeLayer() {
+  if (layer?.open) layer.close();
+}
+
+function loadPicture(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Не получилось открыть картинку'));
+    image.src = src;
+  });
+}
+
+// Drag to move, wheel, slider or two fingers to zoom; "Готово" draws the framed part into a file.
+async function openCropper({ file, aspect = 1, round = false, size = 640, title = 'Кадрирование', onDone }) {
+  const url = URL.createObjectURL(file);
+  let image;
+  try { image = await loadPicture(url); } catch (error) { URL.revokeObjectURL(url); toast(error.message); return; }
+  const dialog = openLayer(`<div class="crop"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">${escapeHtml(title)}</b><button class="btn btn-grad btn-sm crop-done">Готово</button></div><div class="crop-stage ${round ? 'round' : ''}" style="aspect-ratio:${aspect}"><img class="crop-image" src="${url}" alt="" draggable="false"><i class="crop-grid" aria-hidden="true"></i></div><label class="crop-zoom">${icon('minus')}<input type="range" min="1" max="4" step="0.01" value="1" aria-label="Масштаб">${icon('plus')}</label><p class="fine">Двигай фото пальцем или мышью. Масштаб — ползунком, колёсиком или двумя пальцами.</p></div>`, 'crop');
+  const stage = dialog.querySelector('.crop-stage');
+  const picture = dialog.querySelector('.crop-image');
+  const slider = dialog.querySelector('input[type="range"]');
+  const view = { zoom: 1, x: 0, y: 0 };
+  const box = () => stage.getBoundingClientRect();
+  const base = () => Math.max(box().width / image.naturalWidth, box().height / image.naturalHeight);
+  const paint = () => {
+    const frame = box();
+    const scale = base() * view.zoom;
+    const width = image.naturalWidth * scale;
+    const height = image.naturalHeight * scale;
+    view.x = Math.min(0, Math.max(frame.width - width, view.x));
+    view.y = Math.min(0, Math.max(frame.height - height, view.y));
+    picture.style.width = `${width}px`;
+    picture.style.height = `${height}px`;
+    picture.style.transform = `translate(${view.x}px, ${view.y}px)`;
+    slider.value = String(view.zoom);
+  };
+  const zoomAt = (zoom, x, y) => {
+    const before = base() * view.zoom;
+    view.zoom = Math.max(1, Math.min(4, zoom));
+    const after = base() * view.zoom;
+    view.x = x - (x - view.x) / before * after;
+    view.y = y - (y - view.y) / before * after;
+    paint();
+  };
+  requestAnimationFrame(() => {
+    const frame = box();
+    const scale = base();
+    view.x = (frame.width - image.naturalWidth * scale) / 2;
+    view.y = (frame.height - image.naturalHeight * scale) / 2;
+    paint();
+  });
+  const pointers = new Map();
+  stage.addEventListener('pointerdown', event => {
+    stage.setPointerCapture?.(event.pointerId);
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  });
+  stage.addEventListener('pointermove', event => {
+    const previous = pointers.get(event.pointerId);
+    if (!previous) return;
+    const now = { x: event.clientX, y: event.clientY };
+    if (pointers.size === 1) {
+      view.x += now.x - previous.x;
+      view.y += now.y - previous.y;
+      pointers.set(event.pointerId, now);
+      paint();
+      return;
+    }
+    const [first, second] = [...pointers.values()];
+    const before = Math.hypot(first.x - second.x, first.y - second.y) || 1;
+    pointers.set(event.pointerId, now);
+    const [left, right] = [...pointers.values()];
+    const after = Math.hypot(left.x - right.x, left.y - right.y) || 1;
+    const frame = box();
+    zoomAt(view.zoom * after / before, (left.x + right.x) / 2 - frame.left, (left.y + right.y) / 2 - frame.top);
+  });
+  const release = event => pointers.delete(event.pointerId);
+  stage.addEventListener('pointerup', release);
+  stage.addEventListener('pointercancel', release);
+  stage.addEventListener('wheel', event => {
+    event.preventDefault();
+    const frame = box();
+    zoomAt(view.zoom * Math.exp(-event.deltaY * 0.0015), event.clientX - frame.left, event.clientY - frame.top);
+  }, { passive: false });
+  slider.addEventListener('input', () => { const frame = box(); zoomAt(Number(slider.value), frame.width / 2, frame.height / 2); });
+  dialog.addEventListener('close', () => URL.revokeObjectURL(url), { once: true });
+  dialog.querySelector('.crop-done').addEventListener('click', () => {
+    const frame = box();
+    const scale = base() * view.zoom;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = Math.round(size / aspect);
+    canvas.getContext('2d').drawImage(image, -view.x / scale, -view.y / scale, frame.width / scale, frame.height / scale, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      closeLayer();
+      if (blob) onDone(blob); else toast('Не получилось сохранить кадр');
+    }, 'image/jpeg', 0.9);
+  });
+}
+
+// The visible part of a picture shown with object-fit: cover in a frame of the given ratio,
+// in percent of the picture, for a focus point in percent.
+function visibleArea(width, height, ratio, focus) {
+  const [fx, fy] = focus || [50, 50];
+  const own = width / height;
+  if (own > ratio) {
+    const share = ratio / own;
+    return { left: (1 - share) * fx, top: 0, width: share * 100, height: 100 };
+  }
+  const share = own / ratio;
+  return { left: 0, top: (1 - share) * fy, width: 100, height: share * 100 };
+}
+
+const feedFrames = [{ ratio: 9 / 16, label: 'В ленте', kind: 'in-feed' }, { ratio: 16 / 10, label: 'На странице поста', kind: 'on-page' }];
+
+// Tap or drag on the picture: that point always stays in view. The bright frame shows what the feed
+// shows, the dashed one what the post page shows; the previews below are the real crops.
+async function openFocusEditor({ items, index = 0, frames = feedFrames, onChange }) {
+  const list = items.filter(item => item.src);
+  if (!list.length) return;
+  let at = Math.max(0, Math.min(index, list.length - 1));
+  const draw = async () => {
+    const item = list[at];
+    const isVideo = item.type === 'video';
+    const media = isVideo ? `<video src="${escapeHtml(item.src)}#t=0.1" muted playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.src)}" alt="" draggable="false">`;
+    const dialog = openLayer(`<div class="crop focus-editor"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><b id="layer-title">Что попадёт в кадр</b><button class="btn btn-grad btn-sm focus-done">Готово</button></div><div class="focus-canvas">${media}${frames.map(frame => `<i class="focus-frame ${frame.kind}"><em>${frame.label}</em></i>`).join('')}<i class="focus-dot" aria-hidden="true"></i></div><div class="focus-previews">${frames.map(frame => `<figure class="${frame.kind}"><div class="focus-preview" style="aspect-ratio:${frame.ratio}">${isVideo ? `<video src="${escapeHtml(item.src)}#t=0.1" muted playsinline preload="metadata"></video>` : `<img src="${escapeHtml(item.src)}" alt="">`}</div><figcaption>${frame.label}</figcaption></figure>`).join('')}</div><p class="fine">Нажми или веди по фото — эта точка всегда останется в кадре.</p>${list.length > 1 ? `<div class="focus-nav"><button class="btn btn-ghost btn-sm focus-prev" ${at ? '' : 'disabled'}>${icon('chevronLeft')}</button><span>${at + 1} из ${list.length}</span><button class="btn btn-ghost btn-sm focus-next" ${at < list.length - 1 ? '' : 'disabled'}>${icon('chevronRight')}</button></div>` : ''}</div>`, 'focus');
+    const canvas = dialog.querySelector('.focus-canvas');
+    const element = canvas.querySelector('img, video');
+    const size = await new Promise(resolve => {
+      const done = () => resolve({ width: element.naturalWidth || element.videoWidth || 1, height: element.naturalHeight || element.videoHeight || 1 });
+      if ((element.naturalWidth || element.videoWidth)) done();
+      else element.addEventListener(isVideo ? 'loadedmetadata' : 'load', done, { once: true });
+    });
+    canvas.style.aspectRatio = `${size.width} / ${size.height}`;
+    const paint = () => {
+      const focus = item.focus || [50, 50];
+      frames.forEach((frame, number) => {
+        const area = visibleArea(size.width, size.height, frame.ratio, focus);
+        const box = canvas.querySelectorAll('.focus-frame')[number];
+        Object.assign(box.style, { left: `${area.left}%`, top: `${area.top}%`, width: `${area.width}%`, height: `${area.height}%` });
+      });
+      Object.assign(canvas.querySelector('.focus-dot').style, { left: `${focus[0]}%`, top: `${focus[1]}%` });
+      dialog.querySelectorAll('.focus-preview img, .focus-preview video').forEach(preview => { preview.style.objectPosition = `${focus[0]}% ${focus[1]}%`; });
+    };
+    paint();
+    let dragging = false;
+    const place = event => {
+      const box = canvas.getBoundingClientRect();
+      item.focus = [Math.round(Math.max(0, Math.min(100, (event.clientX - box.left) / box.width * 100))), Math.round(Math.max(0, Math.min(100, (event.clientY - box.top) / box.height * 100)))];
+      paint();
+    };
+    canvas.addEventListener('pointerdown', event => { dragging = true; canvas.setPointerCapture?.(event.pointerId); place(event); });
+    canvas.addEventListener('pointermove', event => { if (dragging) place(event); });
+    canvas.addEventListener('pointerup', () => { dragging = false; onChange?.(); });
+    dialog.querySelector('.focus-done').addEventListener('click', () => { closeLayer(); onChange?.(); });
+    dialog.querySelector('.focus-prev')?.addEventListener('click', () => { at -= 1; draw(); });
+    dialog.querySelector('.focus-next')?.addEventListener('click', () => { at += 1; draw(); });
+  };
+  draw();
+}
+
+function openMediaFocus(index) {
+  const items = publishMedia.map(item => Object.assign(item, { src: item.preview || item.url }));
+  openFocusEditor({ items, index, onChange: () => renderPicker() });
+}
+
+function openBlockFocus(index) {
+  const block = postDraft?.blocks[index];
+  if (!block?.ratio) return;
+  const [width, height] = block.ratio.split(':').map(Number);
+  const item = { type: 'image', src: block.preview || uploadUrl(block.url), focus: block.focus };
+  openFocusEditor({ items: [item], frames: [{ ratio: width / height, label: imageRatios[block.ratio], kind: 'in-feed' }], onChange: () => { block.focus = item.focus; rerenderBlock(index); } });
+}
 
 /* Notifications: the activity list, web push and installing the app */
 
@@ -4795,6 +5222,7 @@ async function toggleRepost(id) {
 /* Feed: the next posts start loading while this one is on screen */
 
 function preloadAhead(item) {
+  if (dataSaver) return;
   let next = item?.nextElementSibling;
   for (let step = 0; step < 2 && next; step += 1, next = next.nextElementSibling) {
     next.querySelectorAll?.('img[loading="lazy"]').forEach(image => { image.loading = 'eager'; });
@@ -4926,22 +5354,27 @@ function commentHtml(project, comment, reply = false) {
     me && !comment.mine && !ownProject ? `<button data-action="report" data-kind="comment" data-id="${id}" data-project="${pid}">Пожаловаться</button>` : ''
   ].join('') : '';
   const like = live ? `<button class="comment-like ${comment.liked ? 'on' : ''}" data-action="like-comment" data-id="${id}" data-project="${pid}" aria-pressed="${Boolean(comment.liked)}" aria-label="Нравится">${icon('heart')}${comment.likes ? `<b>${comment.likes}</b>` : ''}</button>` : '';
-  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b><small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text ? `<p>${escapeHtml(comment.text)}</p>` : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${actions ? `<div class="comment-actions">${actions}</div>` : ''}</div>${like}</div>`;
+  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${actions ? `<div class="comment-actions">${actions}</div>` : ''}</div>${like}</div>`;
 }
 
 function commentsInner(project) {
   const all = projectComments(project).filter(comment => !hiddenLocally.has(`c:${comment.id}`));
-  const roots = all.filter(comment => !comment.replyTo || !all.some(item => item.id === comment.replyTo));
-  roots.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)));
-  const list = roots.length
-    ? roots.map(root => commentHtml(project, root) + all.filter(item => item.replyTo === root.id).map(item => commentHtml(project, item, true)).join('')).join('')
-    : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
   const pid = escapeHtml(project.id);
+  const threads = sortComments(all, commentSort);
+  const list = threads.length
+    ? threads.map(({ comment, replies }) => {
+      const open = replies.length <= 2 || openThreads.has(comment.id);
+      const shown = open ? replies : replies.slice(0, 1);
+      const hidden = replies.length - shown.length;
+      return `<div class="thread">${commentHtml(project, comment)}${shown.map(reply => commentHtml(project, reply, true)).join('')}${hidden ? `<button class="thread-more" data-action="thread-open" data-id="${escapeHtml(comment.id)}" data-project="${pid}">${icon('chevronDown')} Ещё ${hidden} ${plural(hidden, 'ответ', 'ответа', 'ответов')}</button>` : ''}</div>`;
+    }).join('')
+    : `<p class="comments-empty">${icon('comment')} Будь первым</p>`;
+  const sorter = threads.length > 1 ? `<div class="comment-sort" role="radiogroup" aria-label="Порядок комментариев">${commentSorts.map(([key, label]) => `<button role="radio" aria-checked="${key === commentSort}" class="${key === commentSort ? 'on' : ''}" data-action="comment-sort" data-sort="${key}" data-id="${pid}">${label}</button>`).join('')}</div>` : '';
   const digest = online && all.length >= 3 ? `<div class="digest" data-digest="${pid}"><button class="digest-btn" data-action="digest" data-id="${pid}">${icon('sparkle')}<span><b>О чём пишут</b><small>Короткий пересказ ${all.length} ${plural(all.length, 'комментария', 'комментариев', 'комментариев')}</small></span>${icon('chevronRight')}</button></div>` : '';
   const replying = replyTarget?.projectId === project.id ? replyTarget : null;
   const voice = online && me && typeof MediaRecorder === 'function' ? `<button type="button" class="cbtn" data-action="voice-rec" data-id="${pid}" aria-label="Записать голосовой комментарий">${icon('mic')}</button>` : '';
   const placeholder = online && !me ? 'Войди, чтобы комментировать' : replying ? `Ответ ${replying.name}…` : 'Комментарий…';
-  return `${digest}<div class="comments">${list}</div><form id="comment-form" data-id="${pid}" class="composer sticky comment-composer">${replying ? `<div class="reply-bar">${icon('comment')}<span>Ответ <b>${escapeHtml(replying.name)}</b></span><button type="button" data-action="reply-cancel" aria-label="Отменить ответ">${icon('close')}</button></div>` : ''}<input type="hidden" name="replyTo" value="${escapeHtml(replying?.id || '')}"><input name="text" maxlength="1200" placeholder="${escapeHtml(placeholder)}" aria-label="Комментарий" autocomplete="off">${voice}<button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
+  return `${digest}${sorter}<div class="comments">${list}</div><form id="comment-form" data-id="${pid}" class="composer sticky comment-composer">${replying ? `<div class="reply-bar">${icon('comment')}<span>Ответ <b>${escapeHtml(replying.name)}</b></span><button type="button" data-action="reply-cancel" aria-label="Отменить ответ">${icon('close')}</button></div>` : ''}<input type="hidden" name="replyTo" value="${escapeHtml(replying?.id || '')}"><input name="text" maxlength="1200" placeholder="${escapeHtml(placeholder)}" aria-label="Комментарий" autocomplete="off">${voice}<button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
 }
 
 function rerenderComments(id) {
@@ -5089,6 +5522,9 @@ if (typeof window.addEventListener === 'function') {
 }
 
 async function boot() {
+  applyTheme();
+  window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change', () => applyTheme());
+  if (readSetting(SOUND_KEY, '0') === '1') feedMuted = false;
   if (canReachServer) {
     main.innerHTML = `<div class="boot">${logoLoaderHtml()}</div>`;
     try {
@@ -5101,6 +5537,7 @@ async function boot() {
   render();
   if (online) connectEvents();
   registerWorker().then(() => checkPush());
+  if (online && remote?.account?.onboarding) openOnboarding();
   // Back from Google / Yandex / GitHub: show what went wrong, or greet, and tidy the address.
   const params = typeof URLSearchParams === 'function' ? new URLSearchParams(location.search || '') : null;
   if (params?.has('auth_error')) toast(params.get('auth_error'));

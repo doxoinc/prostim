@@ -47,7 +47,7 @@ function startMock() {
 test.before(async () => {
   dataDir = await mkdtemp(path.join(os.tmpdir(), 'prostim-social-'));
   mockUrl = await startMock();
-  server = spawn(process.execPath, [path.join(root, 'server/index.mjs')], { env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, DATABASE_URL: '', MAIL_TRANSPORT: 'outbox', REQUIRE_EMAIL: '0', PUSH_TEST_ENDPOINTS: '1', LINK_PREVIEW_ALLOW_LOCAL: '1', REPORT_HIDE: '2', ANTHROPIC_API_KEY: '', DEMO_ADS: '0', YOOKASSA_SHOP_ID: '', YOOKASSA_SECRET_KEY: '' }, stdio: ['ignore', 'ignore', 'inherit'] });
+  server = spawn(process.execPath, [path.join(root, 'server/index.mjs')], { env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, DATABASE_URL: '', MAIL_TRANSPORT: 'outbox', REQUIRE_EMAIL: '0', PUSH_TEST_ENDPOINTS: '1', LINK_PREVIEW_ALLOW_LOCAL: '1', REPORT_HIDE: '2', AUTH_LIMIT: '500', ANTHROPIC_API_KEY: '', DEMO_ADS: '0', YOOKASSA_SHOP_ID: '', YOOKASSA_SECRET_KEY: '' }, stdio: ['ignore', 'ignore', 'inherit'] });
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try { if ((await fetch(`${base}/healthz`)).ok) return; } catch {}
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -271,4 +271,56 @@ test('a post is drafted from a page, its pictures are copied, a demo is checked'
   assert.deepEqual(post.links, ['https://t.me/linkdev']);
   assert.deepEqual(post.page, [{ type: 'button', url: 'https://linkdev.itch.io/', label: 'Скачать' }]);
   assert.equal(post.media[0].url, copy.url);
+});
+
+test('new accounts get the interest picker once, and the picks seed the feed', async () => {
+  const fresh = await person('pickerfresh');
+  const author = await person('pickerauthor');
+  await project(author, 'Мелодия', { tags: ['Музыка'] });
+  assert.equal((await fresh('GET', '/api/bootstrap')).body.account.onboarding, true);
+  const result = (await fresh('POST', '/api/me/onboarding', { categories: ['games', 'nope'], goals: ['make'], tags: ['Пиксель-арт', 'Хоррор'], follows: ['pickerauthor', 'nobody'] })).body;
+  assert.equal(result.taste.weights['cat:games'], 4);
+  assert.equal(result.taste.weights['tag:пиксель-арт'], 3);
+  assert.equal(result.taste.weights['cat:tools'], 2, 'people who make games see tools too');
+  const after = (await fresh('GET', '/api/bootstrap')).body;
+  assert.equal(after.account.onboarding, false);
+  assert.deepEqual(after.follows, ['pickerauthor']);
+  assert.equal((await author('GET', '/api/notifications')).body.items[0].type, 'follow');
+});
+
+test('privacy: who may write and comment, and hidden reposts', async () => {
+  const shy = await person('shyauthor');
+  const fan = await person('shyfan');
+  const post = await project(shy, 'Тишина');
+  await shy('PATCH', '/api/me', { privacy: { messages: 'following', comments: 'following', reposts: false } });
+  assert.deepEqual((await shy('GET', '/api/bootstrap')).body.account.privacy, { messages: 'following', comments: 'following', reposts: false });
+  assert.equal((await fan('POST', '/api/messages/shyauthor', { text: 'привет' })).status, 403);
+  assert.equal((await fan('POST', `/api/projects/${post.id}/comments`, { text: 'классно' })).status, 403);
+  await shy('POST', '/api/users/shyfan/follow');
+  assert.equal((await fan('POST', '/api/messages/shyauthor', { text: 'привет' })).status, 200);
+  assert.equal((await fan('POST', `/api/projects/${post.id}/comments`, { text: 'классно' })).status, 200);
+  const other = await project(fan, 'Шум');
+  await shy('POST', `/api/projects/${other.id}/repost`);
+  assert.deepEqual((await fan('GET', '/api/bootstrap')).body.projects.find(item => item.id === other.id).reposters, [], 'a hidden repost is not shown to others');
+  assert.deepEqual((await shy('GET', '/api/bootstrap')).body.projects.find(item => item.id === other.id).reposters, ['shyauthor'], 'but the person still sees their own');
+});
+
+test('comments say who is the author and whom a reply answers; pictures keep their focus', async () => {
+  const owner = await person('markauthor');
+  const one = await person('markone');
+  const two = await person('marktwo');
+  const upload = await owner('POST', '/api/uploads', Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64'), { 'Content-Type': 'image/png' });
+  const post = await project(owner, 'Отметки', { media: [{ url: upload.body.url, focus: [20, 70] }] });
+  assert.deepEqual(post.media[0].focus, [20, 70]);
+  const root = (await one('POST', `/api/projects/${post.id}/comments`, { text: 'Вопрос' })).body.comment;
+  const answer = (await owner('POST', `/api/projects/${post.id}/comments`, { text: 'Ответ', replyTo: root })).body.comment;
+  const third = await two('POST', `/api/projects/${post.id}/comments`, { text: 'А я добавлю', replyTo: answer });
+  const comments = third.body.project.comments;
+  const byId = id => comments.find(item => item.id === id);
+  assert.equal(byId(answer).byAuthor, true);
+  assert.equal(byId(root).byAuthor, false);
+  assert.equal(byId(third.body.comment).replyTo, root, 'threads stay one level deep');
+  assert.equal(byId(third.body.comment).mention, 'markauthor', 'but the reply names whom it answers');
+  const edited = (await owner('PATCH', `/api/projects/${post.id}`, { title: 'Отметки', summary: 'коротко', media: [{ url: upload.body.url, focus: [50, 50] }] })).body.project;
+  assert.equal(edited.media[0].focus, undefined, 'back to the centre');
 });

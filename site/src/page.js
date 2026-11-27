@@ -66,6 +66,22 @@ export function normalizeUrl(value) {
   return /^[\p{L}\d-]+(\.[\p{L}\d-]+)+(:\d+)?([/?#]|$)/u.test(text) ? safeUrl(`https://${text}`) : '';
 }
 
+// The point of a picture (percent from the left and from the top) that stays in view when it is cropped.
+export function cleanFocus(value) {
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const [x, y] = value.map(Number);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const clamp = number => Math.max(0, Math.min(100, Math.round(number)));
+  return clamp(x) === 50 && clamp(y) === 50 ? null : [clamp(x), clamp(y)];
+}
+
+export const imageRatios = { '': 'Оригинал', '1:1': 'Квадрат', '4:5': 'Вертикаль', '16:9': 'Широкая' };
+
+export function focusStyle(focus) {
+  const clean = cleanFocus(focus);
+  return clean ? `object-position:${clean[0]}% ${clean[1]}%` : '';
+}
+
 // A playable build in the browser: only https, so it can be shown inside an https page. The author
 // may paste an embed code (itch.io "Embed game"): the address is taken from its iframe.
 export function cleanDemoUrl(value) {
@@ -138,7 +154,9 @@ export function cleanBlock(block, checkMedia = () => null) {
   if (block.type === 'image' || block.type === 'video') {
     const media = checkMedia(block);
     if (!media || media.type !== block.type) return null;
-    return compact({ type: block.type, url: media.url, caption: cleanString(block.caption, 200) });
+    const ratio = block.type === 'image' && Object.hasOwn(imageRatios, block.ratio) ? block.ratio : '';
+    const focus = ratio ? cleanFocus(block.focus) : null;
+    return compact({ type: block.type, url: media.url, caption: cleanString(block.caption, 200), ratio, ...(focus ? { focus } : {}) });
   }
   if (block.type === 'button') {
     const url = normalizeUrl(cleanString(block.url, 500));
@@ -251,8 +269,10 @@ export function blockHtml(block) {
   if (block.type === 'image' || block.type === 'video') {
     const url = uploadPath(block.url);
     if (!url) return '';
-    const media = block.type === 'video' ? `<video src="${url}#t=0.1" controls playsinline preload="metadata"></video>` : `<img src="${url}" alt="${escapeHtml(block.caption || '')}" loading="lazy">`;
-    return `<figure class="pb pb-media">${media}${block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : ''}</figure>`;
+    const ratio = block.type === 'image' && imageRatios[block.ratio] && block.ratio ? block.ratio : '';
+    const shape = ratio ? ` style="aspect-ratio:${ratio.replace(':', ' / ')};object-fit:cover;${focusStyle(block.focus)}"` : '';
+    const media = block.type === 'video' ? `<video src="${url}#t=0.1" controls playsinline preload="metadata"></video>` : `<img src="${url}" alt="${escapeHtml(block.caption || '')}" loading="lazy"${shape}>`;
+    return `<figure class="pb pb-media${ratio ? ' shaped' : ''}">${media}${block.caption ? `<figcaption>${escapeHtml(block.caption)}</figcaption>` : ''}</figure>`;
   }
   if (block.type === 'button') {
     const link = linkKind(block.url);

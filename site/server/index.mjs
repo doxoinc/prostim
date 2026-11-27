@@ -8,7 +8,7 @@ import { HttpError, fail, sha256, token, hashPassword, verifyPassword, pairingCo
 import { trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
 import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
-import { cleanDemoUrl, cleanPostFields, normalizeUrl } from '../src/page.js';
+import { cleanDemoUrl, cleanFocus, cleanPostFields, normalizeUrl } from '../src/page.js';
 import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 import { codeLetter, createMailer } from './mail.mjs';
 import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
@@ -63,6 +63,17 @@ const notifier = createNotifier({
 });
 
 /* Blocks: either side of a block stops seeing and reaching the other */
+
+function privacyOf(user) {
+  const saved = user?.privacy || {};
+  return {
+    messages: ['all', 'following', 'nobody'].includes(saved.messages) ? saved.messages : 'all',
+    comments: ['all', 'following'].includes(saved.comments) ? saved.comments : 'all',
+    reposts: saved.reposts !== false
+  };
+}
+
+const follows = (userId, otherId) => (D.follows[userId] || []).includes(otherId);
 
 const blockedBy = (userId, otherId) => Boolean(userId && otherId) && (D.blocks[userId] || []).includes(otherId);
 const blockedEither = (left, right) => blockedBy(left, right) || blockedBy(right, left);
@@ -180,12 +191,13 @@ function projectView(project, meId) {
     updates: (project.updates || []).map(update => ({ id: update.id, title: update.title, text: update.text || '', version: update.version || '', image: update.image || '', createdAt: update.createdAt })),
     watchers: (project.watchers || []).length,
     reposts: (project.reposts || []).length,
-    reposters: (project.reposts || []).slice(-30).map(id => D.users[id]?.handle).filter(Boolean),
+    reposters: (project.reposts || []).filter(id => id === meId || privacyOf(D.users[id]).reposts).slice(-30).map(id => D.users[id]?.handle).filter(Boolean),
     flagged: project.ownerId === meId && Boolean(project.flagged),
     comments: project.comments.filter(comment => !comment.hidden && !blockedEither(meId, comment.userId)).map(comment => ({
       id: comment.id, ...personRef(comment.userId, comment.name), text: comment.text || '', time: comment.time || '', createdAt: comment.createdAt,
       likes: (comment.likes || []).length, liked: Boolean(meId && (comment.likes || []).includes(meId)), replyTo: comment.replyTo || '',
-      voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId)
+      voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId),
+      byAuthor: comment.userId ? comment.userId === project.ownerId : comment.name === owner.name, mention: D.users[comment.mentionId]?.handle || ''
     }))
   };
 }
@@ -398,7 +410,7 @@ function currentDevice(request) {
 }
 
 const needUser = user => user || fail(401, 'Нужно войти в аккаунт');
-const authLimit = limiter(20, 10 * 60 * 1000);
+const authLimit = limiter(Number(process.env.AUTH_LIMIT) || 20, 10 * 60 * 1000); // sign-ins per address per 10 minutes
 const writeLimit = limiter(240, 60 * 1000);
 
 /* Auth and profile */
@@ -426,7 +438,7 @@ function newAccountFields(body) {
 
 function createUser({ handle, name, passwordHash = '', email = '', oauth = null }) {
   const id = randomUUID();
-  const user = { id, handle, name, initials: initialsOf(name), color: colorFor(handle), bio: '', passwordHash, createdAt: Date.now() };
+  const user = { id, handle, name, initials: initialsOf(name), color: colorFor(handle), bio: '', passwordHash, createdAt: Date.now(), onboarding: true };
   if (email) { user.email = email; user.emailVerified = true; }
   if (oauth) user.oauth = oauth;
   D.users[id] = user;
@@ -741,6 +753,7 @@ on('PATCH', '/api/me', async ({ user, body }) => {
   }
   if (body.bio !== undefined) user.bio = cleanText(body.bio, 300);
   if (body.notify && typeof body.notify === 'object') user.notify = cleanNotifyPrefs(body.notify, notifyPrefs(user));
+  if (body.privacy && typeof body.privacy === 'object') user.privacy = privacyOf({ privacy: { ...privacyOf(user), ...body.privacy } });
   if (body.avatar !== undefined) user.avatar = body.avatar ? ownedUpload(body.avatar, user, 'image').url : '';
   db.save();
   return { me: publicUser(user) };
@@ -762,7 +775,7 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
-    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id) } : null,
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true } : null,
     activity: meId ? { unread: notifier.unread(meId) } : { unread: 0 },
     watching: meId ? D.projects.filter(project => (project.watchers || []).includes(meId)).map(project => project.id) : [],
     reposted: meId ? D.projects.filter(project => (project.reposts || []).includes(meId)).map(project => project.id) : [],
@@ -943,14 +956,16 @@ function postTags(value) {
 }
 
 // Slides: files this user uploaded, plus (when editing) files the post already shows.
+// focus: the point of the picture (percent from the left and top) that stays in view when it is cropped.
 function postMedia(list, user, current = []) {
   const media = [];
   for (const item of Array.isArray(list) ? list.slice(0, 8) : []) {
+    const focus = cleanFocus(item?.focus);
     const kept = current.find(existing => existing.url === item?.url);
-    if (kept) { media.push(kept); continue; }
+    if (kept) { const { focus: old, ...rest } = kept; media.push({ ...rest, ...(focus ? { focus } : {}) }); continue; }
     const upload = ownedUpload(item?.url, user);
     const poster = item?.poster && upload.type === 'video' ? ownedUpload(item.poster, user, 'image').url : '';
-    media.push({ type: upload.type, url: upload.url, ...(poster ? { poster } : {}) });
+    media.push({ type: upload.type, url: upload.url, ...(poster ? { poster } : {}), ...(focus ? { focus } : {}) });
   }
   return media;
 }
@@ -1030,13 +1045,15 @@ on('POST', '/api/projects/:id/comments', async ({ user, params, body }) => {
   const project = requireProject(params.id);
   if (!visibleTo(project, user.id)) fail(404, 'Проект не найден');
   if (blockedBy(project.ownerId, user.id)) fail(403, 'Автор ограничил комментарии для тебя');
+  if (project.ownerId !== user.id && privacyOf(D.users[project.ownerId]).comments === 'following' && !follows(project.ownerId, user.id)) fail(403, 'Автор принимает комментарии только от тех, на кого подписан');
   if (!commentLimit(user.id)) fail(429, 'Слишком часто, подожди немного');
   const text = cleanText(body.text, 1200);
   const voice = body.voice ? ownedUpload(body.voice, user, 'audio').url : '';
   if (!text && !voice) fail(400, 'Пустой комментарий');
   const parent = body.replyTo ? requireComment(project, String(body.replyTo)) : null;
   const root = parent?.replyTo ? project.comments.find(comment => comment.id === parent.replyTo) || parent : parent;
-  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], ...(root ? { replyTo: root.id } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
+  const mentionId = parent && parent.id !== root?.id && parent.userId !== user.id ? parent.userId : '';
+  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], ...(root ? { replyTo: root.id } : {}), ...(mentionId ? { mentionId } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
   project.comments.push(comment);
   db.save();
   const url = `/#/project/${project.id}`;
@@ -1196,6 +1213,34 @@ on('POST', '/api/users/:handle/block', async ({ user, params }) => {
   }
   db.save();
   return { blocked };
+});
+
+// First run after sign-up: what the person is into, so the feed does not start from zero.
+// The picks become a starting taste that real watching then corrects; chosen authors are followed.
+on('POST', '/api/me/onboarding', async ({ user, body }) => {
+  needUser(user);
+  user.onboarding = false;
+  if (body.skip) { db.save(); return { ok: true }; }
+  const taste = cleanTaste(D.tastes[user.id]);
+  const list = (value, limit) => (Array.isArray(value) ? value : []).map(item => cleanText(item, 40).toLocaleLowerCase('ru')).filter(Boolean).slice(0, limit);
+  const categories = list(body.categories, 3).filter(item => ['games', 'apps', 'tools'].includes(item));
+  const goals = list(body.goals, 5).filter(item => ['play', 'make', 'team', 'publish', 'apps'].includes(item));
+  for (const category of categories) taste.weights[`cat:${category}`] = Math.max(taste.weights[`cat:${category}`] || 0, 4);
+  for (const tag of list(body.tags, 20)) taste.weights[`tag:${tag}`] = Math.max(taste.weights[`tag:${tag}`] || 0, 3);
+  if (goals.includes('make')) taste.weights['cat:tools'] = Math.max(taste.weights['cat:tools'] || 0, 2);
+  if (goals.includes('apps')) taste.weights['cat:apps'] = Math.max(taste.weights['cat:apps'] || 0, 2);
+  taste.signals = Math.max(taste.signals, 6);
+  taste.updatedAt = Date.now();
+  D.tastes[user.id] = taste;
+  user.goals = goals;
+  for (const handle of list(body.follows, 30)) {
+    const target = userByHandle(handle);
+    if (!target || target.id === user.id || target.official || follows(user.id, target.id) || blockedEither(user.id, target.id)) continue;
+    D.follows[user.id] = [...(D.follows[user.id] || []), target.id];
+    notifier.notify(target.id, { type: 'follow', actorId: user.id, url: `/#/u/${user.handle}` });
+  }
+  db.save();
+  return { ok: true, taste };
 });
 
 on('POST', '/api/me/feed-prefs', async ({ user, body }) => {
@@ -1404,6 +1449,11 @@ on('POST', '/api/messages/:handle', async ({ user, params, body }) => {
   if (target.id === user.id) fail(400, 'Нельзя написать себе');
   if (blockedBy(target.id, user.id)) fail(403, 'Этот человек ограничил сообщения');
   if (blockedBy(user.id, target.id)) fail(403, 'Ты заблокировал этого человека — разблокируй его в профиле');
+  const accepts = privacyOf(target).messages;
+  const wroteFirst = D.messages.some(message => message.from === target.id && message.to === user.id);
+  if (!target.official && !wroteFirst && (accepts === 'nobody' || (accepts === 'following' && !follows(target.id, user.id)))) {
+    fail(403, accepts === 'nobody' ? 'Этот человек не принимает сообщения' : 'Этот человек принимает сообщения только от тех, на кого подписан');
+  }
   const text = cleanText(body.text, 2000);
   const sticker = stickerById(body.sticker)?.id || '';
   const image = body.image ? ownedUpload(body.image, user, 'image').url : '';

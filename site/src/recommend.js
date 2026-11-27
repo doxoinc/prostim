@@ -184,7 +184,9 @@ export function tasteConfidence(taste) {
 
 // Orders posts for one person. New people get the best and freshest posts; as signals pile up, taste takes over.
 // A fresh update makes a seen post new again; a repost by someone the person follows lifts a post too.
-export function rankFeed(list, { taste = emptyTaste(), stats = {}, now = Date.now(), seed = 1, follows = [], me = '', pinned = '', prefs = null, reposts = null, watching = [] } = {}) {
+// mode 'discover' turns taste around: topics and authors the person has not met yet go first, so the feed
+// tries new waves of interest instead of repeating the known ones. Posts the person dislikes stay out.
+export function rankFeed(list, { taste = emptyTaste(), stats = {}, now = Date.now(), seed = 1, follows = [], me = '', pinned = '', prefs = null, reposts = null, watching = [], mode = 'foryou' } = {}) {
   const confidence = tasteConfidence(taste);
   const scored = list.map(project => {
     const quality = projectQuality(project, stats[project.id]).score;
@@ -205,8 +207,13 @@ export function rankFeed(list, { taste = emptyTaste(), stats = {}, now = Date.no
     const reposter = reposts?.get?.(project.id) || '';
     const own = Boolean(me) && project.handle === me;
     const asked = prefsScore(features, prefs);
-    const score = 0.45 * quality + 0.2 * fresh + personal * (0.2 + 0.5 * confidence) + asked + (seen ? 0 : 0.3) + (followed ? 0.2 : 0) + (reposter ? 0.25 : 0) + (freshUpdate && (followed || watched) ? 0.3 : 0) - fatigue - (own ? 0.25 : 0) + hashUnit(`${seed}:${project.id}`) * 0.12 + (project.id === pinned ? 100 : 0);
+    const known = features.filter(feature => !feature.startsWith('media:')).some(feature => Math.abs(taste.weights[feature] || 0) > 0.5);
+    const discover = mode === 'discover'
+      ? 0.4 * quality + 0.2 * fresh + (known ? 0 : 0.55) - Math.max(0, personal) * 0.35 - (personal < -0.3 ? 1 : 0) + Math.min(0, asked) + (seen ? 0 : 0.45) - 1.2 * fatigue - (own || followed ? 0.6 : 0) + hashUnit(`${seed}:d:${project.id}`) * 0.3
+      : null;
+    const score = discover ?? 0.45 * quality + 0.2 * fresh + personal * (0.2 + 0.5 * confidence) + asked + (seen ? 0 : 0.3) + (followed ? 0.2 : 0) + (reposter ? 0.25 : 0) + (freshUpdate && (followed || watched) ? 0.3 : 0) - fatigue - (own ? 0.25 : 0) + hashUnit(`${seed}:${project.id}`) * 0.12 + (project.id === pinned ? 100 : 0);
     let reason = 'discover';
+    if (mode === 'discover') return { project, score, reason: own ? 'mine' : !known ? 'discover' : !seen && ageHours < 72 ? 'new' : 'discover', personal, quality, by: '' };
     if (project.id === pinned || own) reason = 'mine';
     else if (!seen && ageHours < 72) reason = 'new';
     else if (freshUpdate && (watched || followed || seen)) reason = 'update';

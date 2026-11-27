@@ -127,7 +127,31 @@ test('feed order comes from the recommender and survives re-renders', () => {
   assert.equal(runInContext('feedOrder.entries.map(entry => entry.id).join()', app.context), first, 'order is stable until a refresh');
   assert.ok(runInContext('currentTaste().signals', app.context) >= 2);
   app.navigate('#/me');
-  assert.match(app.elements.get('main').innerHTML, /Лента знает тебя/);
+  assert.doesNotMatch(app.elements.get('main').innerHTML, /Лента знает тебя/, 'the taste card left the profile');
+  runInContext('openFeedPrefs()', app.context);
+  assert.match(app.elements.get('#modal').innerHTML, /Что лента узнала сама/);
+});
+
+test('feed modes: following shows followed authors first, discovery leads with the unknown', () => {
+  const app = createApp();
+  runInContext('state.follows = ["danm"]; setFeedMode("following")', app.context);
+  const following = runInContext('feedOrder.entries.filter(entry => entry.id || entry.sep).map(entry => entry.sep || entry.id).join()', app.context);
+  assert.match(following, /^pulse,following-end,/);
+  assert.match(app.elements.get('main').innerHTML, /class="feed-modes"/);
+  runInContext('setFeedMode("discover")', app.context);
+  assert.equal(runInContext('feedOrder.key', app.context), 'discover:all');
+  runInContext('setFeedMode("foryou")', app.context);
+});
+
+test('settings page: theme, privacy and feed controls in one place', () => {
+  const app = createApp();
+  app.navigate('#/settings');
+  const html = app.elements.get('main').innerHTML;
+  assert.match(html, /Как на устройстве/);
+  assert.match(html, /Экономия трафика/);
+  assert.match(html, /Твоя лента/);
+  runInContext('chooseSetting("theme", "light")', app.context);
+  assert.equal(runInContext('currentTheme()', app.context), 'light');
 });
 
 test('slide dots sit in the bottom info block, above the title', () => {

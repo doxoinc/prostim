@@ -44,6 +44,31 @@ export function withFeedPref(prefs, key, kind) {
   return cleanFeedPrefs(next);
 }
 
+/* Comments: pinned first, then the order the reader picked. "Лучшие" mixes fresh and liked:
+   likes and replies count for more, but every hour of age wears a comment down. Replies stay in order
+   under the comment they answer. */
+
+export const commentSorts = [['best', 'Лучшие'], ['new', 'Новые'], ['top', 'Популярные']];
+
+export function sortComments(list, mode = 'best', now = Date.now()) {
+  const all = (list || []).filter(Boolean);
+  const ids = new Set(all.map(comment => comment.id).filter(Boolean));
+  const roots = all.filter(comment => !comment.replyTo || !ids.has(comment.replyTo));
+  const replies = new Map();
+  for (const comment of all) if (comment.replyTo && ids.has(comment.replyTo)) replies.set(comment.replyTo, [...(replies.get(comment.replyTo) || []), comment]);
+  const time = comment => Number(comment.createdAt) || 0;
+  const likes = comment => Number(comment.likes) || 0;
+  const score = comment => {
+    const hours = Math.max(0, (now - time(comment)) / 36e5);
+    return (likes(comment) * 2 + (replies.get(comment.id)?.length || 0) + 1) / (hours + 2) ** 0.8;
+  };
+  const order = { best: (left, right) => score(right) - score(left), new: (left, right) => time(right) - time(left), top: (left, right) => likes(right) - likes(left) || (replies.get(right.id)?.length || 0) - (replies.get(left.id)?.length || 0) || time(right) - time(left) }[mode] || (() => 0);
+  return roots
+    .map((comment, index) => ({ comment, index }))
+    .sort((left, right) => Number(Boolean(right.comment.pinned)) - Number(Boolean(left.comment.pinned)) || order(left.comment, right.comment) || left.index - right.index)
+    .map(({ comment }) => ({ comment, replies: (replies.get(comment.id) || []).slice().sort((left, right) => time(left) - time(right)) }));
+}
+
 /* Search: every word has to be found somewhere in the post */
 
 const stem = word => word.length >= 6 ? word.slice(0, -2) : word.length >= 4 ? word.slice(0, -1) : word;

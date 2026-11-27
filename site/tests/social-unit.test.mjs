@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanFeedPrefs, withFeedPref, searchProjects, commentDigest } from '../src/social.js';
+import { cleanFeedPrefs, withFeedPref, searchProjects, commentDigest, sortComments } from '../src/social.js';
 import { rankFeed, hiddenByPrefs, emptyTaste } from '../src/recommend.js';
-import { normalizeUrl, cleanDemoUrl, cleanPage, linkKind } from '../src/page.js';
+import { normalizeUrl, cleanDemoUrl, cleanPage, linkKind, cleanFocus, pageHtml } from '../src/page.js';
 import { parseMeta, htmlToText, steamDraft, githubDraft, pageFromText, metaDraft } from '../server/linkpreview.mjs';
 
 test('links without https:// are accepted, other schemes are not', () => {
@@ -104,4 +104,47 @@ test('store pages become drafts: Open Graph, Steam and GitHub', () => {
   assert.deepEqual(repo.links, ['https://github.com/kit/tiny-engine', 'https://tiny.dev']);
   assert.deepEqual(repo.images, ['https://raw.githubusercontent.com/kit/tiny-engine/HEAD/docs/shot.png', 'https://opengraph.githubassets.com/1/kit/tiny-engine']);
   assert.deepEqual(pageFromText('', 'О проекте'), []);
+});
+
+test('comments: pinned first, then best mixes fresh and liked, replies stay in order under their thread', () => {
+  const now = Date.UTC(2026, 10, 27, 12);
+  const hour = 36e5;
+  const list = [
+    { id: 'old-liked', likes: 9, createdAt: now - 30 * hour },
+    { id: 'fresh', likes: 0, createdAt: now - 0.2 * hour },
+    { id: 'pin', likes: 0, createdAt: now - 50 * hour, pinned: true },
+    { id: 'mid', likes: 2, createdAt: now - 2 * hour },
+    { id: 'r2', replyTo: 'mid', createdAt: now - 0.5 * hour },
+    { id: 'r1', replyTo: 'mid', createdAt: now - hour },
+    { id: 'orphan', replyTo: 'gone', createdAt: now - 3 * hour }
+  ];
+  const ids = mode => sortComments(list, mode, now).map(({ comment }) => comment.id);
+  assert.deepEqual(ids('new'), ['pin', 'fresh', 'mid', 'orphan', 'old-liked']);
+  assert.deepEqual(ids('top'), ['pin', 'old-liked', 'mid', 'fresh', 'orphan']);
+  assert.deepEqual(ids('best').slice(0, 2), ['pin', 'mid'], 'liked and answered recent comment beats a lone fresh one');
+  assert.deepEqual(sortComments(list, 'best', now).find(({ comment }) => comment.id === 'mid').replies.map(reply => reply.id), ['r1', 'r2']);
+});
+
+test('discovery puts topics the person has not met before the familiar ones', () => {
+  const taste = emptyTaste();
+  taste.weights = { 'cat:games': 6, 'tag:хоррор': 5 };
+  taste.signals = 20;
+  const posts = [
+    { id: 'known', category: 'games', tags: ['Хоррор'], handle: 'a', createdAt: 0 },
+    { id: 'new-topic', category: 'tools', tags: ['Музыка'], handle: 'b', createdAt: 0 }
+  ];
+  assert.equal(rankFeed(posts, { taste, now: 1, seed: 2 })[0].project.id, 'known');
+  const discovered = rankFeed(posts, { taste, now: 1, seed: 2, mode: 'discover' });
+  assert.equal(discovered[0].project.id, 'new-topic');
+  assert.equal(discovered[0].reason, 'discover');
+});
+
+test('pictures keep a focus point and page images a chosen shape', () => {
+  assert.deepEqual(cleanFocus([12.4, 80]), [12, 80]);
+  assert.equal(cleanFocus([50, 50]), null, 'the centre is the default and is not stored');
+  assert.equal(cleanFocus(['x', 1]), null);
+  assert.deepEqual(cleanFocus([-5, 140]), [0, 100]);
+  const blocks = cleanPage([{ type: 'image', url: '/uploads/i-1.png', ratio: '4:5', focus: [30, 20] }, { type: 'image', url: '/uploads/i-2.png', ratio: '7:1', focus: [30, 20] }], block => ({ url: block.url, type: 'image' }));
+  assert.deepEqual(blocks, [{ type: 'image', url: '/uploads/i-1.png', ratio: '4:5', focus: [30, 20] }, { type: 'image', url: '/uploads/i-2.png' }]);
+  assert.match(pageHtml(blocks), /aspect-ratio:4 \/ 5;object-fit:cover;object-position:30% 20%/);
 });
