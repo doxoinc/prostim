@@ -266,7 +266,7 @@ function avatar(person, className = '') {
 const gaugeArcs = new Map();
 
 function gaugePaths(count) {
-  if (gaugeArcs.has(count)) return gaugeArcs.get(count);
+  if (gaugeArcs.has(count)) return gaugeArcs.get(count); // kept for the level legend
   const radius = 46;
   const step = 360 / count;
   const gap = step * 0.5;
@@ -281,10 +281,24 @@ function ratingText(value) {
   return Number(value).toFixed(1).replace('.', ',');
 }
 
+// The rating as a thin ring around the avatar: a faint full track and a lit arc that starts at the bottom,
+// under the rating, and runs clockwise as far as the average goes. One smooth stroke, so it reads as a
+// gauge and not as the petals of a flower. The top level paints the arc as a rainbow.
 function gaugeSvg(who, tier, count = 12) {
   const rated = Number(who?.ratingCount) > 0;
-  const lit = rated ? Math.round(Math.max(0, Math.min(5, Number(who.ratingAverage) || 0)) / 5 * count) : 0;
-  return `<svg class="gauge" viewBox="0 0 100 100" aria-hidden="true">${gaugePaths(count).map((path, index) => `<path d="${path}" class="${index < lit ? 'on' : ''}"${tier.legend ? ` style="stroke:hsl(${Math.round(index * 360 / count)} 90% 72%)"` : ''}/>`).join('')}</svg>`;
+  const share = rated ? Math.max(0, Math.min(5, Number(who.ratingAverage) || 0)) / 5 : 0;
+  const radius = 46;
+  const length = 2 * Math.PI * radius;
+  let arc = '';
+  if (share && tier.legend) {
+    const pieces = Math.max(1, Math.round(share * count * 4));
+    const step = 360 / (count * 4);
+    const point = angle => `${(50 + radius * Math.cos(angle * Math.PI / 180)).toFixed(2)} ${(50 + radius * Math.sin(angle * Math.PI / 180)).toFixed(2)}`;
+    arc = Array.from({ length: pieces }, (_, index) => `<path class="lit" d="M${point(90 + index * step)}A${radius} ${radius} 0 0 1 ${point(90 + (index + 1) * step + 0.4)}" style="stroke:hsl(${Math.round(index * 360 / (count * 4))} 90% 72%)"/>`).join('');
+  } else if (share) {
+    arc = `<circle class="lit" cx="50" cy="50" r="${radius}" stroke-dasharray="${(share * length).toFixed(1)} ${length.toFixed(1)}" transform="rotate(90 50 50)"/>`;
+  }
+  return `<svg class="gauge" viewBox="0 0 100 100" aria-hidden="true" data-share="${share.toFixed(2)}"><circle class="track" cx="50" cy="50" r="${radius}"/>${arc}</svg>`;
 }
 
 function ringClass(tier, extra = '') {
@@ -997,7 +1011,7 @@ function mediaInner(project, reason = '') {
   const slide = Math.min(slides.get(project.id) || 0, count - 1);
   const id = escapeHtml(project.id);
   const controls = count > 1
-    ? `<button class="slide-arrow prev" data-action="slide" data-direction="-1" data-id="${id}" aria-label="Предыдущий слайд" ${slide === 0 ? 'disabled' : ''}>${icon('chevronLeft')}</button><button class="slide-arrow next" data-action="slide" data-direction="1" data-id="${id}" aria-label="Следующий слайд" ${slide === count - 1 ? 'disabled' : ''}>${icon('chevronRight')}</button>`
+    ? `<button class="slide-arrow prev" data-action="slide" data-direction="-1" data-id="${id}" aria-label="Предыдущий слайд">${icon('chevronLeft')}</button><button class="slide-arrow next" data-action="slide" data-direction="1" data-id="${id}" aria-label="Следующий слайд">${icon('chevronRight')}</button>`
     : '';
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
@@ -1071,7 +1085,8 @@ function changeSlide(id, direction) {
   if (!project) return;
   const count = slideKinds(project).length;
   const current = slides.get(id) || 0;
-  const next = Math.max(0, Math.min(count - 1, current + direction));
+  if (count < 2) return;
+  const next = (current + direction + count) % count; // after the last photo comes the first again
   if (next === current) return;
   slides.set(id, next);
   slideFrom.set(id, current);
@@ -2350,7 +2365,7 @@ function openProject(id) {
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
   showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
-  gallery?.addEventListener?.('scroll', () => syncGalleryDots(gallery), { passive: true });
+  if (gallery) loopTrack(gallery, 0, index => syncGalleryDots(gallery, index));
 }
 
 /* Promotion and Plus: buying reach, and what it shows */
@@ -2471,18 +2486,20 @@ function openViewer(items, index = 0) {
   viewer.showModal();
   const track = viewer.querySelector('.viewer-track');
   track.scrollLeft = index * track.clientWidth;
+  if (items.length > 1) loopTrack(track, index, () => syncViewer(viewer));
   syncViewer(viewer);
 }
 
 function syncViewer(viewer) {
   const track = viewer.querySelector('.viewer-track');
   if (!track) return;
-  const index = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
-  const slidesList = track.querySelectorAll('.viewer-slide');
+  const index = loopIndex(track);
+  const slidesList = track.querySelectorAll('.viewer-slide:not([data-copy])');
   const count = viewer.querySelector('.viewer-count');
   if (count) count.textContent = `${index + 1} / ${slidesList.length}`;
-  viewer.querySelector('.viewer-arrow.prev')?.toggleAttribute('disabled', index === 0);
-  viewer.querySelector('.viewer-arrow.next')?.toggleAttribute('disabled', index >= slidesList.length - 1);
+  const looping = Boolean(track.dataset.loop);
+  viewer.querySelector('.viewer-arrow.prev')?.toggleAttribute('disabled', !looping && index === 0);
+  viewer.querySelector('.viewer-arrow.next')?.toggleAttribute('disabled', !looping && index >= slidesList.length - 1);
   slidesList.forEach((slide, position) => { if (position !== index) slide.querySelector('video')?.pause(); });
 }
 
@@ -2544,9 +2561,51 @@ function bindViewer(viewer) {
   });
 }
 
-function syncGalleryDots(gallery) {
-  const index = Math.round(gallery.scrollLeft / Math.max(1, gallery.clientWidth));
+function syncGalleryDots(gallery, index = loopIndex(gallery)) {
   gallery.parentElement?.querySelectorAll?.('.store-dots i').forEach((dot, position) => dot.classList.toggle('on', position === index));
+}
+
+// A horizontal track of photos that never ends: copies of the last and the first photo sit at the
+// opposite ends, and landing on a copy quietly jumps to the real photo. Swipes, arrows and dots work as
+// before; only the end is gone.
+function loopIndex(track) {
+  const raw = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+  const count = Number(track.dataset?.count) || 0;
+  return track.dataset?.loop && count ? ((raw - 1) % count + count) % count : raw;
+}
+
+function loopTrack(track, start = 0, onChange = null) {
+  const slidesList = [...(track?.children || [])];
+  if (!track || slidesList.length < 2 || track.dataset.loop || typeof requestAnimationFrame !== 'function') return;
+  const count = slidesList.length;
+  const head = slidesList[count - 1].cloneNode(true);
+  const tail = slidesList[0].cloneNode(true);
+  for (const copy of [head, tail]) { copy.dataset.copy = '1'; copy.setAttribute('aria-hidden', 'true'); copy.querySelectorAll('video').forEach(video => video.removeAttribute('autoplay')); }
+  track.insertBefore(head, slidesList[0]);
+  track.appendChild(tail);
+  track.dataset.loop = '1';
+  track.dataset.count = String(count);
+  const jump = position => {
+    track.style.scrollSnapType = 'none';
+    track.scrollLeft = position * track.clientWidth;
+    void track.offsetWidth;
+    track.style.scrollSnapType = '';
+  };
+  jump(start + 1);
+  requestAnimationFrame(() => jump(start + 1));
+  let timer = 0;
+  const settle = () => {
+    const raw = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+    if (raw === 0) jump(count);
+    else if (raw === count + 1) jump(1);
+    onChange?.(loopIndex(track));
+  };
+  track.addEventListener('scroll', () => {
+    onChange?.(loopIndex(track));
+    clearTimeout(timer);
+    timer = setTimeout(settle, 110);
+  }, { passive: true });
+  track.addEventListener('scrollend', () => { clearTimeout(timer); settle(); });
 }
 
 function openComments(id) {
@@ -4323,33 +4382,50 @@ const feedModeOrder = ['foryou', 'following', 'discover'];
 
 // Plain text that drops down under "Лента": no panel, a shadow keeps it readable over any picture.
 function feedModeMenuHtml() {
-  return `<div class="mode-menu" role="menu" aria-label="Что показывать в ленте" hidden>${feedModeOrder.map((key, index) => `<button role="menuitemradio" aria-checked="${key === feedMode}" class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}" style="--i:${index}">${feedModes.find(([id]) => id === key)[1]}</button>`).join('')}</div>`;
+  return `<i class="mode-scrim" aria-hidden="true"></i><div class="mode-menu" role="menu" aria-label="Что показывать в ленте" hidden><i class="mode-bar" aria-hidden="true"></i>${feedModeOrder.map((key, index) => `<button role="menuitemradio" aria-checked="${key === feedMode}" class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}" style="--i:${index}">${feedModes.find(([id]) => id === key)[1]}</button>`).join('')}</div>`;
 }
 
 let modeMenuTimer = 0;
 
-// Opening: a thin line runs down from the dot by "Лента" and the modes fall out along it one by one.
-// Closing plays it backwards: the modes lift away and the line pulls back into the dot.
+// The white underline under "Лента" drops down, stretching on the way like a drop, and lands under the
+// current mode, while the modes fade in around it. Closing sends it back up under "Лента".
+function placeModeBar(menu) {
+  const bar = menu.querySelector('.mode-bar');
+  const active = menu.querySelector('button.on') || menu.querySelector('button');
+  const source = topbar.querySelector?.('.services-bar');
+  if (!bar || !active) return;
+  const box = menu.getBoundingClientRect();
+  const from = source?.getBoundingClientRect?.();
+  bar.style.setProperty('--to-x', `${Math.round(active.offsetLeft + active.offsetWidth / 2)}px`);
+  bar.style.setProperty('--to-y', `${Math.round(active.offsetTop + active.offsetHeight - 4)}px`);
+  bar.style.setProperty('--from-x', `${Math.round(from ? from.left + from.width / 2 - box.left : box.width / 2)}px`);
+  bar.style.setProperty('--from-y', `${Math.round(from ? from.top - box.top : -12)}px`);
+}
+
 function toggleModeMenu(open) {
   const menu = topbar.querySelector?.('.mode-menu');
   const toggle = topbar.querySelector?.('[data-action="feed-modes"]');
   if (!menu || !toggle) return;
+  const nav = topbar.querySelector?.('.services');
   const isOpen = !menu.hidden && !menu.classList.contains('closing');
   const show = open ?? !isOpen;
   if (show === isOpen) return;
   clearTimeout(modeMenuTimer);
   if (show) {
-    const link = toggle.getBoundingClientRect();
-    const bar = topbar.getBoundingClientRect();
-    const gap = 6;
-    menu.style.left = `${Math.round(link.left - bar.left)}px`;
-    menu.style.top = `${Math.round(link.bottom - bar.top + gap)}px`;
-    menu.style.setProperty('--lead', `${Math.round(link.height / 2 + gap)}px`);
     menu.classList.remove('closing');
     menu.hidden = false;
+    const link = toggle.getBoundingClientRect();
+    const bar = topbar.getBoundingClientRect();
+    menu.style.top = `${Math.round(link.bottom - bar.top + 6)}px`;
+    menu.style.left = `${Math.round(link.left + link.width / 2 - bar.left - menu.offsetWidth / 2)}px`;
+    placeModeBar(menu);
+    nav?.classList.add('modes-open');
+    topbar.classList.add('modes-open');
   } else {
+    placeModeBar(menu);
     menu.classList.add('closing');
-    modeMenuTimer = setTimeout(() => { menu.hidden = true; menu.classList.remove('closing'); }, 280);
+    topbar.classList.remove('modes-open');
+    modeMenuTimer = setTimeout(() => { menu.hidden = true; menu.classList.remove('closing'); nav?.classList.remove('modes-open'); }, 340);
   }
   toggle.setAttribute('aria-expanded', String(show));
   toggle.classList.toggle('open', show);
@@ -4378,7 +4454,7 @@ function setFeedMode(mode) {
   if (menu && !menu.hidden && !menu.classList.contains('closing')) {
     menu.querySelectorAll('button').forEach(button => button.classList.toggle('on', button.dataset.mode === mode));
     toggleModeMenu(false);
-    setTimeout(() => applyFeedMode(mode), 240);
+    setTimeout(() => applyFeedMode(mode), 320);
     return;
   }
   applyFeedMode(mode);

@@ -1323,7 +1323,9 @@ dialog[data-kind="project"] { width: min(1120px, calc(100% - 48px)); max-height:
 .fact b { display: block; font-size: 14px; font-weight: 700; line-height: 1.3; }
 .store-head .chips { margin-top: 14px; }
 .store-page { display: grid; gap: 16px; max-width: 760px; margin: 0 auto; padding: 8px 24px 12px; }
-.store-foot { max-width: 760px; margin: 0 auto; padding: 0 24px 32px; }
+.store-foot { max-width: 760px; margin: 0 auto; padding: 22px 24px 32px; }
+.store-page + .updates, .updates + .store-foot { margin-top: 8px; }
+.promo-offer, .promo-status { margin-top: 2px; }
 .store-foot .sheet-actions .btn:first-child:not(.btn-square) { flex: 1; }
 
 /* Cover art for posts without photos */
@@ -1483,8 +1485,9 @@ textarea.pe-field { display: block; width: 100%; min-height: 0; padding: 2px 4px
    colour = level. From level 5 it glows, from 14 a spark runs around it, the top tier is a rainbow. */
 .lvl { --ring: #eef1e8; position: relative; display: inline-grid; place-items: center; flex: none; padding: 6px; border-radius: 50%; isolation: isolate; }
 .gauge { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.gauge path { fill: none; stroke: var(--ring); stroke-width: 7; stroke-linecap: round; opacity: .3; transition: opacity .3s; }
-.gauge path.on { opacity: 1; }
+.gauge circle, .gauge path { fill: none; stroke: var(--ring); stroke-width: 4.5; }
+.gauge .track { opacity: .2; }
+.gauge circle.lit { stroke-linecap: round; }
 .lvl.aura::before { content: ""; position: absolute; z-index: -1; inset: -7px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--ring) 55%, transparent) 30%, color-mix(in srgb, var(--ring) 18%, transparent) 55%, transparent 70%); animation: aura 2.8s ease-in-out infinite; will-change: transform, opacity; }
 .lvl.legend::before { background: radial-gradient(circle, rgba(183, 140, 255, .55) 30%, rgba(108, 184, 255, .2) 55%, transparent 70%); }
 .lvl-orbit { position: absolute; z-index: 2; inset: 0; border-radius: 50%; pointer-events: none; animation: orbit 3.2s linear infinite; will-change: transform; }
@@ -1502,7 +1505,7 @@ textarea.pe-field { display: block; width: 100%; min-height: 0; padding: 2px 4px
 .dock-item .lvl-orbit { display: none; }
 .dock-item.active .lvl > .dock-avatar { box-shadow: none; }
 .lvl-profile { padding: 13px; margin-bottom: 18px; cursor: pointer; transition: transform .2s var(--ease); }
-.lvl-profile .gauge path { stroke-width: 6; }
+.lvl-profile .gauge :is(circle, path) { stroke-width: 3.6; }
 .lvl-profile:active { transform: scale(.96); }
 .profile-head .lvl-profile .avatar { margin: 0; }
 .lvl-badge { position: absolute; z-index: 3; left: 50%; bottom: -8px; min-width: 44px; height: 24px; padding: 0 10px; display: grid; place-items: center; border-radius: 99px; background: var(--ring); color: #121512; font-size: 13px; font-weight: 850; font-variant-numeric: tabular-nums; transform: translateX(-50%); box-shadow: 0 0 0 3px var(--bg); white-space: nowrap; }
@@ -1706,8 +1709,8 @@ body.ptr-loading .ptr .i { display: none; }
 @media (display-mode: standalone) { html { min-height: min(100lvh, calc(100% + env(safe-area-inset-top, 0px))); } }
 html.ios-app { min-height: min(100lvh, calc(100% + env(safe-area-inset-top, 0px))); }
 /* iOS 26 also draws its own blur from the top of an installed app to about 40pt below the status bar,
-   above the page, so nothing can be layered over it: the top line moves below it instead. */
-html.ios-app { --safe-t: calc(env(safe-area-inset-top, 0px) + 34px); }
+   above the page, so nothing can be layered over it: the top line moves a little lower, out of its densest part. */
+html.ios-app { --safe-t: calc(env(safe-area-inset-top, 0px) + 12px); }
 :root { --hot: #ff3b5c; --amber: #ffb03b; --grad: linear-gradient(120deg, #ff2e63 0%, #ff5f3d 55%, #ffb03b 100%); --grad-glow: 0 6px 22px rgba(255, 70, 80, .38); }
 .brand-mark { background: var(--grad); color: #fff; box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .12); }
 .dock-publish, .dock-publish:hover { background: var(--grad); color: #fff; box-shadow: var(--grad-glow); }
@@ -2268,20 +2271,31 @@ dialog[data-kind="player"] { width: min(1180px, calc(100% - 32px)); height: calc
 .services a[data-action="feed-modes"] { position: relative; cursor: pointer; }
 .mode-dot { position: absolute; left: -11px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: currentColor; opacity: .75; transition: transform .3s var(--ease), opacity .3s; }
 .mode-dot.custom { background: var(--grad); opacity: 1; box-shadow: 0 0 8px rgba(255, 80, 80, .9); }
-.services a.open .mode-dot { transform: scaleX(.45) scaleY(1.6); opacity: .9; }
-.mode-menu { position: absolute; z-index: 45; display: grid; justify-items: start; gap: 2px; }
+.services a.open .mode-dot { transform: scale(.4); opacity: 0; }
+.mode-menu { position: absolute; z-index: 45; display: grid; justify-items: center; gap: 0; padding: 2px 6px 8px; }
 .mode-menu[hidden] { display: none; }
-.mode-menu::before { content: ""; position: absolute; left: -9.5px; top: calc(-1 * var(--lead, 20px)); bottom: 18px; width: 2px; border-radius: 2px; background: linear-gradient(rgba(255, 255, 255, .8), rgba(255, 255, 255, .25)); box-shadow: 0 0 2px rgba(0, 0, 0, .35); transform-origin: top; animation: mode-rail-in .42s var(--ease) both; }
-.mode-menu.closing::before { animation: mode-rail-out .26s var(--ease) .06s both; }
-.mode-menu button { position: relative; min-height: 36px; padding: 0; color: rgba(255, 255, 255, .82); font-size: 16px; font-weight: 650; letter-spacing: -.01em; text-align: left; text-shadow: 0 1px 2px rgba(0, 0, 0, .6), 0 0 1px rgba(0, 0, 0, .5); transition: color .2s, transform .2s var(--ease); animation: mode-item-in .42s var(--ease) both; animation-delay: calc(70ms + var(--i) * 55ms); }
-.mode-menu button:hover { transform: translateX(3px); }
+.mode-menu button { position: relative; min-height: 38px; padding: 0 2px; color: rgba(255, 255, 255, .78); font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; text-shadow: 0 1px 2px rgba(0, 0, 0, .6), 0 0 1px rgba(0, 0, 0, .5); transition: color .2s; animation: mode-item-in .42s cubic-bezier(.2, .9, .3, 1.15) both; animation-delay: calc(90ms + var(--i) * 45ms); }
 .mode-menu button.on { color: #fff; font-weight: 800; }
-.mode-menu button.on::before { content: ""; position: absolute; left: -11.5px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: var(--grad); box-shadow: 0 0 8px rgba(255, 80, 80, .9); }
-.mode-menu.closing button { animation: mode-item-out .22s ease-in both; animation-delay: calc((2 - var(--i)) * 35ms); }
-@keyframes mode-item-in { from { opacity: 0; transform: translateY(-14px); filter: blur(5px); } }
-@keyframes mode-item-out { to { opacity: 0; transform: translateY(-10px); filter: blur(4px); } }
-@keyframes mode-rail-in { from { transform: scaleY(0); opacity: 0; } }
-@keyframes mode-rail-out { to { transform: scaleY(0); opacity: 0; } }
+.mode-menu.closing button { animation: mode-item-out .2s ease-in both; animation-delay: calc((2 - var(--i)) * 30ms); }
+.mode-bar { position: absolute; left: 0; top: 0; width: 18px; height: 3px; margin-left: -9px; border-radius: 3px; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .35); transform: translate(var(--to-x), var(--to-y)); animation: mode-bar-drop .5s cubic-bezier(.3, .9, .3, 1.1) both; }
+.mode-menu.closing .mode-bar { animation: mode-bar-rise .32s cubic-bezier(.5, 0, .4, 1) both; }
+.services.modes-open .services-bar { opacity: 0; transition: opacity .08s; }
+/* While the list is open the top of the picture darkens a little, so white text reads on any photo. */
+.mode-scrim { position: fixed; z-index: -1; top: 0; left: var(--dock-w); right: 0; height: calc(var(--safe-t) + 230px); background: linear-gradient(rgba(0, 0, 0, .5), rgba(0, 0, 0, .28) 50%, rgba(0, 0, 0, 0)); opacity: 0; pointer-events: none; transition: opacity .3s var(--ease); }
+#topbar.modes-open .mode-scrim { opacity: 1; }
+.services .services-bar { transition: transform .35s var(--ease), opacity .12s .02s; }
+@keyframes mode-item-in { from { opacity: 0; transform: translateY(-7px) scale(.96); } }
+@keyframes mode-item-out { to { opacity: 0; transform: translateY(-6px) scale(.97); } }
+@keyframes mode-bar-drop {
+  0% { transform: translate(var(--from-x), var(--from-y)); height: 3px; width: 18px; }
+  40% { transform: translate(calc((var(--from-x) + var(--to-x)) / 2), calc((var(--from-y) + var(--to-y)) / 2 - 8px)); height: 16px; width: 4px; }
+  100% { transform: translate(var(--to-x), var(--to-y)); height: 3px; width: 18px; }
+}
+@keyframes mode-bar-rise {
+  0% { transform: translate(var(--to-x), var(--to-y)); height: 3px; width: 18px; }
+  55% { transform: translate(calc((var(--from-x) + var(--to-x)) / 2), calc((var(--from-y) + var(--to-y)) / 2)); height: 14px; width: 4px; }
+  100% { transform: translate(var(--from-x), var(--from-y)); height: 3px; width: 18px; opacity: 0; }
+}
 body[data-view="page"] .mode-menu button { color: var(--muted); text-shadow: none; }
 body[data-view="page"] .mode-menu button.on { color: var(--text); }
 
