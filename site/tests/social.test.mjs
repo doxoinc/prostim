@@ -200,6 +200,8 @@ test('comments: replies, likes, pins, voice, removal and a digest', async () => 
   const upload = await guest('POST', '/api/uploads', webm, { 'Content-Type': 'audio/webm' });
   assert.equal(upload.status, 200, JSON.stringify(upload.body));
   assert.match(upload.body.url, /^\/uploads\/a-[\w-]+\.weba$/);
+  assert.equal((await guest('POST', `/api/projects/${post.id}/comments`, { voice: upload.body.url, duration: 7 })).status, 402, 'voice comments are part of Plus');
+  await guest('POST', '/api/plus/trial');
   const voiced = (await guest('POST', `/api/projects/${post.id}/comments`, { voice: upload.body.url, duration: 7 })).body;
   const voice = voiced.project.comments.find(item => item.id === voiced.comment);
   assert.deepEqual([voice.voice, voice.duration, voice.text], [upload.body.url, 7, '']);
@@ -591,4 +593,25 @@ test('Plus: a free day once for people who never had it, the first paid month at
   assert.deepEqual((await fan('GET', '/api/users/trialfresh/people?list=following')).body.people, ['peoplefan']);
   await other('POST', '/api/users/peoplefan/block');
   assert.deepEqual((await other('GET', '/api/users/trialfresh/people?list=following')).body.people, [], 'blocked people are left out');
+});
+
+test('Plus profile look: a banner, a colour and a live avatar, shown only while Plus is on', async () => {
+  const styled = await person('lookstyled');
+  const viewer = await person('lookviewer');
+  assert.equal((await styled('POST', '/api/me/look', { banner: 'aurora' })).status, 402);
+  const gif = Buffer.concat([Buffer.from('GIF89a', 'ascii'), randomBytes(200)]);
+  const upload = (await styled('POST', '/api/uploads', gif, { 'Content-Type': 'image/gif' })).body;
+  assert.match(upload.url, /\.gif$/);
+  await styled('POST', '/api/plus/trial');
+  const me = (await styled('POST', '/api/me/look', { banner: 'aurora', accent: 'mint', motion: upload.url, bannerImage: '' })).body.me;
+  assert.deepEqual(me.look, { banner: 'aurora', bannerImage: '', accent: '#3ddc84', accentKey: 'mint', motion: { url: upload.url, type: 'image' } });
+  assert.equal(me.plus, true);
+  const seen = (await viewer('GET', '/api/bootstrap')).body.users.find(item => item.handle === 'lookstyled');
+  assert.equal(seen.look.banner, 'aurora');
+  assert.deepEqual((await styled('POST', '/api/me/look', { banner: 'nope', accent: 'nope' })).body.me.look.banner, '', 'unknown presets are dropped');
+  const stranger = await person('lookstranger');
+  const foreign = (await stranger('POST', '/api/uploads', gif, { 'Content-Type': 'image/gif' })).body;
+  assert.equal((await styled('POST', '/api/me/look', { motion: foreign.url })).status, 400, 'only your own uploads');
+  assert.equal(seen.plus, true);
+  assert.equal((await viewer('GET', '/api/bootstrap')).body.users.find(item => item.handle === 'lookviewer').look, null, 'no Plus, no look');
 });

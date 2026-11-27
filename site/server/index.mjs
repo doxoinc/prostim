@@ -13,7 +13,7 @@ import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 import { codeLetter, createMailer } from './mail.mjs';
 import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
-import { aiLimits, boostPlan, boostPrice, plusPlan } from '../src/ads.js';
+import { aiLimits, boostPlan, boostPrice, cleanLookChoice, lookView, MOTION_VIDEO_LIMIT, plusPlan, profileAccents, profileBanners } from '../src/ads.js';
 import { cleanSteam, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback } from '../src/ecosystem.js';
 import { cleanFeedPrefs, cleanLabel, cleanReview, commentDigest, commentKind, demoRating, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
@@ -166,7 +166,7 @@ function publicUser(user, stats = userStats()) {
   const entry = stats.get(user.id) || { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [], help: emptyHelp() };
   return {
     id: user.id, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', bio: user.bio || '',
-    createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official), plus: hasPlus(user),
+    createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official), plus: hasPlus(user), look: hasPlus(user) ? lookView(user.look) : null,
     projects: entry.projects, followers: entry.followers, following: entry.following, votesReceived: entry.votesReceived,
     ...trustSummary(entry),
     help: helpSummary(entry.help)
@@ -834,6 +834,27 @@ on('PATCH', '/api/me', async ({ user, body }) => {
   return { me: publicUser(user) };
 });
 
+on('POST', '/api/me/look', async ({ user, body }) => {
+  needUser(user);
+  if (!hasPlus(user)) fail(402, 'Оформление профиля — в Плюсе');
+  const look = { ...(user.look || {}) };
+  if (body.banner !== undefined) look.banner = cleanLookChoice(body.banner, profileBanners);
+  if (body.accent !== undefined) look.accent = cleanLookChoice(body.accent, profileAccents);
+  if (body.bannerImage !== undefined) look.bannerImage = body.bannerImage ? ownedUpload(body.bannerImage, user, 'image').url : '';
+  if (body.motion !== undefined) {
+    if (!body.motion) look.motion = null;
+    else {
+      const file = ownedUpload(body.motion, user);
+      if (file.type !== 'image' && file.type !== 'video') fail(400, 'Нужна GIF-картинка или короткое видео');
+      if (file.type === 'video' && (D.uploads[file.url.slice(9)]?.size || 0) > MOTION_VIDEO_LIMIT) fail(413, 'Видео для аватарки — до 12 МБ');
+      look.motion = { url: file.url, type: file.type };
+    }
+  }
+  user.look = look;
+  db.save();
+  return { me: publicUser(user) };
+});
+
 on('GET', '/api/bootstrap', async ({ user }) => {
   const stats = userStats();
   const meId = user?.id;
@@ -1124,6 +1145,7 @@ on('POST', '/api/projects/:id/comments', async ({ user, params, body }) => {
   if (project.ownerId !== user.id && privacyOf(D.users[project.ownerId]).comments === 'following' && !follows(project.ownerId, user.id)) fail(403, 'Автор принимает комментарии только от тех, на кого подписан');
   if (!commentLimit(user.id)) fail(429, 'Слишком часто, подожди немного');
   const text = cleanText(body.text, 1200);
+  if (body.voice && !hasPlus(user)) fail(402, 'Голосовые комментарии — в Плюсе');
   const voice = body.voice ? ownedUpload(body.voice, user, 'audio').url : '';
   const review = project.demo && project.ownerId !== user.id && !body.replyTo ? cleanReview(body.review) : null;
   if (!text && !voice && !review) fail(400, 'Пустой комментарий');

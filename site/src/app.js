@@ -3,7 +3,7 @@ import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers, helpLevels, helpPoints, helpAreas, commentHelp } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
-import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds, PLUS_DISCOUNT } from './ads.js';
+import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds, PLUS_DISCOUNT, profileBanners, profileAccents, MOTION_VIDEO_LIMIT } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
 import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
@@ -257,8 +257,18 @@ function uploadUrl(value) {
 
 function avatar(person, className = '') {
   const color = /^#[0-9a-f]{6}$/i.test(person?.color || '') ? person.color : '#cfd9c4';
-  const photo = uploadUrl(person?.avatar);
+  const motion = person?.look?.motion;
+  const motionUrl = uploadUrl(motion?.url);
+  const big = /\b(xl|xxl|pcard-ava)\b/.test(className);
+  if (motionUrl && motion.type === 'video' && big) return `<span class="avatar ${className} photo motion" style="--avatar:${color}"><video src="${motionUrl}" autoplay muted loop playsinline preload="metadata" aria-hidden="true"></video></span>`;
+  const photo = motionUrl && motion.type === 'image' ? motionUrl : uploadUrl(person?.avatar);
   return `<span class="avatar ${className} ${photo ? 'photo' : ''}" style="--avatar:${color}">${photo ? `<img src="${photo}" alt="" loading="lazy">` : escapeHtml(person?.initials || (person?.name || 'Я').slice(0, 1))}</span>`;
+}
+
+// The Plus mark next to a name, like a verified tick.
+function plusBadge(person, big = false) {
+  if (!person?.plus) return '';
+  return big ? `<button class="plus-badge big" data-action="plus" title="Плюс" aria-label="Аккаунт с Плюсом">${icon('crown')}</button>` : `<i class="plus-badge" title="Плюс" aria-label="Плюс">${icon('crown')}</i>`;
 }
 
 // Rating gauge around an avatar: a full circle of rounded segments, like a speedometer.
@@ -312,7 +322,7 @@ function ringAvatar(person, className = '', who = person, withScore = false) {
   const tier = levelTier(level);
   const rated = Number(who.ratingCount) > 0;
   const title = `Уровень ${level}${rated ? ` · оценка ${ratingText(who.ratingAverage)}` : ''}`;
-  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="${title}">${avatar(person, className)}${gaugeSvg(who, tier)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}${withScore && rated ? `<i class="lvl-score">${ratingText(who.ratingAverage)}</i>` : ''}</span>`;
+  return `<span class="${ringClass(tier)}" style="--ring:${tier.color}" title="${title}">${avatar(who?.look && !person.look ? { ...person, look: who.look } : person, className)}${gaugeSvg(who, tier)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}${withScore && rated ? `<i class="lvl-score">${ratingText(who.ratingAverage)}</i>` : ''}</span>`;
 }
 
 function stars(value) {
@@ -1017,7 +1027,7 @@ function mediaInner(project, reason = '') {
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}${steamBadgeHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}${steamBadgeHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
 }
 
 // The post's own call to action, right on the card: «Играть» for a demo that runs in the browser,
@@ -1220,7 +1230,7 @@ function renderSearch() {
 function creatorsHtml() {
   const authors = authorsList();
   if (!authors.length) return `<p class="muted-line">Авторов не нашли</p>`;
-  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small', true)}</div>`).join('');
+  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}${plusBadge(userByHandle(project.handle))}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small', true)}</div>`).join('');
 }
 
 /* Inbox */
@@ -1235,7 +1245,7 @@ function renderInbox(id) {
     const composer = thread.official ? '<p class="chat-hint">Это служебный чат: сюда приходят ответы про заявки</p>'
       : thread.blocked ? `<p class="chat-hint">Ты заблокировал этого человека. <button class="text-link inline" data-action="block" data-handle="${escapeHtml(thread.handle)}">Разблокировать</button></p>`
       : thread.blockedMe ? '<p class="chat-hint">Этот человек ограничил сообщения</p>' : chatComposerHtml(thread);
-    return `<div class="page chat-page"><h1 class="sr-only">Чат: ${escapeHtml(thread.name)}</h1><div class="chat-head">${avatar(thread, 'xl')}<b>${escapeHtml(thread.name)}</b>${profile}</div><div class="chat-log">${log || '<p class="chat-hint">Напиши первое сообщение 👋</p>'}</div>${composer}</div>`;
+    return `<div class="page chat-page"><h1 class="sr-only">Чат: ${escapeHtml(thread.name)}</h1><div class="chat-head">${avatar({ ...thread, look: userByHandle(thread.handle)?.look }, 'xl')}<b>${escapeHtml(thread.name)}${plusBadge(userByHandle(thread.handle))}</b>${profile}</div><div class="chat-log">${log || '<p class="chat-hint">Напиши первое сообщение 👋</p>'}</div>${composer}</div>`;
   }
   const list = threads();
   const rows = list.map(thread => {
@@ -1515,7 +1525,7 @@ function renderProfile(handle, tab) {
       ? [[owned.length, 'проектов'], [state.follows.length, 'подписок'], [state.saved.length, 'сохранено']]
       : [[owned.length, 'проектов'], [owned.reduce((sum, project) => sum + voteCount(project), 0), 'поддержали'], [owned.reduce((sum, project) => sum + commentCount(project), 0), 'комментариев']];
   const actions = mine
-    ? `<button class="btn btn-primary btn-sm" data-action="publish">${icon('plus')} Проект</button><button class="btn btn-ghost btn-sm" data-action="application">${icon('gamepad')} Заявка в Steam</button>${online ? `<button class="btn btn-ghost btn-sm btn-square" data-action="edit-profile" aria-label="Изменить профиль">${icon('pen')}</button>` : ''}`
+    ? `<button class="btn btn-primary btn-sm" data-action="publish">${icon('plus')} Проект</button><button class="btn btn-ghost btn-sm" data-action="application">${icon('gamepad')} Заявка в Steam</button>${online ? `<button class="btn btn-ghost btn-sm btn-square look-btn" data-action="look" aria-label="Оформление профиля">${icon('palette')}${hasPlusNow() ? '' : `<i class="lock-crown">${icon('crown')}</i>`}</button><button class="btn btn-ghost btn-sm btn-square" data-action="edit-profile" aria-label="Изменить профиль">${icon('pen')}</button>` : ''}`
     : `${followPill(handle, 'btn-sm')}${person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(handle)}">${icon('inbox')} Написать</a>`}${online && !person.official ? `<button class="btn btn-ghost btn-sm" data-action="rate" data-handle="${escapeHtml(handle)}">${myRating ? `★ ${myRating.score} · Изменить` : '★ Оценить'}</button><button class="btn btn-ghost btn-sm btn-square" data-action="user-menu" data-handle="${escapeHtml(handle)}" aria-label="Ещё">${icon('more')}</button>` : ''}`;
   const tabs = mine
     ? [['', 'grid', 'Проекты'], ['saved', 'bookmark', 'Сохранённое'], ...(online ? [['reposts', 'repost', 'Репосты']] : []), ['follows', 'users', 'Подписки'], ['applications', 'doc', 'Заявки'], ...(online ? [['reviews', 'comment', 'Отзывы']] : [])]
@@ -1549,9 +1559,9 @@ function renderProfile(handle, tab) {
   }
   const base = mine ? '#/me' : `#/u/${encodeURIComponent(handle)}`;
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
-  const badges = `${person.official ? trustBadge(person) : ''}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}`;
+  const badges = `${person.official ? trustBadge(person) : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label, action, list]) => action && online ? `<button class="stat-btn" data-action="${action}" data-handle="${escapeHtml(handle)}" ${list ? `data-list="${list}"` : ''}><b>${value}</b>${escapeHtml(label)}</button>` : `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head ${person.look ? 'has-look' : ''}" ${person.look?.accent ? `style="--look:${person.look.accent}"` : ''}>${lookBannerHtml(person.look, 'profile-banner')}${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}${plusBadge(person, true)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label, action, list]) => action && online ? `<button class="stat-btn" data-action="${action}" data-handle="${escapeHtml(handle)}" ${list ? `data-list="${list}"` : ''}><b>${value}</b>${escapeHtml(label)}</button>` : `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1561,6 +1571,138 @@ function openRate(handle) {
   const current = remote.myRatings?.[handle];
   const score = current?.score || 0;
   showDialog(`<div class="sheet-body"><div class="rate-head">${avatar(person, 'lg')}<div><h2 id="modal-title">Оценить ${escapeHtml(person.name)}</h2><p class="lead">Насколько можно доверять этому человеку? Оценка видна всем, одна от тебя.</p></div></div><form id="rate-form" class="form" data-handle="${escapeHtml(handle)}"><div class="star-pick" role="radiogroup" aria-label="Оценка">${[5, 4, 3, 2, 1].map(value => `<label><input type="radio" name="score" value="${value}" ${value === score ? 'checked' : ''} required><span aria-label="${value}">★</span></label>`).join('')}</div><textarea name="text" rows="3" maxlength="500" placeholder="Почему такая оценка? Например: помог с билдом, вовремя ответил" aria-label="Отзыв">${escapeHtml(current?.text || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить оценку</button>${current ? `<button type="button" class="text-link" data-action="unrate" data-handle="${escapeHtml(handle)}">Убрать мою оценку</button>` : ''}</form></div>`, { kind: 'rate' });
+}
+
+/* Plus: how a profile looks */
+
+function lookBannerHtml(look, className) {
+  if (!look || (!look.banner && !look.bannerImage && !look.accent)) return '';
+  const image = uploadUrl(look.bannerImage);
+  return `<div class="${className} ${look.banner ? `look-${escapeHtml(look.banner)}` : 'look-plain'}" aria-hidden="true">${image ? `<img src="${image}" alt="" loading="lazy">` : ''}</div>`;
+}
+
+let lookDraft = null;
+
+function lookPreviewHtml() {
+  const person = { ...me, look: { banner: lookDraft.banner, bannerImage: lookDraft.bannerImage, accent: profileAccents.find(([key]) => key === lookDraft.accent)?.[1] || '', motion: lookDraft.motion }, plus: true };
+  return profileCardHtml(person, true);
+}
+
+function openLookEditor() {
+  if (!me) return;
+  const current = me.look || {};
+  lookDraft = { banner: current.banner || '', bannerImage: current.bannerImage || '', accent: current.accentKey || '', motion: current.motion || null };
+  const draw = () => {
+    const sheet = modal.querySelector('.look-sheet');
+    if (!sheet) return;
+    sheet.querySelector('.look-preview').innerHTML = lookPreviewHtml();
+    sheet.querySelectorAll('[data-banner]').forEach(button => button.classList.toggle('on', button.dataset.banner === lookDraft.banner && !lookDraft.bannerImage));
+    sheet.querySelectorAll('[data-accent]').forEach(button => button.classList.toggle('on', button.dataset.accent === lookDraft.accent));
+    sheet.querySelector('.look-own').classList.toggle('on', Boolean(lookDraft.bannerImage));
+    sheet.querySelector('.look-motion-state').textContent = lookDraft.motion ? (lookDraft.motion.type === 'video' ? 'Видео на аватарке' : 'GIF на аватарке') : 'Обычная аватарка';
+    sheet.querySelector('[data-look-clear="motion"]').hidden = !lookDraft.motion;
+  };
+  showDialog(`<div class="sheet-body look-sheet"><h2 id="modal-title">Оформление профиля</h2><p class="hub-hint">Видно в профиле и в карточке, которая открывается по нажатию на имя. Пока действует Плюс.</p><div class="look-preview"></div><h4 class="look-h">Фон</h4><div class="look-banners"><button type="button" data-banner="" class="look-swatch look-none">${icon('close')}</button>${profileBanners.map(([key, label]) => `<button type="button" data-banner="${key}" class="look-swatch look-${key}" aria-label="${label}" title="${label}"></button>`).join('')}<label class="look-swatch look-own" title="Своя картинка или GIF">${icon('image')}<input type="file" accept="image/*" hidden data-look-file="banner"></label></div><h4 class="look-h">Цвет профиля</h4><div class="look-accents"><button type="button" data-accent="" class="look-dot none" aria-label="Без цвета">${icon('close')}</button>${profileAccents.map(([key, color]) => `<button type="button" data-accent="${key}" class="look-dot" style="--dot:${color}" aria-label="${key}"></button>`).join('')}</div><h4 class="look-h">Живая аватарка</h4><div class="look-motion"><label class="btn btn-ghost btn-sm">${icon('upload')} GIF или видео до 10 с<input type="file" accept="image/gif,video/mp4,video/webm,video/quicktime" hidden data-look-file="motion"></label><small class="look-motion-state"></small><button type="button" class="text-link inline" data-look-clear="motion" hidden>Убрать</button></div><small class="look-progress" aria-live="polite"></small><button class="btn btn-grad btn-block look-save">${icon('check')} Сохранить</button></div>`, { kind: 'look' });
+  const sheet = modal.querySelector('.look-sheet');
+  draw();
+  sheet.addEventListener('click', event => {
+    const banner = event.target.closest('[data-banner]');
+    const accent = event.target.closest('[data-accent]');
+    if (banner) { lookDraft.banner = banner.dataset.banner; lookDraft.bannerImage = ''; draw(); }
+    if (accent) { lookDraft.accent = accent.dataset.accent; draw(); }
+    if (event.target.closest('[data-look-clear="motion"]')) { lookDraft.motion = null; draw(); }
+  });
+  sheet.addEventListener('change', async event => {
+    const input = event.target.closest('[data-look-file]');
+    const file = input?.files?.[0];
+    if (!file) return;
+    const progress = sheet.querySelector('.look-progress');
+    const isVideo = file.type.startsWith('video/');
+    if (input.dataset.lookFile === 'motion' && !isVideo && file.type !== 'image/gif') { toast('Для живой аватарки нужен GIF или видео'); return; }
+    if (isVideo && file.size > MOTION_VIDEO_LIMIT) { toast('Видео для аватарки — до 12 МБ'); return; }
+    if (isVideo) {
+      const seconds = await videoLength(file);
+      if (seconds > 10.5) { toast('Видео для аватарки — до 10 секунд'); return; }
+    }
+    try {
+      progress.textContent = 'Загружаем…';
+      const url = await uploadBlob(file, isVideo ? 'video' : 'image', share => { progress.textContent = `Загружаем… ${Math.round(share * 100)}%`; });
+      if (input.dataset.lookFile === 'banner') { lookDraft.bannerImage = url; lookDraft.banner = lookDraft.banner || ''; }
+      else lookDraft.motion = { url, type: isVideo ? 'video' : 'image' };
+      progress.textContent = '';
+      draw();
+    } catch (error) {
+      progress.textContent = '';
+      toast(error.message);
+    }
+    input.value = '';
+  });
+  sheet.querySelector('.look-save').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await apiCall('POST', '/api/me/look', { banner: lookDraft.banner, bannerImage: lookDraft.bannerImage, accent: lookDraft.accent, motion: lookDraft.motion?.url || '' });
+      updateUser(result.me);
+      closeDialog();
+      render();
+      toast('Профиль оформлен');
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  });
+}
+
+function videoLength(file) {
+  return new Promise(resolve => {
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => { URL.revokeObjectURL(url); resolve(Number(video.duration) || 0); };
+    video.onerror = () => { URL.revokeObjectURL(url); resolve(0); };
+    video.src = url;
+  });
+}
+
+// A person at a glance, like in Discord: banner, live avatar, the Plus mark, what they do and quick actions.
+function profileCardHtml(person, preview = false) {
+  const handle = escapeHtml(person.handle || '');
+  const rated = Number(person.ratingCount) > 0;
+  const chips = [
+    rated ? `<span class="pcard-chip">★ ${ratingText(person.ratingAverage)}</span>` : '',
+    person.help?.level >= 2 ? `<span class="pcard-chip help">${icon('check')}${escapeHtml(person.help.title)}</span>` : '',
+    person.official ? `<span class="pcard-chip">${icon('check')}Официальный</span>` : ''
+  ].join('');
+  const mine = isMine(person.handle);
+  const actions = preview ? '' : `<div class="pcard-actions">${mine ? '' : followPill(person.handle, 'small', true)}${mine || person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(person.handle)}">${icon('inbox')}</a>`}<button class="btn btn-ghost btn-sm" data-action="profile" data-handle="${handle}">Профиль ${icon('chevronRight')}</button></div>`;
+  return `<div class="pcard ${person.look ? 'has-look' : ''}" ${person.look?.accent ? `style="--look:${person.look.accent}"` : ''}>${lookBannerHtml(person.look, 'pcard-banner') || '<div class="pcard-banner look-plain" aria-hidden="true"></div>'}<div class="pcard-body"><span class="pcard-face">${ringAvatar(person, 'pcard-ava', person)}</span><b class="pcard-name">${escapeHtml(person.name || '')}${plusBadge(person)}</b><small class="pcard-handle">@${handle}</small>${chips ? `<div class="pcard-chips">${chips}</div>` : ''}${person.bio ? `<p class="pcard-bio">${escapeHtml(person.bio)}</p>` : ''}<div class="pcard-stats"><span><b>${person.projects ?? 0}</b>проектов</span><span><b>${person.followers ?? 0}</b>подписчиков</span><span><b>${person.help?.points ?? 0}</b>помощь</span></div>${actions}</div></div>`;
+}
+
+let cardHost = null;
+
+function openProfileCard(handle, point = null) {
+  const person = userByHandle(handle);
+  if (!person) { location.hash = `#/u/${encodeURIComponent(handle)}`; return; }
+  if (!cardHost) {
+    cardHost = document.createElement('dialog');
+    cardHost.className = 'cmenu-host card-host';
+    cardHost.setAttribute('aria-label', 'Карточка профиля');
+    cardHost.addEventListener('click', event => {
+      if (Date.now() - (cardHost.openedAt || 0) < 300) return;
+      if (event.target === cardHost || event.target.closest?.('[data-action], a')) cardHost.close();
+    });
+    document.body.appendChild(cardHost);
+  }
+  cardHost.innerHTML = `<div class="pcard-wrap ${finePointer() ? 'desk' : 'dock'}" tabindex="-1" autofocus>${profileCardHtml(person)}</div>`;
+  if (!cardHost.open) cardHost.showModal();
+  cardHost.openedAt = Date.now();
+  const wrap = cardHost.querySelector('.pcard-wrap');
+  if (finePointer() && point) {
+    const width = wrap.offsetWidth || 320;
+    const height = wrap.offsetHeight || 360;
+    wrap.style.left = `${Math.round(Math.max(12, Math.min(innerWidth - width - 12, point.x)))}px`;
+    wrap.style.top = `${Math.round(point.y + height + 12 <= innerHeight ? point.y : Math.max(12, point.y - height - 36))}px`;
+  }
 }
 
 // Help: how a person helped other people's projects. It grows from what authors did with their comments.
@@ -1588,7 +1730,7 @@ async function openPeople(handle, list = 'followers') {
     const rows = handles === null
       ? '<div class="loading-line"><span class="dots"><i></i><i></i><i></i></span></div>'
       : handles.length
-        ? handles.map(item => userByHandle(item)).filter(Boolean).map(user => `<div class="person-row"><button class="author-link" data-action="profile" data-handle="${escapeHtml(user.handle)}">${ringAvatar(user, 'lg', user)}<span><b>${escapeHtml(user.name)}</b><small>@${escapeHtml(user.handle)}</small></span></button>${isMine(user.handle) ? '' : followPill(user.handle, 'small')}</div>`).join('')
+        ? handles.map(item => userByHandle(item)).filter(Boolean).map(user => `<div class="person-row"><button class="author-link" data-action="profile" data-handle="${escapeHtml(user.handle)}">${ringAvatar(user, 'lg', user)}<span><b>${escapeHtml(user.name)}${plusBadge(user)}</b><small>@${escapeHtml(user.handle)}</small></span></button>${isMine(user.handle) ? '' : followPill(user.handle, 'small')}</div>`).join('')
         : `<p class="muted-line">${current === 'followers' ? 'Подписчиков пока нет' : 'Пока ни на кого не подписан'}</p>`;
     showDialog(`<div class="sheet-body people-sheet"><h2 id="modal-title">${escapeHtml(person.name)}</h2><div class="seg" role="tablist">${tabs.map(([key, label, count]) => `<button role="tab" aria-selected="${key === current}" class="${key === current ? 'on' : ''}" data-action="people" data-handle="${escapeHtml(handle)}" data-list="${key}">${label} · ${count}</button>`).join('')}</div><div class="people-list">${rows}</div></div>`, { kind: 'people', id: handle });
   };
@@ -2408,7 +2550,7 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${projectHubHtml(project) || promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)}${plusBadge(userByHandle(project.handle))} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${projectHubHtml(project) || promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   if (gallery) loopTrack(gallery, 0, index => syncGalleryDots(gallery, index));
 }
@@ -2455,7 +2597,9 @@ function plusRowHtml() {
 
 const paywallReasons = {
   prompt: ['sparkle', 'Промпт с ИИ — часть Плюса', 'ИИ прочитает README, файлы и обсуждение и превратит короткий отзыв в точную задачу для агента'],
-  plus: ['crown', 'Больше возможностей во всех разделах', 'Лента без рекламы, ИИ-мир без тесных лимитов и заявки в Steam без очереди']
+  plus: ['crown', 'Больше возможностей во всех разделах', 'Лента без рекламы, ИИ-мир без тесных лимитов и заявки в Steam без очереди'],
+  voice: ['mic', 'Голосовые комментарии — в Плюсе', 'Наговори отзыв до двух минут: автору проще понять, где ты застрял'],
+  look: ['palette', 'Оформи профиль по-своему', 'Анимированный фон, GIF или видео на аватарке и свой цвет профиля']
 };
 let paywallAfter = null;
 
@@ -2468,7 +2612,7 @@ function openPaywall(reason = 'plus', after = null) {
   const price = account.plusPrice || plusPlan.price;
   const discount = price < plusPlan.price ? Math.round((1 - price / plusPlan.price) * 100) : 0;
   const mode = remote?.config?.payments;
-  const perks = [['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['monitor', 'ИИ-мир: 6 компьютеров, файлы до 100 МБ'], ['gamepad', 'Steam: заявку смотрят первой']];
+  const perks = [['crown', 'Значок Плюса у имени'], ['palette', 'Анимированный профиль: фон, GIF или видео на аватарке, свой цвет'], ['mic', 'Голосовые комментарии'], ['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['monitor', 'ИИ-мир и Steam: больше компьютеров, заявка без очереди']];
   const trial = account.plusTrial ? `<button class="btn btn-grad btn-block pw-trial" data-action="plus-trial">${icon('sparkle')} Попробовать бесплатно · ${plusPlan.trialHours} часа</button><small class="pw-fine">Без карты. Через сутки Плюс просто выключится — ничего не спишется.</small>` : '';
   const buy = mode ? `<button class="pw-buy ${trial ? '' : 'main'}" data-action="plus-pay"><span><b>${discount ? 'Первый месяц' : 'Месяц'} за ${rub(price)}</b><small>${discount ? `<s>${rub(plusPlan.price)}</s> дальше ${rub(plusPlan.price)} в месяц` : `${plusPlan.days} дней, без автопродления`}</small></span>${discount ? `<em>−${discount}%</em>` : icon('chevronRight')}</button>` : '<p class="pw-fine">Оплата скоро появится</p>';
   const sparks = sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : '';
@@ -3459,7 +3603,9 @@ document.addEventListener('click', async event => {
   else if (action === 'pin-comment') commentAction('POST', target.dataset.project, id, 'pin');
   else if (action === 'delete-comment') { if (confirm('Удалить комментарий? Ответы на него тоже пропадут.')) commentAction('DELETE', target.dataset.project, id, ''); }
   else if (action === 'digest') showDigest(id, target);
-  else if (action === 'voice-rec') startVoice(id);
+  else if (action === 'voice-rec') { if (hasPlusNow()) startVoice(id); else openPaywall('voice', () => { rerenderComments(id); startVoice(id); }); }
+  else if (action === 'profile-card') { const rect = target.getBoundingClientRect?.(); openProfileCard(target.dataset.handle, rect ? { x: rect.left, y: rect.bottom + 6 } : null); }
+  else if (action === 'look') { if (hasPlusNow()) openLookEditor(); else openPaywall('look', openLookEditor); }
   else if (action === 'voice-stop') stopVoice(true);
   else if (action === 'voice-cancel') stopVoice(false);
   else if (action === 'play-voice') playVoice(target);
@@ -4487,6 +4633,7 @@ document.addEventListener('contextmenu', event => {
 });
 modal.addEventListener('close', () => {
   closeCommentMenu();
+  if (cardHost?.open) cardHost.close();
   resetSheet();
   modal.querySelectorAll?.('video').forEach(video => video.pause?.());
   document.querySelectorAll?.('.feed-item.in-view').forEach(syncFeedVideo);
@@ -6048,9 +6195,10 @@ async function importLink(button) {
 
 function commentHtml(project, comment, reply = false) {
   const ownProject = isMine(project.handle);
-  const name = comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name);
   const person = comment.handle ? userByHandle(comment.handle) : null;
-  const face = ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', person);
+  const name = comment.handle ? `<button class="text-link inline" data-action="profile-card" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>${plusBadge(person)}` : escapeHtml(comment.name);
+  const rawFace = ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', person);
+  const face = comment.handle && online ? `<button class="face-btn" data-action="profile-card" data-handle="${escapeHtml(comment.handle)}" aria-label="Карточка ${escapeHtml(comment.name)}">${rawFace}</button>` : rawFace;
   const id = escapeHtml(comment.id || '');
   const pid = escapeHtml(project.id);
   const live = online && Boolean(comment.id);
@@ -6169,9 +6317,11 @@ function placeCommentMenu(keep = false) {
     top = point.y + height + 12 <= innerHeight ? point.y : Math.max(12, point.y - height);
     menu.style.transformOrigin = `${left < point.x ? 'right' : 'left'} ${top < point.y ? 'bottom' : 'top'}`;
   } else {
-    left = (innerWidth - width) / 2;
-    top = point.y + 12 + height < innerHeight - 12 ? point.y + 12 : Math.max(12, Math.min(innerHeight - height - 12, point.y - height - 12));
-    menu.style.transformOrigin = `50% ${top > point.y ? 0 : '100%'}`;
+    // Always the same place under the thumb, like a share sheet: nothing to look for.
+    menu.classList.add('dock');
+    menu.style.left = '';
+    menu.style.top = '';
+    return;
   }
   if (keep && menu.style.top) top = Math.min(parseFloat(menu.style.top), Math.max(12, innerHeight - height - 12));
   menu.style.left = `${Math.round(left)}px`;
@@ -6264,7 +6414,7 @@ function commentsInner(project) {
   const sorter = threads.length > 1 ? `<div class="comment-sort" role="radiogroup" aria-label="Порядок комментариев">${commentSorts.map(([key, label]) => `<button role="radio" aria-checked="${key === commentSort}" class="${key === commentSort ? 'on' : ''}" data-action="comment-sort" data-sort="${key}" data-id="${pid}">${label}</button>`).join('')}</div>` : '';
   const digest = online && all.length >= 3 ? `<div class="digest" data-digest="${pid}"><button class="digest-btn" data-action="digest" data-id="${pid}">${icon('sparkle')}<span><b>О чём пишут</b><small>Короткий пересказ ${all.length} ${plural(all.length, 'комментария', 'комментариев', 'комментариев')}</small></span>${icon('chevronRight')}</button></div>` : '';
   const replying = replyTarget?.projectId === project.id ? replyTarget : null;
-  const voice = online && me && typeof MediaRecorder === 'function' ? `<button type="button" class="cbtn" data-action="voice-rec" data-id="${pid}" aria-label="Записать голосовой комментарий">${icon('mic')}</button>` : '';
+  const voice = online && me && typeof MediaRecorder === 'function' ? `<button type="button" class="cbtn ${hasPlusNow() ? '' : 'locked'}" data-action="voice-rec" data-id="${pid}" aria-label="${hasPlusNow() ? 'Записать голосовой комментарий' : 'Голосовые комментарии — в Плюсе'}">${icon('mic')}${hasPlusNow() ? '' : `<i class="lock-crown">${icon('crown')}</i>`}</button>` : '';
   const placeholder = online && !me ? 'Войди, чтобы комментировать' : replying ? `Ответ ${replying.name}…` : 'Комментарий…';
   return `${digest}${sorter}<div class="comments">${list}</div><form id="comment-form" data-id="${pid}" class="composer sticky comment-composer">${replying ? `<div class="reply-bar">${icon('comment')}<span>Ответ <b>${escapeHtml(replying.name)}</b></span><button type="button" data-action="reply-cancel" aria-label="Отменить ответ">${icon('close')}</button></div>` : ''}<input type="hidden" name="replyTo" value="${escapeHtml(replying?.id || '')}"><input name="text" maxlength="1200" placeholder="${escapeHtml(placeholder)}" aria-label="Комментарий" autocomplete="off">${voice}<button type="submit" aria-label="Отправить">${icon('send')}</button></form>`;
 }
