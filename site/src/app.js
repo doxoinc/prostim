@@ -453,7 +453,9 @@ function markRead(id) {
 function renderChrome(view, current) {
   const isService = services.some(([id]) => id === view);
   if (isService) {
-    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${view === 'feed' ? feedModeToggleHtml() : ''}${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>${view === 'feed' ? feedModeMenuHtml() : ''}${bellHtml()}`;
+    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => id === 'feed' && view === 'feed'
+      ? `<a href="#/feed" class="active" aria-current="page" data-action="feed-modes" aria-haspopup="menu" aria-expanded="false" title="Что показывать: ${feedModeLabel()}"><i class="mode-dot ${feedMode === 'foryou' ? '' : 'custom'}" aria-hidden="true"></i>${label}</a>`
+      : `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>${view === 'feed' ? feedModeMenuHtml() : ''}${bellHtml()}`;
     placeServicesBar();
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
@@ -549,6 +551,8 @@ function afterRender(view, changedPage, current) {
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
   if (view === 'activity') loadActivity();
+  syncViewportGap();
+  setTimeout(syncViewportGap, 350);
   if (view !== 'feed') {
     if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) { if (view === 'inbox' && route().page) scrollChatEnd(); else window.scrollTo?.(0, 0); }
     return;
@@ -3221,7 +3225,7 @@ document.addEventListener('click', async event => {
   } else if (action === 'comments') openComments(id);
   else if (action === 'share') openShare(id);
   else if (action === 'feed-mode') setFeedMode(target.dataset.mode);
-  else if (action === 'feed-modes') toggleModeMenu();
+  else if (action === 'feed-modes') { event.preventDefault(); toggleModeMenu(); }
   else if (action === 'comment-sort') {
     commentSort = target.dataset.sort || 'best';
     try { storage.setItem(COMMENT_SORT_KEY, commentSort); } catch {}
@@ -4033,9 +4037,27 @@ for (const name of ['focusin', 'focusout']) {
 }
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
 
+// An app opened from the home screen should fill the screen. On iPhone a page that does not scroll
+// (the feed) is sometimes laid out shorter than the screen by the status bar height, and everything
+// fixed to the bottom floats above an empty strip. The missing height is measured and the bottom bar,
+// the feed and sheets are moved down by it.
+function syncViewportGap() {
+  const standalone = Boolean(window.matchMedia?.('(display-mode: standalone)').matches) || navigator.standalone === true;
+  const screenSize = globalThis.screen;
+  let gap = 0;
+  if (standalone && screenSize && !keyboardOpen) {
+    const portrait = innerHeight >= innerWidth;
+    const full = portrait ? Math.max(screenSize.width, screenSize.height) : Math.min(screenSize.width, screenSize.height);
+    gap = Math.round(full - innerHeight);
+  }
+  document.documentElement?.style?.setProperty?.('--vp-gap', `${gap > 0 && gap <= 100 ? gap : 0}px`);
+}
+window.addEventListener?.('resize', () => syncViewportGap());
+window.addEventListener?.('orientationchange', () => setTimeout(syncViewportGap, 300));
+
 // The feed mode menu closes on any tap outside it, and on Escape.
 document.addEventListener('click', event => {
-  if (!event.target?.closest?.('.mode-menu, .mode-toggle')) toggleModeMenu(false);
+  if (!event.target?.closest?.('.mode-menu, [data-action="feed-modes"]')) toggleModeMenu(false);
 });
 
 document.addEventListener('keydown', event => {
@@ -4317,19 +4339,24 @@ const feedKey = () => `${feedMode}:${feedCategory}`;
 const feedModeHints = { following: ['users', 'Авторы и проекты, за которыми следишь'], foryou: ['sparkle', 'Рекомендации под твои интересы'], discover: ['search', 'Темы, которых ты ещё не видел'] };
 const feedModeLabel = () => feedModes.find(([key]) => key === feedMode)?.[1] || 'Для тебя';
 
-function feedModeToggleHtml() {
-  return `<button class="mode-toggle ${feedMode === 'foryou' ? '' : 'custom'}" data-action="feed-modes" aria-haspopup="menu" aria-expanded="false" aria-label="Что показывать в ленте: ${feedModeLabel()}">${icon('chevronDown')}</button>`;
-}
+const feedModeOrder = ['foryou', 'following', 'discover'];
 
+// Plain text that drops down under "Лента": no panel, a shadow keeps it readable over any picture.
 function feedModeMenuHtml() {
-  return `<div class="mode-menu" role="menu" hidden>${feedModes.map(([key, label]) => `<button role="menuitemradio" aria-checked="${key === feedMode}" class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}">${icon(feedModeHints[key][0])}<span><b>${label}</b><small>${feedModeHints[key][1]}</small></span>${key === feedMode ? icon('check') : ''}</button>`).join('')}</div>`;
+  return `<div class="mode-menu" role="menu" aria-label="Что показывать в ленте" hidden>${feedModeOrder.map((key, index) => `<button role="menuitemradio" aria-checked="${key === feedMode}" class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}" style="--i:${index}">${feedModes.find(([id]) => id === key)[1]}</button>`).join('')}</div>`;
 }
 
 function toggleModeMenu(open) {
   const menu = topbar.querySelector?.('.mode-menu');
-  const toggle = topbar.querySelector?.('.mode-toggle');
+  const toggle = topbar.querySelector?.('[data-action="feed-modes"]');
   if (!menu || !toggle) return;
   const show = open ?? menu.hidden;
+  if (show && toggle.getBoundingClientRect && topbar.getBoundingClientRect) {
+    const link = toggle.getBoundingClientRect();
+    const bar = topbar.getBoundingClientRect();
+    menu.style.left = `${Math.round(link.left - bar.left)}px`;
+    menu.style.top = `${Math.round(link.bottom - bar.top + 8)}px`;
+  }
   menu.hidden = !show;
   toggle.setAttribute('aria-expanded', String(show));
   toggle.classList.toggle('open', show);

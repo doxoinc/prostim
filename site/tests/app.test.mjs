@@ -89,7 +89,7 @@ test('sharing a bundled file uses a valid file URL', async () => {
 test('bottom-bar pages render: search, inbox, chat, profile, author', () => {
   const app = createApp();
   assert.match(app.elements.get('#dock').innerHTML, /Входящие/);
-  assert.match(app.elements.get('#topbar').innerHTML, /class="active"[^>]*>Лента</);
+  assert.match(app.elements.get('#topbar').innerHTML, /class="active"[^>]*>(<i[^>]*><\/i>)?Лента</);
   app.navigate('#/search');
   assert.match(app.elements.get('main').innerHTML, /Авторы/);
   app.navigate('#/inbox');
@@ -137,8 +137,11 @@ test('feed modes: following shows followed authors first, discovery leads with t
   runInContext('state.follows = ["danm"]; setFeedMode("following")', app.context);
   const following = runInContext('feedOrder.entries.filter(entry => entry.id || entry.sep).map(entry => entry.sep || entry.id).join()', app.context);
   assert.match(following, /^pulse,following-end,/);
-  assert.match(app.elements.get('#topbar').innerHTML, /class="mode-toggle custom"/, 'a non-default mode is marked on the switch');
+  assert.match(app.elements.get('#topbar').innerHTML, /data-action="feed-modes"[^>]*><i class="mode-dot custom"/, '"Лента" opens the modes; a non-default mode marks its dot');
   assert.match(app.elements.get('#topbar').innerHTML, /role="menuitemradio" aria-checked="true" class="on" data-action="feed-mode" data-mode="following"/);
+  app.navigate('#/steam');
+  assert.doesNotMatch(app.elements.get('#topbar').innerHTML, /feed-modes/, 'on other sections "Лента" just opens the feed');
+  app.navigate('#/feed');
   assert.doesNotMatch(app.elements.get('main').innerHTML, /feed-modes/, 'no second row over the feed');
   runInContext('setFeedMode("discover")', app.context);
   assert.equal(runInContext('feedOrder.key', app.context), 'discover:all');

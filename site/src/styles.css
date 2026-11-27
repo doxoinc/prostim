@@ -993,7 +993,8 @@ div.viewer { display: flex; flex-direction: column; height: 100%; min-height: 60
   #topbar { left: 0; height: calc(var(--top-h) + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 56px 0; }
   .services { gap: 22px; }
   .services a { font-size: 16px; }
-  body[data-view="feed"] .services a { color: rgba(255, 255, 255, .58); text-shadow: 0 1px 10px rgba(0, 0, 0, .45); }
+  body[data-view="feed"] .services a { color: rgba(255, 255, 255, .72); text-shadow: 0 1px 2px rgba(0, 0, 0, .55), 0 0 1px rgba(0, 0, 0, .4); }
+  body[data-view="feed"] .top-bell, body[data-view="feed"] .top-actions .top-bell { color: #fff; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .6)); }
   body[data-view="feed"] .services a.active { color: #fff; }
   body[data-view="feed"] .services-bar { background: #fff; }
   .top-back { left: 6px; top: env(safe-area-inset-top); margin-top: 4px; }
@@ -1009,7 +1010,7 @@ div.viewer { display: flex; flex-direction: column; height: 100%; min-height: 60
   .card-info { padding: 0 84px 18px 16px; }
   .card-title { font-size: 27px; }
   .card-summary { font-size: 14px; }
-  .card-shade { background: linear-gradient(180deg, rgba(0, 0, 0, .32) 0, rgba(0, 0, 0, 0) 16%, rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, .8) 100%); }
+  .card-shade { background: linear-gradient(180deg, rgba(0, 0, 0, .22) 0, rgba(0, 0, 0, 0) calc(env(safe-area-inset-top) + 64px)), linear-gradient(180deg, rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, .8) 100%); }
   .slide-arrow { display: none; }
   .rail { position: absolute; z-index: 3; right: 4px; bottom: 16px; gap: 10px; padding: 0; }
   .rail-author { margin-bottom: 12px; }
@@ -1036,6 +1037,9 @@ div.viewer { display: flex; flex-direction: column; height: 100%; min-height: 60
   body.keyboard #dock, body.keyboard .ptr { display: none; }
   /* Whatever is below the bar is painted like the bar, so the bottom edge of the screen never shows a gap. */
   #dock::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 120px; background: inherit; }
+  #dock { bottom: calc(-1 * var(--vp-gap, 0px)); }
+  .feed { bottom: calc(var(--tab-h) + var(--safe-b) - var(--vp-gap, 0px)); }
+  html dialog { margin-bottom: calc(-1 * var(--vp-gap, 0px)); }
   /* A sheet with a focused field rises above the keyboard, its composer stays visible. */
   body.keyboard dialog[open] { margin-bottom: var(--kb, 0px); max-height: calc(100dvh - var(--kb, 0px) - env(safe-area-inset-top) - 8px); }
   body.keyboard dialog[data-kind="project"] { height: calc(100dvh - var(--kb, 0px) - env(safe-area-inset-top) - 8px); }
@@ -2260,21 +2264,21 @@ dialog[data-kind="player"] { width: min(1180px, calc(100% - 32px)); height: calc
   :root[data-theme="auto"] .push-ask { background: rgba(255, 255, 255, .96); }
 }
 
-/* Feed modes: a small switch next to "Лента" and its menu */
-.mode-toggle { position: relative; width: 30px; height: 30px; margin-right: -12px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); font-size: 19px; transition: color .2s, background-color .2s, transform .25s var(--ease); }
-.mode-toggle:hover { color: var(--text); background: rgba(255, 255, 255, .08); }
-.mode-toggle.open { transform: rotate(180deg); color: var(--text); }
-.mode-toggle.custom::after { content: ""; position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--grad); box-shadow: 0 0 8px rgba(255, 80, 80, .8); }
-.mode-menu { position: absolute; z-index: 45; top: calc(var(--top-h) - 6px); left: 50%; width: min(300px, calc(100vw - 24px)); display: grid; gap: 2px; padding: 6px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: 0 24px 60px rgba(0, 0, 0, .45); transform: translateX(-50%); animation: rise .2s var(--ease); }
+/* Feed modes: "Лента" with a small dot opens a plain list of modes under it */
+.services a[data-action="feed-modes"] { position: relative; cursor: pointer; }
+.mode-dot { position: absolute; left: -11px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: currentColor; opacity: .7; transition: transform .25s var(--ease); }
+.mode-dot.custom { background: var(--grad); opacity: 1; box-shadow: 0 0 8px rgba(255, 80, 80, .9); }
+.services a.open .mode-dot { transform: scale(1.5); }
+.mode-menu { position: absolute; z-index: 45; display: grid; justify-items: start; gap: 2px; }
 .mode-menu[hidden] { display: none; }
-.mode-menu button { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 13px; color: var(--text); text-align: left; }
-.mode-menu button:hover { background: var(--surface-2); }
-.mode-menu button > .i:first-child { flex: none; width: 34px; height: 34px; padding: 8px; border-radius: 10px; background: var(--surface-3); color: var(--muted); box-sizing: border-box; }
-.mode-menu button.on > .i:first-child { background: var(--grad); color: #fff; }
-.mode-menu button > span { flex: 1; display: grid; gap: 1px; min-width: 0; }
-.mode-menu b { font-size: 14.5px; font-weight: 750; }
-.mode-menu small { color: var(--dim); font-size: 12px; }
-.mode-menu button > .i:last-child:not(:first-child) { flex: none; color: #ff5f3d; font-size: 18px; }
+.mode-menu::before { content: ""; position: absolute; z-index: -1; inset: -26px -56px -30px -44px; border-radius: 50%; background: radial-gradient(closest-side, rgba(0, 0, 0, .5), rgba(0, 0, 0, .22) 60%, transparent); pointer-events: none; animation: mode-drop .28s var(--ease) both; }
+body[data-view="page"] .mode-menu::before { display: none; }
+.mode-menu button { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 4px; color: rgba(255, 255, 255, .8); font-size: 16px; font-weight: 650; letter-spacing: -.01em; text-shadow: 0 1px 3px rgba(0, 0, 0, .55), 0 0 18px rgba(0, 0, 0, .4); animation: mode-drop .28s var(--ease) both; animation-delay: calc(var(--i) * 45ms); }
+.mode-menu button.on { color: #fff; font-weight: 800; }
+.mode-menu button.on::before { content: ""; width: 6px; height: 6px; margin-left: -14px; border-radius: 50%; background: var(--grad); box-shadow: 0 0 8px rgba(255, 80, 80, .9); }
+@keyframes mode-drop { from { opacity: 0; transform: translateY(-8px); } }
+body[data-view="page"] .mode-menu button { color: var(--muted); text-shadow: none; }
+body[data-view="page"] .mode-menu button.on { color: var(--text); }
 
 /* Top bar: bell and settings side by side */
 .top-actions { position: absolute; right: 10px; top: 50%; display: flex; gap: 2px; margin-top: -22px; }
@@ -2378,9 +2382,6 @@ dialog.layer { width: min(560px, calc(100% - 24px)); max-height: calc(100dvh - 2
 .pb-media.shaped img { max-height: none; background: none; }
 
 @media (max-width: 760px) {
-  body[data-view="feed"] .mode-toggle { color: rgba(255, 255, 255, .9); filter: drop-shadow(0 1px 6px rgba(0, 0, 0, .45)); }
-  body[data-view="feed"] .mode-toggle .i { stroke-width: 2.4; }
-  .mode-menu { top: calc(env(safe-area-inset-top) + 50px); }
   .top-actions { right: 4px; top: env(safe-area-inset-top); margin-top: 4px; }
   .ob-bar { margin: 18px -18px -18px; padding-left: 18px; padding-right: 18px; }
   dialog.layer { width: 100%; max-width: none; margin: auto 0 0; border-radius: 24px 24px 0 0; max-height: calc(100dvh - env(safe-area-inset-top) - 8px); }
