@@ -454,6 +454,35 @@ test('playtests: the author hands out a task and the folder, testers report step
   assert.equal((await tester('GET', '/api/bootstrap')).body.projects.find(item => item.id === id).playtest, null);
 });
 
+test('playtest rewards: the author pays a bounty from own sparks, Plus opens more places', async () => {
+  const helper = client();
+  const author = client();
+  await helper('POST', '/api/auth/register', { handle: 'bhelper', name: 'Помощник', password: 'secret12' }, { 'X-Forwarded-For': '10.6.0.1' });
+  await author('POST', '/api/auth/register', { handle: 'bauthor', name: 'Автор', password: 'secret12' }, { 'X-Forwarded-For': '10.6.0.2' });
+  // The author earns sparks first: the helper accepts their report.
+  const first = (await helper('POST', '/api/projects', { title: 'Первая', summary: 'x', category: 'games', images: [] })).body.project.id;
+  await helper('POST', `/api/projects/${first}/playtest`, { title: 'Проверь', steps: 'Шаг' });
+  await author('POST', `/api/projects/${first}/playtest/join`);
+  const report = await author('POST', `/api/projects/${first}/playtest/report`, { results: [{ ok: true }] });
+  await helper('POST', `/api/projects/${first}/comments/${report.body.comment}/accept`);
+  assert.equal((await author('GET', '/api/bootstrap')).body.account.sparks, 20);
+  const own = (await author('POST', '/api/projects', { title: 'Вторая', summary: 'y', category: 'games', images: [] })).body.project.id;
+  assert.equal((await author('POST', `/api/projects/${own}/playtest`, { title: 'Т', steps: 'Шаг', slots: 30 })).status, 402, 'more than 10 places is Plus');
+  assert.equal((await author('POST', `/api/projects/${own}/playtest`, { title: 'Т', steps: 'Шаг', bounty: 25 })).status, 400, 'a bounty needs the sparks for it');
+  const made = await author('POST', `/api/projects/${own}/playtest`, { title: 'Т', steps: 'Шаг', bounty: 10, slots: 10 });
+  assert.equal(made.body.project.playtest.bounty, 10);
+  await helper('POST', `/api/projects/${own}/playtest/join`);
+  const back = await helper('POST', `/api/projects/${own}/playtest/report`, { results: [{ ok: false, note: 'баг' }] });
+  const accepted = await author('POST', `/api/projects/${own}/comments/${back.body.comment}/accept`);
+  assert.equal(accepted.body.bounty, 'paid');
+  assert.equal((await helper('GET', '/api/bootstrap')).body.account.sparks, 30, 'the usual 20 and the author\'s 10');
+  assert.equal((await author('GET', '/api/bootstrap')).body.account.sparks, 10, 'the bounty leaves the author\'s balance');
+  await author('POST', `/api/projects/${own}/comments/${back.body.comment}/accept`);
+  const again = await author('POST', `/api/projects/${own}/comments/${back.body.comment}/accept`);
+  assert.equal(again.body.bounty, '', 'one bounty per report');
+  assert.ok((await helper('GET', '/api/notifications')).body.items.some(item => item.type === 'bounty'));
+});
+
 test('promotion: paid in test mode, shown to others between posts, never to Plus subscribers', async () => {
   const owner = client();
   const viewer = client();

@@ -101,6 +101,10 @@ export const playtestAccess = [
 ];
 export const PLAYTEST_STEPS = 10;
 export const PLAYTEST_SLOTS = 50;
+// Places for testers: 10 without Plus, 50 with it.
+export const playtestSlots = { free: 10, plus: PLAYTEST_SLOTS };
+// Sparks the author adds from their own balance to each accepted report, on top of the usual reward.
+export const playtestBounties = [0, 10, 25, 50];
 
 const playtestLine = (value, max) => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const playtestBlock = (value, max) => String(value ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, max);
@@ -120,7 +124,8 @@ export function cleanPlaytest(value, current = {}, link = url => url) {
     notes: playtestBlock(source.notes, 1000),
     prompt: playtestBlock(source.prompt, 2000),
     access,
-    slots: Math.max(1, Math.min(PLAYTEST_SLOTS, Math.round(Number(source.slots) || current.slots || 10)))
+    slots: Math.max(1, Math.min(PLAYTEST_SLOTS, Math.round(Number(source.slots) || current.slots || 10))),
+    bounty: playtestBounties.includes(Number(source.bounty)) ? Number(source.bounty) : 0
   };
 }
 
@@ -151,7 +156,7 @@ export function playtestDraft(project) {
   const steps = project?.demo
     ? ['Открой демо и пройди обучение', 'Поиграй 5 минут и попробуй всё, что видишь на экране', 'Запиши, где застрял или что было непонятно', 'Проверь звук, управление и что игра не тормозит']
     : ['Скачай или открой билд по ссылке', 'Запусти и пройди первые 5 минут', 'Запиши, где застрял или что было непонятно', 'Проверь, что ничего не вылетает'];
-  return { title: `Первые 5 минут в «${String(project?.title || 'игре').slice(0, 60)}»`, steps, build: project?.demo || '', platform: '', version: '', notes: '', prompt: '', access: 'none', slots: 10 };
+  return { title: `Первые 5 минут в «${String(project?.title || 'игре').slice(0, 60)}»`, steps, build: project?.demo || '', platform: '', version: '', notes: '', prompt: '', access: 'none', slots: 10, bounty: 0 };
 }
 
 /* Drafts between the parts */

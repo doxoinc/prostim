@@ -3,9 +3,9 @@ import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers, helpLevels, helpPoints, helpAreas, commentHelp } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
-import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds, PLUS_DISCOUNT, profileBanners, profileAccents, MOTION_VIDEO_LIMIT } from './ads.js';
+import { AD_EVERY, boostPlans, boostPrice, plusPlan, plusCompare, placeAds, PLUS_DISCOUNT, profileBanners, profileAccents, MOTION_VIDEO_LIMIT } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
-import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices, playtestAccess, playtestDraft, PLAYTEST_STEPS } from './ecosystem.js';
+import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices, playtestAccess, playtestDraft, playtestSlots, playtestBounties, PLAYTEST_STEPS } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
 import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons, sortComments, commentSorts, feedbackKinds, reviewTags, commentLabels } from './social.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, imageRatios, focusStyle, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
@@ -576,7 +576,9 @@ function afterRender(view, changedPage, current) {
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
   if (view === 'activity') loadActivity();
+  syncAmbient(view);
   if (view !== 'feed') {
+    revealBlocks(view);
     if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) { if (view === 'inbox' && route().page) scrollChatEnd(); else window.scrollTo?.(0, 0); }
     return;
   }
@@ -971,7 +973,9 @@ function setPull(distance) {
   document.body.style?.setProperty?.('--pull-turn', `${Math.round(distance * 3)}deg`);
   document.body.style?.setProperty?.('--pull-o', String(Math.min(1, distance / 50)));
   document.body.classList?.toggle('pulling', distance > 0 && !feedRefreshing);
-  document.body.classList?.toggle('ptr-ready', distance >= 70);
+  const ready = distance >= 70;
+  if (ready && !document.body.classList?.contains?.('ptr-ready') && !feedRefreshing) haptic('tap');
+  document.body.classList?.toggle('ptr-ready', ready);
 }
 
 async function refreshFeed() {
@@ -993,7 +997,7 @@ async function refreshFeed() {
   document.body.classList?.remove('ptr-loading');
   setPull(0);
   if (document.body.dataset.view === 'feed') render();
-  navigator.vibrate?.(10);
+  haptic('success');
   toast(unseen ? `Лента обновлена · новых: ${unseen}` : 'Лента обновлена');
 }
 
@@ -1153,7 +1157,7 @@ async function toggleProjectFlag(action, id, { onlyOn = false } = {}) {
   state[key] = toggleMembership(state[key], id);
   persist();
   const on = state[key].includes(id);
-  if (on) navigator.vibrate?.(8);
+  if (on) haptic('tap');
   trackSignal(projectById(id), on ? action : action === 'vote' ? 'unvote' : 'unsave');
   refresh({ action, id });
   if (action === 'save' && state.saved.includes(id)) toast('Сохранено в профиле');
@@ -1340,7 +1344,7 @@ function openReactBar(row) {
   bar.className = 'react-bar';
   bar.innerHTML = chatReactions.map(emoji => `<button data-action="react" data-id="${escapeHtml(row.dataset.msg)}" data-emoji="${emoji}" aria-label="Реакция ${emoji}">${emoji}</button>`).join('');
   row.appendChild(bar);
-  navigator.vibrate?.(10);
+  haptic('heavy');
 }
 
 /* Voice input: the browser's speech recognition types what you say into the field */
@@ -2626,11 +2630,11 @@ function openPaywall(reason = 'plus', after = null) {
   const price = account.plusPrice || plusPlan.price;
   const discount = price < plusPlan.price ? Math.round((1 - price / plusPlan.price) * 100) : 0;
   const mode = remote?.config?.payments;
-  const perks = [['crown', 'Значок Плюса у имени'], ['palette', 'Анимированный профиль: фон, GIF или видео на аватарке, свой цвет'], ['mic', 'Голосовые комментарии'], ['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['monitor', 'ИИ-мир и Steam: больше компьютеров, заявка без очереди']];
+  const perks = [['crown', 'Значок Плюса у имени'], ['palette', 'Анимированный профиль: фон, GIF или видео на аватарке, свой цвет'], ['mic', 'Голосовые комментарии'], ['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['users', `До ${playtestSlots.plus} тестеров в тест-задании и место выше в списке`], ['monitor', 'ИИ-мир и Steam: больше компьютеров, заявка без очереди']];
   const trial = account.plusTrial ? `<button class="btn btn-grad btn-block pw-trial" data-action="plus-trial">${icon('sparkle')} Попробовать бесплатно · ${plusPlan.trialHours} часа</button><small class="pw-fine">Без карты. Через сутки Плюс просто выключится — ничего не спишется.</small>` : '';
   const buy = mode ? `<button class="pw-buy ${trial ? '' : 'main'}" data-action="plus-pay"><span><b>${discount ? 'Первый месяц' : 'Месяц'} за ${rub(price)}</b><small>${discount ? `<s>${rub(plusPlan.price)}</s> дальше ${rub(plusPlan.price)} в месяц` : `${plusPlan.days} дней, без автопродления`}</small></span>${discount ? `<em>−${discount}%</em>` : icon('chevronRight')}</button>` : '<p class="pw-fine">Оплата скоро появится</p>';
   const sparks = sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : '';
-  openLayer(`<div class="paywall"><button class="icon-btn pw-close" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><div class="pw-hero"><i class="pw-orb a"></i><i class="pw-orb b"></i><i class="pw-orb c"></i><span class="pw-crown">${icon(iconName)}</span><span class="pw-kicker">${icon('crown')} ${escapeHtml(plusPlan.title)}</span><h2 id="layer-title">${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div><ul class="pw-perks">${perks.map(([name, label], index) => `<li style="--i:${index}">${icon(name)}<span>${escapeHtml(label)}</span></li>`).join('')}</ul><div class="pw-offer">${trial}${buy}${sparks}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: деньги не списываются.</p>` : ''}</div></div>`, 'paywall');
+  openLayer(`<div class="paywall"><button class="icon-btn pw-close" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><div class="pw-hero"><i class="pw-orb a"></i><i class="pw-orb b"></i><i class="pw-orb c"></i><span class="pw-crown">${icon(iconName)}</span><span class="pw-kicker">${icon('crown')} ${escapeHtml(plusPlan.title)}</span><h2 id="layer-title">${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div><ul class="pw-perks">${perks.map(([name, label], index) => `<li style="--i:${index}">${icon(name)}<span>${escapeHtml(label)}</span></li>`).join('')}</ul><details class="plus-more pw-compare"><summary>Сравнить: без Плюса и с Плюсом</summary>${plusCompareHtml()}</details><div class="pw-offer">${trial}${buy}${sparks}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: деньги не списываются.</p>` : ''}</div></div>`, 'paywall');
 }
 
 async function startPlusTrial(button) {
@@ -2656,12 +2660,12 @@ function openPlus() {
   closeLayer();
   const mode = remote?.config?.payments;
   const until = hasPlusNow() ? `<p class="fine">Сейчас Плюс действует до ${shortDate(remote.account.plusUntil)} — новый месяц добавится сверху.</p>` : '';
-  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя Плюса за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Продлить на месяц за ${rub(remote?.account?.plusPrice || plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
+  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul><details class="plus-more"><summary>Без Плюса и с Плюсом</summary>${plusCompareHtml()}</details>${until}${sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя Плюса за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Продлить на месяц за ${rub(remote?.account?.plusPrice || plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
 }
 
 // Real payments leave for the bank page; in test mode a stand-in step confirms without money.
 function handlePayment(payment) {
-  if (payment.status === 'succeeded') { afterPayment(payment); return; }
+  if (payment.status === 'succeeded') { haptic('success'); afterPayment(payment); return; }
   if (payment.mode === 'yookassa' && payment.confirmationUrl) { location.href = payment.confirmationUrl; return; }
   showDialog(`<div class="sheet-body pay-test"><span class="boost-mark">${icon('lock')}</span><h2 id="modal-title">Оплата ${rub(payment.amount)}</h2><p class="lead">${escapeHtml(payment.description)}</p><p class="test-note">${icon('lock')} Тестовый режим: ЮKassa ещё не подключена, деньги не списываются.</p><button class="btn btn-grad btn-block" data-action="pay-test" data-id="${escapeHtml(payment.id)}">Оплатить (тест)</button><button class="link-btn" data-action="close-modal">Отмена</button></div>`, { kind: 'payment' });
 }
@@ -3460,6 +3464,7 @@ function sendPrompt(text) {
 }
 
 function formError(form, message) {
+  haptic('error');
   const element = form.querySelector?.('.form-error');
   if (element) element.textContent = message; else toast(message);
 }
@@ -3471,6 +3476,7 @@ document.addEventListener('click', async event => {
   if (!target) return;
   const action = target.dataset.action;
   const id = target.dataset.id;
+  if (hapticActions[action]) haptic(hapticActions[action]);
   const adItem = ['open-project', 'media'].includes(action) ? target.closest?.('.feed-item.is-ad') : null;
   if (adItem) reportAd(adItem.dataset.ad, 'click');
   if (action === 'close-modal') closeAnimated();
@@ -3524,7 +3530,7 @@ document.addEventListener('click', async event => {
       lastTap = { time: 0, id: '' };
       if (!online || me) burst(target, event);
       toggleProjectFlag('vote', id, { onlyOn: true });
-      navigator.vibrate?.(12);
+      haptic('success');
     } else {
       lastTap = { time: now, id };
       tapTimer = setTimeout(() => navigateToProject(id), 300);
@@ -4065,6 +4071,7 @@ document.addEventListener('submit', async event => {
     go('#/feed');
     render();
     toast('Опубликовано ✓');
+    haptic('success');
   } else if (form.id === 'report-form') {
     if (!data.get('reason')) { formError(form, 'Выбери причину'); return; }
     if (submit) submit.disabled = true;
@@ -4471,6 +4478,7 @@ function setSheetOffset(offset, animate = false) {
 }
 
 function setDetent(detent) {
+  if (detent !== sheetDetent) haptic('select');
   sheetDetent = detent;
   modal.dataset.detent = detent;
   setSheetOffset(0, true);
@@ -4930,6 +4938,12 @@ function testReports(project) {
   return projectComments(project).filter(comment => comment.test);
 }
 
+const playtestReward = test => sparkRules.accepted.amount + (Number(test?.bounty) || 0);
+
+function plusCompareHtml() {
+  return `<table class="plus-compare"><thead><tr><th></th><th>Без Плюса</th><th>${icon('crown')} Плюс</th></tr></thead><tbody>${plusCompare.map(([label, free, plus]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(free)}</td><td>${escapeHtml(plus)}</td></tr>`).join('')}</tbody></table>`;
+}
+
 function playtestFactsHtml(test) {
   return [test.platform, test.version ? `версия ${test.version}` : '', `${test.taken} из ${test.slots} ${plural(test.slots, 'места', 'мест', 'мест')}`, test.reports ? `${test.reports} ${plural(test.reports, 'отчёт', 'отчёта', 'отчётов')}` : ''].filter(Boolean).map(escapeHtml).join(' · ');
 }
@@ -4945,13 +4959,13 @@ function playtestCardHtml(project) {
     ? `<button class="btn btn-grad btn-block" data-action="playtest-open" data-id="${pid}">${icon(test.reported ? 'refresh' : 'check')} ${test.reported ? 'Изменить отчёт' : 'Открыть задание и отчитаться'}</button>`
     : left ? `<button class="btn btn-grad btn-block" data-action="playtest-join" data-id="${pid}">${icon('users')} Стать тестером</button>` : '';
   const steps = test.steps.slice(0, 4).map(step => `<li>${escapeHtml(step)}</li>`).join('') + (test.steps.length > 4 ? `<li class="more">и ещё ${test.steps.length - 4}</li>` : '');
-  return `<section class="playtest-card"><div class="pt-head"><span class="pt-mark">${icon('check')}</span><span><small>Тест-задание · ${state}</small><b>${escapeHtml(test.title)}</b></span><em class="pt-reward" title="За принятый отчёт">${icon('sparkle')}+${sparkRules.accepted.amount}</em></div><ol class="pt-steps">${steps}</ol><p class="pt-meta">${playtestFactsHtml(test)}</p>${button}<p class="pt-note">Автор получит отчёт по шагам${test.access !== 'none' ? ' и откроет тебе папку проекта в ИИ-мире' : ''}. Примет — +${sparkRules.accepted.amount} искр, учтёт в обновлении — ещё +${sparkRules.fixed.amount}.</p></section>`;
+  return `<section class="playtest-card"><div class="pt-head"><span class="pt-mark">${icon('check')}</span><span><small>Тест-задание · ${state}</small><b>${escapeHtml(test.title)}</b></span><em class="pt-reward" title="За принятый отчёт">${icon('sparkle')}+${playtestReward(test)}</em></div><ol class="pt-steps">${steps}</ol><p class="pt-meta">${playtestFactsHtml(test)}</p>${button}<p class="pt-note">Автор получит отчёт по шагам${test.access !== 'none' ? ' и откроет тебе папку проекта в ИИ-мире' : ''}. Примет — +${playtestReward(test)} искр${test.bounty ? ` (из них ${test.bounty} от автора)` : ''}, учтёт в обновлении — ещё +${sparkRules.fixed.amount}.</p></section>`;
 }
 
 function playtestChipHtml(project) {
   const test = project.playtest;
   if (!test?.open || isMine(project.handle) || (test.taken >= test.slots && !test.joined)) return '';
-  return `<button class="test-chip" data-action="open-project" data-id="${escapeHtml(project.id)}">${icon('users')}<span>${test.joined ? 'Ты тестер' : 'Ищут тестеров'}</span><b>${icon('sparkle')}+${sparkRules.accepted.amount}</b></button>`;
+  return `<button class="test-chip" data-action="open-project" data-id="${escapeHtml(project.id)}">${icon('users')}<span>${test.joined ? 'Ты тестер' : 'Ищут тестеров'}</span><b>${icon('sparkle')}+${playtestReward(test)}</b></button>`;
 }
 
 async function joinPlaytest(projectId, button) {
@@ -4963,6 +4977,7 @@ async function joinPlaytest(projectId, button) {
     rerenderOpenProject(projectId);
     if (result.project.playtest?.workspaceId) refreshWorkspaces().catch(() => {});
     openPlaytest(projectId);
+    haptic('success');
     toast('Ты в тестерах — вот задание');
   } catch (error) {
     if (button) button.disabled = false;
@@ -4993,6 +5008,7 @@ function openPlaytest(projectId) {
   drawShots();
   dialog.querySelectorAll('.pt-step').forEach(row => row.querySelectorAll('[data-ok]').forEach(button => button.addEventListener('click', () => {
     const on = !button.classList.contains('on');
+    haptic(on && button.dataset.ok === '0' ? 'warn' : 'select');
     row.querySelectorAll('[data-ok]').forEach(item => { item.classList.toggle('on', on && item === button); item.setAttribute('aria-checked', String(on && item === button)); });
     const note = row.querySelector('.pt-step-note');
     note.placeholder = on && button.dataset.ok === '0' ? 'Что пошло не так?' : 'Заметка — необязательно';
@@ -5034,6 +5050,7 @@ function openPlaytest(projectId) {
       closeLayer();
       rerenderOpenProject(projectId);
       toast(`Отчёт у автора. Примет — получишь ${sparkRules.accepted.amount} искр`);
+      haptic('success');
     } catch (failure) {
       button.disabled = false;
       error.textContent = failure.message;
@@ -5049,10 +5066,12 @@ function openPlaytestEditor(projectId) {
   const draft = current || playtestDraft(project);
   const linked = Boolean(project.workspaceId);
   const access = linked ? draft.access || 'none' : 'none';
+  const balance = sparksBalance();
+  const maxSlots = playtestSlots[hasPlusNow() ? 'plus' : 'free'];
   const accessRows = linked
     ? `<div class="pt-access" role="radiogroup">${playtestAccess.map(([key, label, hint]) => `<label class="pt-access-item"><input type="radio" name="access" value="${key}" ${access === key ? 'checked' : ''}><span><b>${label}</b><small>${hint}</small></span></label>`).join('')}</div><p class="pt-note">Доступ получают только те, кто взял задание, и он пропадает, когда ты закрываешь набор.</p>`
     : '<p class="pt-note">Свяжи пост с папкой во вкладке «Код и ИИ» — тогда тестерам можно будет открыть папку проекта.</p>';
-  const dialog = openLayer(`<div class="crop playtest-editor"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">${current ? 'Тест-задание' : 'Новое тест-задание'}</b><span></span></div><form class="form pt-form"><label class="pt-label">Что проверить<input class="field" name="title" maxlength="100" required value="${escapeHtml(draft.title)}" placeholder="Например: первые 5 минут на телефоне"></label><label class="pt-label">Шаги · по одному в строке, до ${PLAYTEST_STEPS}<textarea class="field" name="steps" rows="5" maxlength="2200" required>${escapeHtml(draft.steps.join('\n'))}</textarea></label><h4 class="pt-group">Среда</h4><label class="pt-label">Билд или демо<input class="field" name="build" maxlength="500" value="${escapeHtml(draft.build || project.demo || '')}" placeholder="Демо, itch.io, TestFlight, APK, Google Drive" inputmode="url" autocapitalize="none" spellcheck="false"></label><div class="pt-pair"><label class="pt-label">Платформа<input class="field" name="platform" maxlength="60" value="${escapeHtml(draft.platform || '')}" placeholder="Android, iOS, ПК"></label><label class="pt-label">Версия<input class="field" name="version" maxlength="24" value="${escapeHtml(draft.version || '')}" placeholder="0.4.1"></label></div><label class="pt-label">Как поставить и что знать<textarea class="field" name="notes" rows="3" maxlength="1000" placeholder="Тестовый аккаунт, как установить, известные баги">${escapeHtml(draft.notes || '')}</textarea></label><label class="pt-label">Промпт для ИИ · необязательно<textarea class="field" name="prompt" rows="3" maxlength="2000" placeholder="Тестер скопирует его своему ИИ или запустит в папке проекта: «Собери билд под мою систему и проверь, что игра стартует»">${escapeHtml(draft.prompt || '')}</textarea></label><h4 class="pt-group">Папка проекта в ИИ-мире</h4>${accessRows}<label class="pt-label pt-slots">Мест для тестеров<input class="field" name="slots" type="number" min="1" max="50" value="${Number(draft.slots) || 10}"></label><p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit">${icon('send')} ${current ? 'Сохранить задание' : 'Открыть набор тестеров'}</button></form></div>`, 'playtest');
+  const dialog = openLayer(`<div class="crop playtest-editor"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">${current ? 'Тест-задание' : 'Новое тест-задание'}</b><span></span></div><form class="form pt-form"><label class="pt-label">Что проверить<input class="field" name="title" maxlength="100" required value="${escapeHtml(draft.title)}" placeholder="Например: первые 5 минут на телефоне"></label><label class="pt-label">Шаги · по одному в строке, до ${PLAYTEST_STEPS}<textarea class="field" name="steps" rows="5" maxlength="2200" required>${escapeHtml(draft.steps.join('\n'))}</textarea></label><h4 class="pt-group">Среда</h4><label class="pt-label">Билд или демо<input class="field" name="build" maxlength="500" value="${escapeHtml(draft.build || project.demo || '')}" placeholder="Демо, itch.io, TestFlight, APK, Google Drive" inputmode="url" autocapitalize="none" spellcheck="false"></label><div class="pt-pair"><label class="pt-label">Платформа<input class="field" name="platform" maxlength="60" value="${escapeHtml(draft.platform || '')}" placeholder="Android, iOS, ПК"></label><label class="pt-label">Версия<input class="field" name="version" maxlength="24" value="${escapeHtml(draft.version || '')}" placeholder="0.4.1"></label></div><label class="pt-label">Как поставить и что знать<textarea class="field" name="notes" rows="3" maxlength="1000" placeholder="Тестовый аккаунт, как установить, известные баги">${escapeHtml(draft.notes || '')}</textarea></label><label class="pt-label">Промпт для ИИ · необязательно<textarea class="field" name="prompt" rows="3" maxlength="2000" placeholder="Тестер скопирует его своему ИИ или запустит в папке проекта: «Собери билд под мою систему и проверь, что игра стартует»">${escapeHtml(draft.prompt || '')}</textarea></label><h4 class="pt-group">Папка проекта в ИИ-мире</h4>${accessRows}<h4 class="pt-group">Награда</h4><div class="seg pt-bounty" role="radiogroup" aria-label="Искры от тебя за принятый отчёт">${playtestBounties.map(value => `<label><input type="radio" name="bounty" value="${value}" ${Number(draft.bounty || 0) === value ? 'checked' : ''} ${value > balance && value !== Number(draft.bounty || 0) ? 'disabled' : ''}><span>${value ? `+${value}` : 'Нет'}</span></label>`).join('')}</div><p class="pt-note">Сверх обычных ${sparkRules.accepted.amount} искр тестер получит выбранную награду от тебя за каждый принятый отчёт. Она спишется с твоих искр (сейчас ${balance}). Задания с наградой стоят выше в списке.</p><label class="pt-label pt-slots">Мест для тестеров<input class="field" name="slots" type="number" min="1" max="${maxSlots}" value="${Math.min(maxSlots, Number(draft.slots) || 10)}"></label>${hasPlusNow() ? '' : `<p class="pt-note">Без Плюса — до ${playtestSlots.free} тестеров, с <button type="button" class="text-link inline" data-action="plus">Плюсом</button> — до ${playtestSlots.plus}.</p>`}<p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit">${icon('send')} ${current ? 'Сохранить задание' : 'Открыть набор тестеров'}</button></form></div>`, 'playtest');
   dialog.querySelector('.pt-form').addEventListener('submit', async event => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -5060,7 +5079,7 @@ function openPlaytestEditor(projectId) {
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;
     try {
-      const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/playtest`, { title: data.get('title'), steps: data.get('steps'), build: data.get('build'), platform: data.get('platform'), version: data.get('version'), notes: data.get('notes'), prompt: data.get('prompt'), access: data.get('access') || 'none', slots: Number(data.get('slots')) || 10 });
+      const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/playtest`, { title: data.get('title'), steps: data.get('steps'), build: data.get('build'), platform: data.get('platform'), version: data.get('version'), notes: data.get('notes'), prompt: data.get('prompt'), access: data.get('access') || 'none', slots: Number(data.get('slots')) || 10, bounty: Number(data.get('bounty')) || 0 });
       replaceProject(result.project);
       closeLayer();
       hubTab = 'testers';
@@ -5127,10 +5146,11 @@ function runPlaytestPrompt(projectId) {
 
 // Open playtests across the feed: where to earn sparks.
 function openPlaytestsList() {
+  // Tasks you took first, then the ones with Plus authors, then the biggest reward, then the freshest.
   const list = projects().filter(project => project.playtest?.open && !isMine(project.handle) && visibleInFeed(project))
-    .sort((a, b) => Number(b.playtest.joined) - Number(a.playtest.joined) || (b.playtest.updatedAt || 0) - (a.playtest.updatedAt || 0));
-  const rows = list.map(project => `<button class="set-row" data-action="open-project" data-id="${escapeHtml(project.id)}"><span class="row-mark">${icon(project.playtest.joined ? 'check' : 'users')}</span><span><b>${escapeHtml(project.playtest.title)}</b><small>«${escapeHtml(project.title)}» · ${playtestFactsHtml(project.playtest)}</small></span><em class="pt-reward">${icon('sparkle')}+${sparkRules.accepted.amount}</em></button>`).join('');
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Тест-задания</h2><p class="hub-hint">Авторы просят проверить игры и приложения по шагам. Отчёт, который автор примет, приносит ${sparkRules.accepted.amount} искр, а если по нему выйдет обновление — ещё ${sparkRules.fixed.amount}.</p>${rows ? `<div class="hub-list">${rows}</div>` : emptyState('users', 'Сейчас открытых заданий нет', '', 'Загляни позже или подпишись на авторов — новые задания придут в уведомлениях')}</div>`, { kind: 'playtests' });
+    .sort((a, b) => Number(b.playtest.joined) - Number(a.playtest.joined) || Number(b.playtest.boosted) - Number(a.playtest.boosted) || playtestReward(b.playtest) - playtestReward(a.playtest) || (b.playtest.updatedAt || 0) - (a.playtest.updatedAt || 0));
+  const rows = list.map(project => `<button class="set-row" data-action="open-project" data-id="${escapeHtml(project.id)}"><span class="row-mark">${icon(project.playtest.joined ? 'check' : 'users')}</span><span><b>${escapeHtml(project.playtest.title)}</b><small>«${escapeHtml(project.title)}» · ${playtestFactsHtml(project.playtest)}</small></span><em class="pt-reward">${icon('sparkle')}+${playtestReward(project.playtest)}</em></button>`).join('');
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Тест-задания</h2><p class="hub-hint">Авторы просят проверить игры и приложения по шагам. Отчёт, который автор примет, приносит ${sparkRules.accepted.amount} искр и награду автора, если он её назначил, а если по отчёту выйдет обновление — ещё ${sparkRules.fixed.amount}.</p>${rows ? `<div class="hub-list">${rows}</div>` : emptyState('users', 'Сейчас открытых заданий нет', '', 'Загляни позже или подпишись на авторов — новые задания придут в уведомлениях')}</div>`, { kind: 'playtests' });
 }
 
 /* A comment becomes an AI task; a finished task becomes an update */
@@ -5426,6 +5446,187 @@ const SOUND_KEY = 'prostim-sound';
 const readSetting = (key, fallback) => { try { return storage.getItem(key) ?? fallback; } catch { return fallback; } };
 let dataSaver = readSetting(SAVER_KEY, '0') === '1';
 
+/* Haptics: a short tick under the finger. Android vibrates through the Vibration API. Safari on iPhone has
+   no such API, but toggling an <input type="checkbox" switch> ticks the Taptic Engine (iOS 18 and newer),
+   so a hidden switch is clicked for each tick. Off in the settings — off everywhere. */
+
+const HAPTICS_KEY = 'prostim-haptics';
+let hapticsOn = readSetting(HAPTICS_KEY, '1') !== '0';
+const hapticPatterns = { select: [5], tap: [9], soft: [4], heavy: [16], success: [9, 70, 14], warn: [14, 60, 14], error: [24, 50, 24, 50, 24] };
+const iosTicks = { select: 1, tap: 1, soft: 1, heavy: 1, success: 2, warn: 2, error: 3 };
+let lastHaptic = 0;
+
+const appleTouch = () => /iP(hone|ad|od)/.test(navigator.userAgent || '') || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const hapticsSupported = () => typeof navigator.vibrate === 'function' || appleTouch();
+
+function iosTick() {
+  const label = document.createElement('label');
+  label.setAttribute('aria-hidden', 'true');
+  label.style.display = 'none';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.setAttribute('switch', '');
+  label.appendChild(input);
+  document.head.appendChild(label);
+  label.click();
+  label.remove();
+}
+
+function haptic(kind = 'tap') {
+  if (!hapticsOn || typeof document.createElement !== 'function') return;
+  const now = Date.now();
+  // Ticks in a burst (a fast scroll past several cards) merge into one.
+  if (now - lastHaptic < (kind === 'select' ? 60 : 30)) return;
+  lastHaptic = now;
+  try {
+    if (appleTouch()) {
+      iosTick();
+      for (let index = 1; index < (iosTicks[kind] || 1); index += 1) setTimeout(iosTick, index * 95);
+    } else navigator.vibrate?.(hapticPatterns[kind] || hapticPatterns.tap);
+  } catch {}
+}
+
+// Which taps answer with which tick. Everything else stays silent: a buzz on every button tires.
+const hapticActions = {
+  vote: 'tap', save: 'tap', 'like-comment': 'tap', follow: 'tap', watch: 'tap', repost: 'tap', react: 'tap', copy: 'tap',
+  'comment-accept': 'success', 'playtest-join': 'tap', 'pin-comment': 'tap', 'plus-trial': 'tap',
+  'hub-tab': 'select', 'set-option': 'select', 'feed-mode': 'select', 'feed-modes': 'select', 'auth-mode': 'select', 'fb-filter': 'select', 'fb-open': 'select', pane: 'select', gallery: 'select', 'hub-check': 'select', 'hub-steam': 'select', 'comment-label': 'select', 'comment-sort': 'select',
+  'delete-comment': 'warn', 'delete-project': 'warn', 'playtest-close': 'warn', block: 'warn'
+};
+
+// Navigation: the tab bar, the three parts at the top and the tabs inside a part tick softly.
+document.addEventListener?.('click', event => {
+  if (event.target?.closest?.('#dock a, #dock button, .services a, .subnav a, .ws-tabs button, .seg button')) haptic('select');
+}, { capture: true });
+
+// Switches in the settings and elsewhere.
+document.addEventListener?.('change', event => {
+  if (['checkbox', 'radio'].includes(event.target?.type) && !event.target.hasAttribute?.('switch')) haptic('select');
+});
+
+/* Motion on the Steam and ИИ-мир pages: objects behind the content drift at their own depth as the page
+   scrolls, the hero drop and the neural core move faster than the text in front of them, blocks rise
+   into place the first time they scroll in, and the scene leans after the mouse or the tilt of the
+   phone. Everything is CSS transforms driven by three numbers on <html>: --sy (scroll), --px and --py
+   (lean, from -1 to 1). With «reduce motion» the scene stands still. */
+
+const motionPages = ['steam', 'ai'];
+const reducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+let ambient = null;
+let motionFrame = 0;
+let motionLean = { x: 0, y: 0 };
+let revealRoute = '';
+let revealObserver = null;
+
+// Each object: where it floats (percent of the screen), how fast it follows the scroll (depth) and its look.
+const ambientScenes = {
+  steam: [
+    ['drop far', 12, 18, 0.12], ['drop', 82, 34, 0.28], ['drop near', 70, 92, 0.55], ['drop far', 30, 120, 0.18],
+    ['film', 88, 8, 0.2], ['film small', 6, 66, 0.4], ['shard', 58, 54, 0.34], ['shard alt', 18, 150, 0.46],
+    ['glint', 24, 30, 0.22], ['glint', 64, 76, 0.3], ['glint', 90, 130, 0.38], ['glint', 40, 170, 0.26]
+  ],
+  ai: [
+    ['orb violet', 86, 12, 0.14], ['orb cyan', 8, 58, 0.24], ['orb violet small', 74, 118, 0.36],
+    ['net', 70, 40, 0.2], ['net alt', 12, 132, 0.3], ['ring', 92, 86, 0.18], ['ring small', 4, 18, 0.32],
+    ['bit', 30, 22, 0.42], ['bit', 54, 64, 0.5], ['bit', 80, 150, 0.58], ['bit', 20, 104, 0.46], ['bit', 46, 186, 0.4]
+  ]
+};
+
+// A tiny network: nodes joined by lines, drawn once per page.
+function netSvg() {
+  const nodes = [[12, 20], [44, 8], [78, 26], [64, 62], [28, 70], [90, 78], [50, 40]];
+  const links = [[0, 1], [1, 2], [2, 6], [6, 0], [6, 3], [3, 4], [4, 0], [3, 5], [2, 5]];
+  return `<svg viewBox="0 0 100 90" aria-hidden="true">${links.map(([a, b]) => `<line x1="${nodes[a][0]}" y1="${nodes[a][1]}" x2="${nodes[b][0]}" y2="${nodes[b][1]}"/>`).join('')}${nodes.map(([x, y], index) => `<circle cx="${x}" cy="${y}" r="${index === 6 ? 3.4 : 2.2}"/>`).join('')}</svg>`;
+}
+
+function ambientHtml(section) {
+  return (ambientScenes[section] || []).map(([kind, left, top, depth], index) => `<i class="amb ${kind}" style="--x:${left}%;--y:${top}vh;--d:${depth};--i:${index}"><i>${kind.startsWith('net') ? netSvg() : ''}</i></i>`).join('');
+}
+
+// Sets the scene for the page: objects for Steam or ИИ-мир, nothing elsewhere.
+function syncAmbient(view) {
+  if (typeof document.createElement !== 'function' || !document.body?.insertBefore) return;
+  const section = motionPages.includes(view) ? view : '';
+  if (!section) revealRoute = '';
+  if (!ambient) {
+    ambient = document.createElement('div');
+    ambient.id = 'ambient';
+    ambient.setAttribute('aria-hidden', 'true');
+    document.body.insertBefore(ambient, main);
+  }
+  if (ambient.dataset.section !== section) {
+    ambient.dataset.section = section;
+    ambient.innerHTML = section ? ambientHtml(section) : '';
+  }
+  document.documentElement.classList.toggle('motion-page', Boolean(section) && !reducedMotion());
+  updateMotion();
+}
+
+function updateMotion() {
+  motionFrame = 0;
+  const root = document.documentElement;
+  if (!root?.style) return;
+  root.style.setProperty('--sy', String(Math.round(window.scrollY || 0)));
+  root.style.setProperty('--px', motionLean.x.toFixed(3));
+  root.style.setProperty('--py', motionLean.y.toFixed(3));
+}
+
+function queueMotion() {
+  if (motionFrame || !document.documentElement?.classList?.contains('motion-page')) return;
+  motionFrame = requestAnimationFrame(updateMotion);
+}
+
+window.addEventListener?.('scroll', queueMotion, { passive: true });
+
+// The mouse on a computer leans the scene a little.
+document.addEventListener?.('pointermove', event => {
+  if (event.pointerType !== 'mouse') return;
+  motionLean = { x: (event.clientX / innerWidth) * 2 - 1, y: (event.clientY / innerHeight) * 2 - 1 };
+  queueMotion();
+}, { passive: true });
+
+// The tilt of a phone does the same. Android gives it freely; iPhone asks for permission, so it is not
+// asked for — on iPhone the scene follows the scroll only.
+if (typeof window.DeviceOrientationEvent === 'function' && typeof window.DeviceOrientationEvent.requestPermission !== 'function') {
+  window.addEventListener?.('deviceorientation', event => {
+    if (event.gamma == null || event.beta == null) return;
+    motionLean = { x: Math.max(-1, Math.min(1, event.gamma / 25)), y: Math.max(-1, Math.min(1, (event.beta - 50) / 25)) };
+    queueMotion();
+  }, { passive: true });
+}
+
+// Blocks rise into place the first time they scroll into view; a redraw of the same page keeps them put.
+const revealSelector = ':is(.steam-hero, .ai-hero, .money-split, .block, .perk, .game-card, .ws-card, .how-node, .how .privacy, .studio-card, .blocks-2 > *, .tile-grid > *, .topic-row, .method)';
+
+function revealBlocks(view) {
+  revealObserver?.disconnect();
+  revealObserver = null;
+  if (!motionPages.includes(view) || reducedMotion() || typeof IntersectionObserver !== 'function' || !main.querySelectorAll) return;
+  const key = location.hash;
+  const again = revealRoute === key;
+  revealRoute = key;
+  if (again) return;
+  // Only the innermost matches move: a grid stays, its cards rise one after another.
+  const items = [...main.querySelectorAll(revealSelector)].filter(item => !item.querySelector(revealSelector));
+  revealObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const item = entry.target;
+      revealObserver?.unobserve(item);
+      item.classList.add('in');
+      // Once in place, the classes go: hover and press effects get their own transitions back.
+      setTimeout(() => item.classList.remove('rv', 'in'), 1300);
+    }
+  }, { threshold: 0.08, rootMargin: '0px 0px -6% 0px' });
+  items.forEach(item => {
+    // Neighbours in one row arrive one after another.
+    const siblings = [...(item.parentElement?.children || [])].filter(child => child.matches?.(revealSelector));
+    item.style.setProperty('--rv', String(Math.min(5, Math.max(0, siblings.indexOf(item)))));
+    item.classList.add('rv');
+    revealObserver.observe(item);
+  });
+}
+
 function currentTheme() {
   const value = readSetting(THEME_KEY, 'auto');
   return ['auto', 'dark', 'light'].includes(value) ? value : 'auto';
@@ -5463,7 +5664,7 @@ function renderSettings() {
   const privacyHtml = online ? `<div class="set-field"><b>Кто может писать мне</b>${settingsSeg('messages', [['all', 'Все'], ['following', 'Мои подписки'], ['nobody', 'Никто']], privacy.messages)}<small>Тот, кто уже написал тебе первым, сможет ответить</small></div><div class="set-field"><b>Кто комментирует мои проекты</b>${settingsSeg('comments', [['all', 'Все'], ['following', 'Мои подписки']], privacy.comments)}</div>${settingsToggle('reposts', 'repost', 'Показывать мои репосты', 'Вкладка «Репосты» в профиле и пометка в ленте у подписчиков', privacy.reposts !== false)}${settingsRow('data-action="blocked-sheet"', 'ban', 'Заблокированные', blocked.length ? `${blocked.length} ${plural(blocked.length, 'человек', 'человека', 'человек')}` : 'Никого')}` : '';
   const notices = online ? settingsRow('data-action="notify-settings"', 'bell', 'Уведомления', pushState.subscribed ? 'Push включены на этом устройстве' : 'Push, тихие часы и что присылать') : '';
   const feed = `${settingsRow('data-action="feed-prefs"', 'sparkle', 'Твоя лента', 'Темы и авторы: больше, меньше или никогда')}${settingsToggle('sound', 'music', 'Звук видео в ленте', 'Видео в ленте начинают играть со звуком', readSetting(SOUND_KEY, '0') === '1')}${settingsToggle('saver', 'download', 'Экономия трафика', 'Видео не играют сами, следующие посты не грузятся заранее', dataSaver)}${settingsRow('data-action="reset-taste"', 'refresh', 'Начать ленту заново', 'Забыть, что лента узнала о тебе', '')}`;
-  const look = `<div class="set-field"><b>Тема</b>${settingsSeg('theme', [['auto', 'Как на устройстве'], ['dark', 'Тёмная'], ['light', 'Светлая']], currentTheme())}</div>`;
+  const look = `<div class="set-field"><b>Тема</b>${settingsSeg('theme', [['auto', 'Как на устройстве'], ['dark', 'Тёмная'], ['light', 'Светлая']], currentTheme())}</div>${hapticsSupported() ? settingsToggle('haptics', 'phone', 'Отклик при нажатиях', 'Лёгкая вибрация на лайках, вкладках, отправке и ошибках', hapticsOn) : ''}`;
   const leave = online && me ? `<button class="set-row danger" data-action="logout"><span class="row-mark">${icon('external')}</span><span><b>Выйти из аккаунта</b></span></button>` : '';
   return `<div class="page narrow settings"><h1 class="sr-only">Настройки</h1><button class="set-profile" data-action="edit-profile">${avatar(person, 'lg')}<span><b>${escapeHtml(person.name)}</b><small>@${escapeHtml(person.handle === 'me' ? 'вы' : person.handle)} · Редактировать профиль</small></span>${icon('chevronRight')}</button>${section('Аккаунт', account)}${section('Конфиденциальность', privacyHtml)}${section('Уведомления', notices)}${section('Лента', feed)}${section('Оформление', look)}${section('Приложение', installHtml())}${leave ? `<section class="set-section">${leave}</section>` : ''}</div>`;
 }
@@ -5497,6 +5698,10 @@ function toggleSetting(key, on) {
   else if (key === 'saver') {
     dataSaver = on;
     try { storage.setItem(SAVER_KEY, on ? '1' : '0'); } catch {}
+  } else if (key === 'haptics') {
+    hapticsOn = on;
+    try { storage.setItem(HAPTICS_KEY, on ? '1' : '0'); } catch {}
+    if (on) haptic('success');
   } else if (key === 'sound') {
     feedMuted = !on;
     try { storage.setItem(SOUND_KEY, on ? '1' : '0'); } catch {}
@@ -6340,7 +6545,7 @@ function openReview(id, afterPlay = false) {
     sheet.querySelector('.review-send').disabled = !stars;
   };
   paint();
-  sheet.querySelectorAll('.review-stars button').forEach(button => button.addEventListener('click', () => { stars = Number(button.dataset.star); paint(); }));
+  sheet.querySelectorAll('.review-stars button').forEach(button => button.addEventListener('click', () => { stars = Number(button.dataset.star); haptic(stars >= 4 ? 'tap' : 'select'); paint(); }));
   sheet.querySelectorAll('.review-tags button').forEach(button => button.addEventListener('click', () => {
     const key = button.dataset.tag;
     if (picked.has(key)) picked.delete(key); else picked.add(key);
@@ -6552,7 +6757,7 @@ function openCommentMenu(projectId, commentId, point = null) {
   commentMenuAt = Date.now();
   commentMenuHost.point = point;
   placeCommentMenu();
-  navigator.vibrate?.(10);
+  haptic('heavy');
 }
 
 function showCommentPanel(name) {
@@ -6710,6 +6915,8 @@ async function commentAction(method, projectId, id, path) {
   try {
     const result = await apiCall(method, `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(id)}${path ? `/${path}` : ''}`);
     replaceProject(result.project);
+    if (result.bounty === 'paid') { toast('Тестер получил искры и твою награду'); reloadAll({ rerender: false }); }
+    else if (result.bounty === 'short') toast('Отчёт принят, но на твою награду не хватило искр');
     refresh();
     rerenderComments(projectId);
     rerenderHub(projectId);

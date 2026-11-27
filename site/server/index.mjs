@@ -14,7 +14,7 @@ import { codeLetter, createMailer } from './mail.mjs';
 import { appleName, authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
 import { aiLimits, boostPlan, boostPrice, cleanLookChoice, lookView, MOTION_VIDEO_LIMIT, plusPlan, profileAccents, profileBanners } from '../src/ads.js';
-import { cleanPlaytest, cleanSteam, cleanTestResults, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback, testReportText, testTally } from '../src/ecosystem.js';
+import { cleanPlaytest, playtestSlots, cleanSteam, cleanTestResults, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback, testReportText, testTally } from '../src/ecosystem.js';
 import { cleanFeedPrefs, cleanLabel, cleanReview, commentDigest, commentKind, demoRating, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
 import { vapidKeys } from './push.mjs';
@@ -1288,6 +1288,23 @@ function spendSparks(user, amount, label) {
 
 const rewardLimit = limiter(15, 24 * 3600 * 1000);
 
+// The author's own reward for a test report: sparks move from the author to the tester, once per report.
+function payBounty(project, comment, owner) {
+  const amount = comment.test?.id === project.playtest?.id ? project.playtest.bounty || 0 : 0;
+  const tester = D.users[comment.userId];
+  if (!amount || !tester) return '';
+  tester.sparkRefs ||= [];
+  const key = `bounty:${comment.id}`;
+  if (tester.sparkRefs.includes(key)) return '';
+  if ((owner.sparks || 0) < amount) return 'short';
+  spendSparks(owner, amount, `Награда тестеру · «${project.title}»`);
+  tester.sparkRefs = [...tester.sparkRefs, key].slice(-300);
+  tester.sparks = (tester.sparks || 0) + amount;
+  tester.sparkLog = [{ amount, label: `Награда автора «${project.title}»`, at: Date.now() }, ...(tester.sparkLog || [])].slice(0, 30);
+  notifier.notify(tester.id, { type: 'bounty', actorId: owner.id, projectId: project.id, snippet: String(amount), url: `/#/project/${project.id}` });
+  return 'paid';
+}
+
 // The author accepts a report: the person who wrote it gets sparks.
 on('POST', '/api/projects/:id/comments/:cid/accept', async ({ user, params }) => {
   needUser(user);
@@ -1299,10 +1316,11 @@ on('POST', '/api/projects/:id/comments/:cid/accept', async ({ user, params }) =>
   if (!comment.accepted && !rewardLimit(user.id)) fail(429, 'На сегодня хватит наград');
   comment.accepted = !comment.accepted;
   if (comment.accepted && comment.userId && awardSparks(comment.userId, 'accepted', comment.id)) {
-    notifier.notify(comment.userId, { type: 'accepted', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
+    notifier.notify(comment.userId, { type: 'accepted', actorId: user.id, projectId: project.id, snippet: comment.test ? comment.test.title : comment.text || '', url: `/#/project/${project.id}` });
   }
+  const bounty = comment.accepted && project.ownerId === user.id ? payBounty(project, comment, user) : '';
   db.save();
-  return { project: projectView(project, user.id) };
+  return { project: projectView(project, user.id), bounty };
 });
 
 /* Playtests: the author gives players a task, a build, a prompt and maybe the project folder; reports come
@@ -1317,6 +1335,7 @@ function playtestView(project, meId) {
   const view = {
     id: test.id, title: test.title, steps: test.steps, platform: test.platform, version: test.version, slots: test.slots,
     open: test.open !== false, taken: (test.testers || []).length, reports: reports.length, createdAt: test.createdAt, updatedAt: test.updatedAt || test.createdAt,
+    bounty: test.bounty || 0, boosted: hasPlus(D.users[project.ownerId]),
     access: test.access, joined: Boolean(mine), reported: Boolean(mine?.reportId)
   };
   // The environment is for the people who took the task, and the author.
@@ -1379,6 +1398,9 @@ on('POST', '/api/projects/:id/playtest', async ({ user, params, body }) => {
   if (!fields.title) fail(400, 'Назови задание: что проверить');
   if (!fields.steps.length) fail(400, 'Добавь хотя бы один шаг');
   if (fields.access !== 'none' && !project.workspaceId) fail(400, 'Доступ к папке — когда пост связан с папкой в ИИ-мире');
+  const maxSlots = playtestSlots[hasPlus(user) ? 'plus' : 'free'];
+  if (fields.slots > maxSlots) fail(402, `Больше ${playtestSlots.free} тестеров — с Плюсом`);
+  if (fields.bounty && (user.sparks || 0) < fields.bounty) fail(400, `На награду нужно хотя бы ${fields.bounty} искр, у тебя ${user.sparks || 0}`);
   const current = project.playtest?.open !== false && project.playtest;
   const now = Date.now();
   // Editing keeps the testers; a closed playtest starts over.
