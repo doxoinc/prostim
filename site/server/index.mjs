@@ -667,7 +667,10 @@ function activatePayment(payment) {
     if (promotion && promotion.status === 'pending') Object.assign(promotion, { status: 'active', startsAt: now, endsAt: now + promotion.days * 864e5 });
   } else if (payment.kind === 'plus') {
     const user = D.users[payment.userId];
-    if (user) user.plus = { until: Math.max(now, user.plus?.until || 0) + plusPlan.days * 864e5, since: user.plus?.since || now };
+    if (user) {
+      user.plus = { until: Math.max(now, user.plus?.until || 0) + plusPlan.days * 864e5, since: user.plus?.since || now };
+      user.plusPaidAt ||= now;
+    }
   }
   db.save();
   pushTo([payment.userId], 'payment', { id: payment.id, status: payment.status });
@@ -743,14 +746,33 @@ on('POST', '/api/plus/sparks', async ({ user }) => {
   if ((user.sparks || 0) < sparkPrices.plusWeek) fail(403, `Нужно ${sparkPrices.plusWeek} искр`);
   spendSparks(user, sparkPrices.plusWeek, 'Неделя Плюса за искры');
   const now = Date.now();
-  user.plus = { ...(user.plus || {}), until: Math.max(now, user.plus?.until || 0) + 7 * 864e5, since: user.plus?.since || now };
+  user.plus = { until: Math.max(now, user.plus?.until || 0) + 7 * 864e5, since: user.plus?.since || now };
   db.save();
   return { plusUntil: user.plus.until, sparks: user.sparks };
 });
 
+function plusTrialOpen(user) {
+  return Boolean(user && !user.plus && !user.plusTrialAt);
+}
+
+function plusPriceFor(user) {
+  return user?.plusPaidAt ? plusPlan.price : plusPlan.firstPrice;
+}
+
+on('POST', '/api/plus/trial', async ({ user }) => {
+  needUser(user);
+  if (!plusTrialOpen(user)) fail(409, 'Пробный день уже был — Плюс можно оформить со скидкой');
+  const now = Date.now();
+  user.plusTrialAt = now;
+  user.plus = { until: now + plusPlan.trialHours * 3600 * 1000, since: now, trial: true };
+  db.save();
+  return { plusUntil: user.plus.until };
+});
+
 on('POST', '/api/plus', async ({ request, user }) => {
   needUser(user);
-  const payment = await startPayment(request, user, { kind: 'plus', amount: plusPlan.price, description: `${plusPlan.title} · ${plusPlan.days} дней`, ref: plusPlan.id });
+  const first = !user.plusPaidAt;
+  const payment = await startPayment(request, user, { kind: 'plus', amount: plusPriceFor(user), description: `${plusPlan.title} · ${plusPlan.days} дней${first ? ' · первый месяц со скидкой' : ''}`, ref: plusPlan.id });
   return { payment: paymentView(payment) };
 });
 
@@ -828,7 +850,7 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
-    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'] } : null,
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'], plusTrial: plusTrialOpen(user), plusPrice: plusPriceFor(user), plusTrialNow: Boolean(hasPlus(user) && user.plus?.trial) } : null,
     activity: meId ? { unread: notifier.unread(meId) } : { unread: 0 },
     watching: meId ? D.projects.filter(project => (project.watchers || []).includes(meId)).map(project => project.id) : [],
     reposted: meId ? D.projects.filter(project => (project.reposts || []).includes(meId)).map(project => project.id) : [],
@@ -1689,6 +1711,15 @@ on('POST', '/api/users/:handle/follow', async ({ user, params }) => {
   db.save();
   if (following) notifier.notify(target.id, { type: 'follow', actorId: user.id, url: `/#/u/${user.handle}` });
   return { following, user: publicUser(target) };
+});
+
+on('GET', '/api/users/:handle/people', async ({ user, params, query }) => {
+  const target = userByHandle(params.handle) || fail(404, 'Автор не найден');
+  const ids = query.get('list') === 'following'
+    ? D.follows[target.id] || []
+    : Object.entries(D.follows).filter(([, list]) => list.includes(target.id)).map(([id]) => id);
+  const people = ids.map(id => D.users[id]).filter(person => person && !(user && blockedEither(user.id, person.id)));
+  return { people: people.map(person => person.handle) };
 });
 
 on('POST', '/api/users/:handle/rate', async ({ user, params, body }) => {

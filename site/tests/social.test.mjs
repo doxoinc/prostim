@@ -564,3 +564,31 @@ test('a publisher notices a game people hold on to', async () => {
   assert.equal(notice?.text, 'Издатель заметил «Тихий берег»: людям интересно. Подай заявку в Steam — её посмотрят первой');
   assert.ok((await dev('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id).publisherNoticed > 0);
 });
+
+test('Plus: a free day once for people who never had it, the first paid month at half price; who follows whom', async () => {
+  const fresh = await person('trialfresh');
+  let account = (await fresh('GET', '/api/bootstrap')).body.account;
+  assert.deepEqual([account.plusTrial, account.plusPrice, account.plusUntil], [true, 149, 0]);
+  const trial = (await fresh('POST', '/api/plus/trial')).body;
+  assert.ok(trial.plusUntil > Date.now() + 23 * 3600 * 1000 && trial.plusUntil <= Date.now() + 24 * 3600 * 1000);
+  account = (await fresh('GET', '/api/bootstrap')).body.account;
+  assert.deepEqual([account.plusTrial, account.plusTrialNow], [false, true]);
+  assert.equal((await fresh('POST', '/api/plus/trial')).status, 409, 'only once');
+  const first = (await fresh('POST', '/api/plus')).body.payment;
+  assert.equal(first.amount, 149);
+  await fresh('POST', `/api/payments/${first.id}/test`);
+  account = (await fresh('GET', '/api/bootstrap')).body.account;
+  assert.deepEqual([account.plusPrice, account.plusTrialNow], [299, false]);
+  assert.ok(account.plusUntil > Date.now() + 30 * 864e5, 'the paid month adds to the free day');
+  assert.equal((await fresh('POST', '/api/plus')).body.payment.amount, 299);
+
+  const fan = await person('peoplefan');
+  const other = await person('peopleother');
+  await fan('POST', '/api/users/trialfresh/follow');
+  await other('POST', '/api/users/trialfresh/follow');
+  await fresh('POST', '/api/users/peoplefan/follow');
+  assert.deepEqual((await fan('GET', '/api/users/trialfresh/people?list=followers')).body.people.sort(), ['peoplefan', 'peopleother']);
+  assert.deepEqual((await fan('GET', '/api/users/trialfresh/people?list=following')).body.people, ['peoplefan']);
+  await other('POST', '/api/users/peoplefan/block');
+  assert.deepEqual((await other('GET', '/api/users/trialfresh/people?list=following')).body.people, [], 'blocked people are left out');
+});

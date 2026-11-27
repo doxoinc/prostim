@@ -379,7 +379,7 @@ test('promotion: paid in test mode, shown to others between posts, never to Plus
   assert.equal(stats.shown, 2, 'each viewer counts once, the author not at all');
   assert.equal(stats.clicks, 1);
   const plus = await viewer('POST', '/api/plus');
-  assert.equal(plus.body.payment.amount, 299);
+  assert.equal(plus.body.payment.amount, 149, 'the first month is at half price');
   await viewer('POST', `/api/payments/${plus.body.payment.id}/test`);
   const after = (await viewer('GET', '/api/bootstrap')).body;
   assert.deepEqual(after.ads, [], 'Plus means no ads');

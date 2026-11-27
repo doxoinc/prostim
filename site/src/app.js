@@ -3,7 +3,7 @@ import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers, helpLevels, helpPoints, helpAreas, commentHelp } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
-import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds } from './ads.js';
+import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds, PLUS_DISCOUNT } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
 import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
@@ -789,7 +789,7 @@ function feedAds() {
 
 function plusFeedItem() {
   const perks = plusPlan.perks.slice(0, 3).map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('');
-  return `<section class="feed-item is-ad plus-ad" data-ad="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button><div class="card-media plus-promo"><div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info"><span class="reason-chip ad">${icon('megaphone')}Реклама про.стим</span><h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">Оформить · ${plusPlan.price} ₽ в месяц</button></div></div></article></section>`;
+  return `<section class="feed-item is-ad plus-ad" data-ad="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button><div class="card-media plus-promo"><div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info"><span class="reason-chip ad">${icon('megaphone')}Реклама про.стим</span><h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">${remote?.account?.plusTrial ? `Попробовать бесплатно · ${plusPlan.trialHours} часа` : `Первый месяц · ${remote?.account?.plusPrice || plusPlan.price} ₽`}</button></div></div></article></section>`;
 }
 
 // The card before an ad gets a pearly wave along its bottom edge and a «skip» pill, so the ad never
@@ -1196,9 +1196,9 @@ function searchResults() {
   return `<div class="search-hits">${found.slice(0, 40).map(({ project, snippet }) => `<button class="search-hit" data-action="open-project" data-id="${escapeHtml(project.id)}"><span class="search-thumb">${scene(project, 0, 'still')}</span><span class="search-text"><b>${escapeHtml(project.title)}</b><small>@${escapeHtml(project.handle)} · ${escapeHtml(categoryNames[project.category] || '')}</small><em>${snippet || escapeHtml(project.summary)}</em></span></button>`).join('')}</div>`;
 }
 
-function followPill(handle, className = '') {
+function followPill(handle, className = '', short = false) {
   const followed = state.follows.includes(handle);
-  return `<button class="follow-pill ${followed ? 'on' : ''} ${className}" data-action="follow" data-handle="${escapeHtml(handle)}" aria-pressed="${followed}">${followed ? `${icon('check')} Вы подписаны` : 'Подписаться'}</button>`;
+  return `<button class="follow-pill ${followed ? 'on' : ''} ${className}" data-action="follow" data-handle="${escapeHtml(handle)}" aria-pressed="${followed}">${followed ? `${icon('check')} ${short ? 'В подписках' : 'Вы подписаны'}` : 'Подписаться'}</button>`;
 }
 
 function authorsList() {
@@ -1220,7 +1220,7 @@ function renderSearch() {
 function creatorsHtml() {
   const authors = authorsList();
   if (!authors.length) return `<p class="muted-line">Авторов не нашли</p>`;
-  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small')}</div>`).join('');
+  return authors.map(project => `<div class="creator"><button class="creator-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, 'lg', userByHandle(project.handle), true)}<b>${escapeHtml(project.author)}</b>${project.person ? trustBadge(project.person, true) || `<small class="creator-sub">@${escapeHtml(project.handle)}</small>` : ''}</button>${followPill(project.handle, 'small', true)}</div>`).join('');
 }
 
 /* Inbox */
@@ -1483,12 +1483,6 @@ function profileAvatarHtml(person, handle) {
   return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="${label}">${avatar(person, 'xxl')}${gaugeSvg(person, tier, 16)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}<span class="lvl-badge">${rated ? `★ ${ratingText(person.ratingAverage)}` : '—'}</span></button>`;
 }
 
-function levelChip(person) {
-  const level = Number(person.level) || 1;
-  const tier = levelTier(level);
-  return `<span class="level-chip" style="--ring:${tier.color}"><i></i>Ур. ${level}${person.levelName ? ` · ${escapeHtml(person.levelName)}` : ''}</span>`;
-}
-
 function reviewsHtml(handle) {
   const reviews = reviewsCache.get(handle);
   if (!reviews) return '<div class="loading-line"><span class="dots"><i></i><i></i><i></i></span></div>';
@@ -1516,7 +1510,7 @@ function renderProfile(handle, tab) {
   if (!person) return `<div class="page">${emptyState('user', 'Автор не найден', '<a class="btn btn-ghost" href="#/feed">В ленту</a>')}</div>`;
   const myRating = remote?.myRatings?.[handle];
   const stats = online
-    ? [[person.projects ?? owned.length, 'проектов'], [person.followers ?? 0, 'подписчиков'], [person.following ?? 0, 'подписок'], [person.ratingCount ? String(person.ratingAverage).replace('.', ',') : '—', 'рейтинг']]
+    ? [[person.projects ?? owned.length, 'проектов'], [person.followers ?? 0, 'подписчиков', 'people', 'followers'], [person.following ?? 0, 'подписок', 'people', 'following'], ...(person.help ? [[person.help.points, person.help.title.toLowerCase(), 'help-info']] : [])]
     : mine
       ? [[owned.length, 'проектов'], [state.follows.length, 'подписок'], [state.saved.length, 'сохранено']]
       : [[owned.length, 'проектов'], [owned.reduce((sum, project) => sum + voteCount(project), 0), 'поддержали'], [owned.reduce((sum, project) => sum + commentCount(project), 0), 'комментариев']];
@@ -1555,9 +1549,9 @@ function renderProfile(handle, tab) {
   }
   const base = mine ? '#/me' : `#/u/${encodeURIComponent(handle)}`;
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
-  const badges = `${levelChip(person)}${person.help?.level >= 2 ? `<span class="help-chip">${icon('check')}${escapeHtml(person.help.title)}</span>` : ''}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
+  const badges = `${person.official ? trustBadge(person) : ''}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div>${online ? helpCardHtml(person, handle, mine) : ''}</div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label, action, list]) => action && online ? `<button class="stat-btn" data-action="${action}" data-handle="${escapeHtml(handle)}" ${list ? `data-list="${list}"` : ''}><b>${value}</b>${escapeHtml(label)}</button>` : `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1570,21 +1564,41 @@ function openRate(handle) {
 }
 
 // Help: how a person helped other people's projects. It grows from what authors did with their comments.
-function helpCardHtml(person, handle, mine) {
-  const help = person.help;
-  if (!help || (!mine && !help.points)) return '';
-  const nextLevel = helpLevels[help.level];
-  const kinds = Object.entries(help.kinds || {}).sort((a, b) => b[1] - a[1]).map(([kind, value]) => `<i class="kind-chip ${escapeHtml(kind)}">${escapeHtml(feedbackKinds.find(([key]) => key === kind)?.[1] || kind)} · ${value}</i>`).join('');
-  const area = help.area ? ` · сильнее всего в ${helpAreas[help.area] === 'баги' ? 'поиске багов' : helpAreas[help.area]}` : '';
-  const facts = help.points ? `Помог ${help.projects} ${plural(help.projects, 'проекту', 'проектам', 'проектам')} · пригодилось ${help.helped} ${plural(help.helped, 'отзыв', 'отзыва', 'отзывов')}${help.reviews ? ` · оценил ${help.reviews} ${plural(help.reviews, 'демо', 'демо', 'демо')}` : ''}` : 'Оставляй отзывы на демо и комментарии к чужим проектам: когда автор отметит «Помогло» или отдаст отзыв ИИ, здесь вырастет уровень помощи.';
-  return `<section class="help-card"><button class="help-head" data-action="help-info" data-handle="${escapeHtml(handle)}"><span class="help-badge lv${help.level}">${icon('check')}</span><span><b>${escapeHtml(help.title)}</b><small>Помощь авторам · ${help.points} ${plural(help.points, 'очко', 'очка', 'очков')}${escapeHtml(area)}</small></span>${icon('chevronRight')}</button>${nextLevel ? `<span class="help-bar" aria-hidden="true"><i style="width:${Math.round(help.progress * 100)}%"></i></span><small class="help-next">До «${escapeHtml(nextLevel.name)}» — ${help.next - help.points}</small>` : ''}${kinds ? `<div class="help-kinds">${kinds}</div>` : ''}<p class="help-facts">${facts}</p></section>`;
-}
-
 function openHelpInfo(handle) {
   const person = userByHandle(handle);
   const help = person?.help;
-  const rows = [['Автор отдал отзыв ИИ', helpPoints.tasked], ['Учтено в обновлении', helpPoints.fixed], ['Автор отметил «Помогло»', helpPoints.accepted], ['Комментарий закрепили', helpPoints.pinned], ['Оценка демо', helpPoints.review], ['♥ от других, до 5 на комментарий', helpPoints.like]];
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Помощь авторам</h2><p class="lead">Отдельно от рейтинга: рейтинг — это доверие людей, а помощь — насколько комментарии человека пригодились чужим проектам. Очки дают действия автора, а не число сообщений.</p>${help ? `<p class="fine">${escapeHtml(person.name)}: «${escapeHtml(help.title)}», ${help.points} ${plural(help.points, 'очко', 'очка', 'очков')}.</p>` : ''}<ul class="explain-list">${rows.map(([label, value]) => `<li><b>+${value}</b> — ${label}</li>`).join('')}</ul><div class="help-ladder">${helpLevels.map((level, index) => `<span class="${help && help.level === index + 1 ? 'on' : ''}"><b>${escapeHtml(level.name)}</b><small>${level.from}+</small></span>`).join('')}</div><p class="fine">Свой комментарий можно пометить как баг, идею, отзыв, вопрос или решение — удержи его или нажми «···». Ответ, который помог, может отметить и тот, кто спрашивал.</p></div>`, { kind: 'help-info' });
+  if (!help) return;
+  const mine = isMine(handle);
+  const nextLevel = helpLevels[help.level];
+  const kinds = Object.entries(help.kinds || {}).sort((a, b) => b[1] - a[1]).map(([kind, value]) => `${commentTagHtml(kind)}<b class="kind-count">${value}</b>`).join('');
+  const area = help.area ? `Сильнее всего — ${helpAreas[help.area] === 'баги' ? 'поиск багов' : helpAreas[help.area]}` : '';
+  const facts = help.points
+    ? `Помог ${help.projects} ${plural(help.projects, 'проекту', 'проектам', 'проектам')} · пригодилось ${help.helped} ${plural(help.helped, 'отзыв', 'отзыва', 'отзывов')}${help.reviews ? ` · оценил ${help.reviews} демо` : ''}`
+    : mine ? 'Оставляй отзывы на демо и комментарии к чужим проектам. Когда автор отметит «Помогло» или отдаст отзыв ИИ, уровень вырастет.' : 'Пока без отметок от авторов.';
+  const rows = [['Учтено в обновлении', helpPoints.fixed], ['Автор отдал отзыв ИИ', helpPoints.tasked], ['Отметили «Помогло»', helpPoints.accepted], ['Комментарий закрепили', helpPoints.pinned], ['Оценка демо', helpPoints.review], ['♥ от других, до 5 на комментарий', helpPoints.like]];
+  showDialog(`<div class="sheet-body help-sheet"><div class="help-hero lv${help.level}"><span class="help-badge lv${help.level}">${icon('check')}</span><b id="modal-title">${escapeHtml(help.title)}</b><small>${mine ? 'Твоя помощь авторам' : `Помощь авторам · ${escapeHtml(person.name)}`}</small><span class="help-score"><b>${help.points}</b> ${plural(help.points, 'очко', 'очка', 'очков')}</span>${nextLevel ? `<span class="help-bar" aria-hidden="true"><i style="width:${Math.round(help.progress * 100)}%"></i></span><small class="help-next">До «${escapeHtml(nextLevel.name)}» — ${help.next - help.points}</small>` : ''}</div>${kinds ? `<div class="help-kinds">${kinds}</div>` : ''}<p class="help-facts">${facts}${area ? `<br>${area}` : ''}</p><h3 class="sheet-h">Как растёт</h3><p class="fine">Отдельно от рейтинга: рейтинг — доверие людей, а помощь — насколько комментарии пригодились чужим проектам. Очки дают действия автора, а не число сообщений.</p><ul class="help-points">${rows.map(([label, value]) => `<li><span>${label}</span><b>+${value}</b></li>`).join('')}</ul><div class="help-ladder">${helpLevels.map((level, index) => `<span class="${help.level === index + 1 ? 'on' : ''}"><b>${escapeHtml(level.name)}</b><small>${level.from}+</small></span>`).join('')}</div></div>`, { kind: 'help-info' });
+}
+
+// Who follows a person and whom they follow, in one sheet with two tabs.
+async function openPeople(handle, list = 'followers') {
+  const person = userByHandle(handle);
+  if (!person) return;
+  const draw = (current, handles) => {
+    const tabs = [['followers', 'Подписчики', person.followers ?? 0], ['following', 'Подписки', person.following ?? 0]];
+    const rows = handles === null
+      ? '<div class="loading-line"><span class="dots"><i></i><i></i><i></i></span></div>'
+      : handles.length
+        ? handles.map(item => userByHandle(item)).filter(Boolean).map(user => `<div class="person-row"><button class="author-link" data-action="profile" data-handle="${escapeHtml(user.handle)}">${ringAvatar(user, 'lg', user)}<span><b>${escapeHtml(user.name)}</b><small>@${escapeHtml(user.handle)}</small></span></button>${isMine(user.handle) ? '' : followPill(user.handle, 'small')}</div>`).join('')
+        : `<p class="muted-line">${current === 'followers' ? 'Подписчиков пока нет' : 'Пока ни на кого не подписан'}</p>`;
+    showDialog(`<div class="sheet-body people-sheet"><h2 id="modal-title">${escapeHtml(person.name)}</h2><div class="seg" role="tablist">${tabs.map(([key, label, count]) => `<button role="tab" aria-selected="${key === current}" class="${key === current ? 'on' : ''}" data-action="people" data-handle="${escapeHtml(handle)}" data-list="${key}">${label} · ${count}</button>`).join('')}</div><div class="people-list">${rows}</div></div>`, { kind: 'people', id: handle });
+  };
+  draw(list, null);
+  try {
+    const result = await apiCall('GET', `/api/users/${encodeURIComponent(handle)}/people?list=${list === 'following' ? 'following' : 'followers'}`);
+    if (dialogContext?.kind === 'people' && dialogContext.id === handle) draw(list, result.people || []);
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 function openTrustInfo(handle) {
@@ -2439,12 +2453,52 @@ function plusRowHtml() {
   return `<button class="plus-row" data-action="plus"><span class="plus-mark small">${icon('crown')}</span><span><b>про.стим Плюс</b><small>Без рекламы · ${rub(plusPlan.price)} в месяц</small></span>${icon('chevronRight')}</button>`;
 }
 
+const paywallReasons = {
+  prompt: ['sparkle', 'Промпт с ИИ — часть Плюса', 'ИИ прочитает README, файлы и обсуждение и превратит короткий отзыв в точную задачу для агента'],
+  plus: ['crown', 'Больше возможностей во всех разделах', 'Лента без рекламы, ИИ-мир без тесных лимитов и заявки в Steam без очереди']
+};
+let paywallAfter = null;
+
+// The offer: what Plus gives, a free day for people who never had it, the first month at half price.
+function openPaywall(reason = 'plus', after = null) {
+  if (needLogin('Чтобы попробовать Плюс, войди в аккаунт')) return;
+  paywallAfter = after;
+  const [iconName, title, text] = paywallReasons[reason] || paywallReasons.plus;
+  const account = remote?.account || {};
+  const price = account.plusPrice || plusPlan.price;
+  const discount = price < plusPlan.price ? Math.round((1 - price / plusPlan.price) * 100) : 0;
+  const mode = remote?.config?.payments;
+  const perks = [['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['monitor', 'ИИ-мир: 6 компьютеров, файлы до 100 МБ'], ['gamepad', 'Steam: заявку смотрят первой']];
+  const trial = account.plusTrial ? `<button class="btn btn-grad btn-block pw-trial" data-action="plus-trial">${icon('sparkle')} Попробовать бесплатно · ${plusPlan.trialHours} часа</button><small class="pw-fine">Без карты. Через сутки Плюс просто выключится — ничего не спишется.</small>` : '';
+  const buy = mode ? `<button class="pw-buy ${trial ? '' : 'main'}" data-action="plus-pay"><span><b>${discount ? 'Первый месяц' : 'Месяц'} за ${rub(price)}</b><small>${discount ? `<s>${rub(plusPlan.price)}</s> дальше ${rub(plusPlan.price)} в месяц` : `${plusPlan.days} дней, без автопродления`}</small></span>${discount ? `<em>−${discount}%</em>` : icon('chevronRight')}</button>` : '<p class="pw-fine">Оплата скоро появится</p>';
+  const sparks = sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : '';
+  openLayer(`<div class="paywall"><button class="icon-btn pw-close" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><div class="pw-hero"><i class="pw-orb a"></i><i class="pw-orb b"></i><i class="pw-orb c"></i><span class="pw-crown">${icon(iconName)}</span><span class="pw-kicker">${icon('crown')} ${escapeHtml(plusPlan.title)}</span><h2 id="layer-title">${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div><ul class="pw-perks">${perks.map(([name, label], index) => `<li style="--i:${index}">${icon(name)}<span>${escapeHtml(label)}</span></li>`).join('')}</ul><div class="pw-offer">${trial}${buy}${sparks}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: деньги не списываются.</p>` : ''}</div></div>`, 'paywall');
+}
+
+async function startPlusTrial(button) {
+  button.disabled = true;
+  try {
+    const result = await apiCall('POST', '/api/plus/trial');
+    if (remote?.account) Object.assign(remote.account, { plusUntil: result.plusUntil, plusTrial: false, plusTrialNow: true });
+    closeLayer();
+    toast('Плюс включён на 24 часа — пробуй');
+    const after = paywallAfter;
+    paywallAfter = null;
+    await reloadAll({ rerender: !modal.open });
+    after?.();
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message);
+  }
+}
+
 function openPlus() {
   if (needLogin('Чтобы оформить Плюс, войди в аккаунт')) return;
+  if (!hasPlusNow()) { openPaywall('plus'); return; }
   closeLayer();
   const mode = remote?.config?.payments;
   const until = hasPlusNow() ? `<p class="fine">Сейчас Плюс действует до ${shortDate(remote.account.plusUntil)} — новый месяц добавится сверху.</p>` : '';
-  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя Плюса за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Оформить за ${rub(plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
+  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя Плюса за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Продлить на месяц за ${rub(remote?.account?.plusPrice || plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
 }
 
 // Real payments leave for the bank page; in test mode a stand-in step confirms without money.
@@ -3268,7 +3322,7 @@ document.addEventListener('click', async event => {
   else if (action === 'pay-test') payTest(id, target);
   else if (action === 'plus-pay') {
     target.disabled = true;
-    apiCall('POST', '/api/plus').then(({ payment }) => handlePayment(payment)).catch(error => { target.disabled = false; toast(error.message); });
+    apiCall('POST', '/api/plus').then(({ payment }) => { closeLayer(); handlePayment(payment); }).catch(error => { target.disabled = false; toast(error.message); });
   }
   else if (action === 'home') {
     const feed = document.querySelector('#feed');
@@ -3333,8 +3387,10 @@ document.addEventListener('click', async event => {
   else if (action === 'fb-helpers') { helpersAll = !helpersAll; rerenderHub(id); }
   else if (action === 'comment-menu') {
     const rect = target.getBoundingClientRect?.();
-    openCommentMenu(target.dataset.project, id, rect ? { x: rect.left + rect.width / 2, y: rect.bottom - 6 } : null);
+    openCommentMenu(target.dataset.project, id, rect ? { x: finePointer() ? rect.left : rect.left + rect.width / 2, y: rect.bottom + 4 } : null);
   }
+  else if (action === 'people') openPeople(target.dataset.handle, target.dataset.list || 'followers');
+  else if (action === 'plus-trial') startPlusTrial(target);
   else if (action === 'comment-label') labelComment(target.dataset.project, id, target.dataset.label || '');
   else if (action === 'comment-prompt') openCommentPrompt(target.dataset.project, id);
   else if (action === 'help-info') openHelpInfo(target.dataset.handle);
@@ -5998,18 +6054,30 @@ function commentHtml(project, comment, reply = false) {
   const id = escapeHtml(comment.id || '');
   const pid = escapeHtml(project.id);
   const live = online && Boolean(comment.id);
-  const actions = live ? `<div class="comment-actions">${me ? `<button data-action="reply-comment" data-id="${id}" data-project="${pid}" data-name="${escapeHtml(comment.name)}">Ответить</button>` : ''}<button class="comment-more" data-action="comment-menu" data-id="${id}" data-project="${pid}" aria-label="Действия с комментарием">${icon('more')}</button></div>` : '';
+  const actions = live ? `<div class="comment-actions">${me ? `<button data-action="reply-comment" data-id="${id}" data-project="${pid}" data-name="${escapeHtml(comment.name)}">Ответить</button>` : ''}<button class="comment-more" data-action="comment-menu" data-id="${id}" data-project="${pid}" aria-haspopup="menu" aria-label="Ещё действия с комментарием">${icon('more')}<span>Ещё</span></button></div>` : '';
   const like = live ? `<button class="comment-like ${comment.liked ? 'on' : ''}" data-action="like-comment" data-id="${id}" data-project="${pid}" aria-pressed="${Boolean(comment.liked)}" aria-label="Нравится">${icon('heart')}${comment.likes ? `<b>${comment.likes}</b>` : ''}</button>` : '';
   const help = person?.help?.level >= 2 && !comment.byAuthor ? `<span class="help-title" title="Помощь авторам: ${person.help.points}">${escapeHtml(person.help.title)}</span>` : '';
   const label = comment.label && kindLabels[comment.label]
-    ? `<span class="kind-chip ${escapeHtml(comment.label)}">${kindLabels[comment.label]}</span>`
-    : ownProject && !comment.mine && kindLabels[comment.kind] ? `<span class="kind-chip auto ${escapeHtml(comment.kind)}" title="Определено по тексту">${kindLabels[comment.kind]}</span>` : '';
+    ? commentTagHtml(comment.label)
+    : ownProject && !comment.mine && kindLabels[comment.kind] ? commentTagHtml(comment.kind, true) : '';
   const helped = !comment.byAuthor && (comment.accepted || comment.tasked || comment.resolved)
     ? `<span class="helped-line">${icon('check')}<b>${comment.label === 'solution' && comment.accepted ? 'Решение помогло' : 'Помог проекту'}</b>${comment.resolved ? '<small>учтено в обновлении</small>' : comment.tasked ? '<small>автор отдал ИИ в работу</small>' : ''}</span>` : '';
   return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}" data-project="${pid}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}${help}${label}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.review ? reviewLineHtml(comment.review) : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${helped}${actions}</div>${like}</div>`;
 }
 
 const kindLabels = Object.fromEntries(commentLabels);
+const labelInfo = {
+  bug: ['bug', 'Что-то сломано или работает не так'],
+  idea: ['bulb', 'Что добавить или поменять'],
+  review: ['star', 'Впечатления от игры'],
+  question: ['question', 'Нужен ответ автора или игроков'],
+  solution: ['check', 'Ответ, который решает проблему']
+};
+
+// The type of a comment: a small coloured tag; a guess from the words is shown only to the author, dimmed.
+function commentTagHtml(kind, guess = false) {
+  return `<span class="ctag ${escapeHtml(kind)} ${guess ? 'guess' : ''}" ${guess ? 'title="Определено по тексту"' : ''}>${icon(labelInfo[kind]?.[0] || 'comment')}${kindLabels[kind] || 'Другое'}</span>`;
+}
 
 /* The comment menu: hold a comment (or right-click it, or tap ···) */
 
@@ -6022,6 +6090,8 @@ function closeCommentMenu() {
   if (commentMenuHost?.open) commentMenuHost.close();
 }
 
+const finePointer = () => Boolean(window.matchMedia?.('(hover: hover) and (pointer: fine)').matches) && !isPhone();
+
 function openCommentMenu(projectId, commentId, point = null) {
   const project = projectById(projectId);
   const list = project ? projectComments(project) : [];
@@ -6030,48 +6100,82 @@ function openCommentMenu(projectId, commentId, point = null) {
   const own = isMine(project.handle);
   const root = comment.replyTo ? list.find(item => item.id === comment.replyTo) : null;
   const attrs = `data-id="${escapeHtml(comment.id)}" data-project="${escapeHtml(project.id)}"`;
-  const item = (action, iconName, label, extra = '', className = '') => `<button role="menuitem" class="${className}" data-action="${action}" ${attrs} ${extra}>${icon(iconName)}<span>${label}</span></button>`;
+  const quick = (action, iconName, label, extra = '', on = false) => `<button role="menuitem" class="${on ? 'on' : ''}" data-action="${action}" ${attrs} ${extra}>${icon(iconName)}<span>${label}</span></button>`;
+  const row = (action, iconName, label, extra = '', className = '') => `<button role="menuitem" class="${className}" data-action="${action}" ${attrs} ${extra}>${icon(iconName)}<span>${label}</span></button>`;
   const canLabel = me && (comment.mine || own);
   const canAccept = me && !comment.mine && (own || root?.mine);
-  const items = [
-    me ? item('reply-comment', 'comment', 'Ответить', `data-name="${escapeHtml(comment.name)}"`) : '',
-    me ? item('like-comment', 'heart', comment.liked ? 'Убрать ♥' : 'Нравится') : '',
-    comment.text ? item('copy', 'doc', 'Скопировать текст', `data-copy="${escapeHtml(comment.text)}"`) : '',
-    canAccept ? item('comment-accept', 'check', comment.accepted ? 'Убрать «Помогло»' : own ? 'Помогло проекту' : 'Это помогло') : '',
-    own && !comment.replyTo ? item('pin-comment', 'pin', comment.pinned ? 'Открепить' : 'Закрепить') : '',
-    own && !comment.mine && project.workspaceId ? item('comment-task', 'code', comment.tasked ? 'Ещё задачу ИИ' : 'В задачу ИИ как есть') : '',
-    own && !comment.mine ? `<button role="menuitem" class="cmenu-plus" data-action="comment-prompt" ${attrs}>${icon('sparkle')}<span>Промпт с ИИ<small>разберёт отзыв в контексте проекта</small></span><i class="plus-chip">${icon('crown')}Плюс</i></button>` : '',
-    comment.mine || own ? item('delete-comment', 'trash', 'Удалить', '', 'danger') : '',
-    me && !comment.mine && !own ? item('report', 'flag', 'Пожаловаться', 'data-kind="comment"', 'danger') : ''
-  ].join('');
+  const quickRow = [
+    me ? quick('reply-comment', 'comment', 'Ответить', `data-name="${escapeHtml(comment.name)}"`) : '',
+    me ? quick('like-comment', 'heart', comment.liked ? 'Нравится' : 'Нравится', '', comment.liked) : '',
+    comment.text ? quick('copy', 'doc', 'Копировать', `data-copy="${escapeHtml(comment.text)}"`) : '',
+    canAccept ? quick('comment-accept', 'check', 'Помогло', '', comment.accepted) : ''
+  ].filter(Boolean);
   const current = comment.label || '';
-  const labels = canLabel ? `<div class="cmenu-labels"><small>${comment.mine ? 'Что это?' : 'Пометить отзыв'}</small><div>${commentLabels.map(([key, label]) => `<button class="kind-chip ${key} ${current === key ? 'on' : ''}" data-action="comment-label" ${attrs} data-label="${current === key ? '' : key}" aria-pressed="${current === key}">${label}</button>`).join('')}</div></div>` : '';
+  const typeRow = canLabel ? `<button class="cmenu-type" data-cmenu="kinds">${current ? commentTagHtml(current) : `<span class="ctag none">${icon('tag')}Без типа</span>`}<span>${current ? 'Изменить тип' : comment.mine ? 'Что это: баг, идея, решение…' : 'Указать тип отзыва'}</span>${icon('chevronRight')}</button>` : '';
+  const authorRows = own ? [
+    !comment.replyTo ? row('pin-comment', 'pin', comment.pinned ? 'Открепить' : 'Закрепить сверху') : '',
+    !comment.mine && project.workspaceId ? row('comment-task', 'code', comment.tasked ? 'Ещё задачу ИИ' : 'В задачу ИИ как есть') : '',
+    !comment.mine ? `<button role="menuitem" class="cmenu-plus" data-action="comment-prompt" ${attrs}>${icon('sparkle')}<span>Промпт с ИИ<small>разберёт отзыв в контексте проекта</small></span><i class="plus-chip">${icon('crown')}Плюс</i></button>` : ''
+  ].join('') : '';
+  const dangerRows = [
+    comment.mine || own ? row('delete-comment', 'trash', 'Удалить', '', 'danger') : '',
+    me && !comment.mine && !own ? row('report', 'flag', 'Пожаловаться', 'data-kind="comment"', 'danger') : ''
+  ].join('');
   const text = comment.text || (comment.voice ? 'Голосовой комментарий' : comment.review ? `Оценка демо: ${comment.review.stars} из 5` : '');
+  const main = `<div class="cmenu-preview"><b>${escapeHtml(comment.name)}</b>${text ? `<p>${escapeHtml(text)}</p>` : ''}</div>${quickRow.length ? `<div class="cmenu-quick" style="--n:${quickRow.length}">${quickRow.join('')}</div>` : ''}${typeRow ? `<div class="cmenu-group">${typeRow}</div>` : ''}${authorRows ? `<div class="cmenu-group"><small class="cmenu-head">Автору проекта</small>${authorRows}</div>` : ''}${dangerRows ? `<div class="cmenu-group">${dangerRows}</div>` : ''}`;
+  const kinds = `<div class="cmenu-panel"><div class="cmenu-bar"><button class="icon-btn" data-cmenu="main" aria-label="Назад">${icon('chevronLeft')}</button><b>${comment.mine ? 'Что это за комментарий?' : 'Тип отзыва'}</b><span></span></div><p class="cmenu-note">${comment.mine ? 'Тип увидят все — так автор быстрее найдёт баги и решения.' : 'Поправь, если игрок ошибся: по типу отзывы собираются во вкладке «Отзывы».'}</p>${commentLabels.map(([key, label]) => `<button role="menuitemradio" aria-checked="${current === key}" class="cmenu-kind ${key} ${current === key ? 'on' : ''}" data-action="comment-label" ${attrs} data-label="${key}"><i class="kind-dot">${icon(labelInfo[key][0])}</i><span><b>${label}</b><small>${labelInfo[key][1]}</small></span>${current === key ? icon('check') : ''}</button>`).join('')}${current ? `<button class="cmenu-clear" data-action="comment-label" ${attrs} data-label="">${icon('close')}Убрать тип</button>` : ''}</div>`;
   if (!commentMenuHost) {
     commentMenuHost = document.createElement('dialog');
     commentMenuHost.className = 'cmenu-host';
     commentMenuHost.setAttribute('aria-label', 'Действия с комментарием');
     commentMenuHost.addEventListener('click', event => {
       if (Date.now() - commentMenuAt < 350) return;
+      const nav = event.target.closest?.('[data-cmenu]');
+      if (nav) { showCommentPanel(nav.dataset.cmenu); return; }
       if (event.target === commentMenuHost || event.target.closest?.('[data-action]')) closeCommentMenu();
     });
-    commentMenuHost.addEventListener('close', () => document.querySelectorAll('.comment.held').forEach(row => row.classList.remove('held')));
+    commentMenuHost.addEventListener('close', () => document.querySelectorAll('.comment.held').forEach(item => item.classList.remove('held')));
     document.body.appendChild(commentMenuHost);
   }
-  commentMenuHost.innerHTML = `<div class="cmenu" role="menu" tabindex="-1" autofocus><div class="cmenu-preview"><b>${escapeHtml(comment.name)}</b>${text ? `<p>${escapeHtml(text)}</p>` : ''}</div>${labels}<div class="cmenu-list">${items}</div></div>`;
-  document.querySelectorAll(`.comment[data-comment="${globalThis.CSS?.escape ? CSS.escape(comment.id) : comment.id}"]`).forEach(row => row.classList.add('held'));
+  commentMenuHost.panels = { main, kinds };
+  commentMenuHost.innerHTML = `<div class="cmenu ${finePointer() ? 'desk' : ''}" role="menu" tabindex="-1" autofocus>${main}</div>`;
+  document.querySelectorAll(`.comment[data-comment="${globalThis.CSS?.escape ? CSS.escape(comment.id) : comment.id}"]`).forEach(item => item.classList.add('held'));
   if (!commentMenuHost.open) commentMenuHost.showModal();
   commentMenuAt = Date.now();
-  const menu = commentMenuHost.querySelector('.cmenu');
+  commentMenuHost.point = point;
+  placeCommentMenu();
+  navigator.vibrate?.(10);
+}
+
+function showCommentPanel(name) {
+  const menu = commentMenuHost?.querySelector('.cmenu');
+  if (!menu || !commentMenuHost.panels?.[name]) return;
+  menu.innerHTML = commentMenuHost.panels[name];
+  menu.classList.toggle('sub', name !== 'main');
+  placeCommentMenu(true);
+}
+
+// A phone shows the menu across the middle near the finger; a mouse gets a context menu at the cursor.
+function placeCommentMenu(keep = false) {
+  const menu = commentMenuHost?.querySelector('.cmenu');
+  if (!menu) return;
   const width = menu.offsetWidth || 280;
   const height = menu.offsetHeight || 320;
-  const x = point?.x ?? innerWidth / 2;
-  const y = point?.y ?? innerHeight / 2;
-  const top = y + 12 + height < innerHeight - 12 ? y + 12 : Math.max(12, y - height - 12);
-  menu.style.left = `${Math.round(Math.max(12, Math.min(innerWidth - width - 12, x - width / 2)))}px`;
+  const point = commentMenuHost.point || { x: innerWidth / 2, y: innerHeight / 2 };
+  let left;
+  let top;
+  if (finePointer()) {
+    left = point.x + width + 12 <= innerWidth ? point.x : Math.max(12, point.x - width);
+    top = point.y + height + 12 <= innerHeight ? point.y : Math.max(12, point.y - height);
+    menu.style.transformOrigin = `${left < point.x ? 'right' : 'left'} ${top < point.y ? 'bottom' : 'top'}`;
+  } else {
+    left = (innerWidth - width) / 2;
+    top = point.y + 12 + height < innerHeight - 12 ? point.y + 12 : Math.max(12, Math.min(innerHeight - height - 12, point.y - height - 12));
+    menu.style.transformOrigin = `50% ${top > point.y ? 0 : '100%'}`;
+  }
+  if (keep && menu.style.top) top = Math.min(parseFloat(menu.style.top), Math.max(12, innerHeight - height - 12));
+  menu.style.left = `${Math.round(left)}px`;
   menu.style.top = `${Math.round(top)}px`;
-  menu.style.transformOrigin = `${Math.round(x - parseFloat(menu.style.left))}px ${top > y ? 0 : height}px`;
-  navigator.vibrate?.(10);
 }
 
 async function labelComment(projectId, id, label) {
@@ -6092,7 +6196,7 @@ async function openCommentPrompt(projectId, commentId) {
   const comment = project?.comments?.find(item => item.id === commentId);
   if (!project || !comment) return;
   if (!hasPlusNow()) {
-    openLayer(`<div class="crop comment-task"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><b id="layer-title">Промпт с ИИ</b><span class="plus-chip">${icon('crown')} Плюс</span></div><p class="prompt-pitch">Короткий отзыв вроде «кнопки мелкие» ИИ превратит в точную задачу: прочитает README, файлы проекта и обсуждение, поймёт, о чём речь, и сразу отдаст агенту в папку проекта.</p><button class="btn btn-grad btn-block" data-action="plus">${icon('crown')} Подключить Плюс</button></div>`, 'comment-task');
+    openPaywall('prompt', () => openCommentPrompt(projectId, commentId));
     return;
   }
   if (!project.workspaceId) {

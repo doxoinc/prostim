@@ -183,7 +183,7 @@ test('a post opens as a themed store page; publishing has steps and no stock cov
   assert.doesNotMatch(form, /cover-picker|Интерфейс/);
 });
 
-test('profiles show a rating gauge as one thin arc and the level as a chip, not an XP bar', () => {
+test('profiles show the level and rating in the ring only: one thin arc, no level chip, no XP bar', () => {
   const app = createApp();
   app.navigate('#/me');
   const html = app.elements.get('main').innerHTML;
@@ -192,7 +192,7 @@ test('profiles show a rating gauge as one thin arc and the level as a chip, not 
   assert.match(profileGauge, /<circle class="track"/, 'the profile gauge has a faint full track');
   assert.doesNotMatch(profileGauge, /class="lit"/, 'and no lit arc without ratings');
   assert.match(html, /class="lvl-badge">—</, 'no ratings yet');
-  assert.match(html, /class="level-chip"[^>]*><i><\/i>Ур\. 1/);
+  assert.doesNotMatch(html, /class="level-chip"|class="trust-pill/, 'the ring already shows the level and the rating');
   const gauge = runInContext('gaugeSvg({ ratingCount: 3, ratingAverage: 4.7 }, levelTier(6))', app.context);
   assert.match(gauge, /data-share="0\.94"/, '4,7 of 5 lights 94% of the ring');
   assert.match(gauge, /<circle class="lit"[^>]*stroke-dasharray="271\.7 289\.0"/, 'as one arc, not segments');
