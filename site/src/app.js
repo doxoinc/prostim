@@ -1,13 +1,13 @@
 import { demoProjects, demoFiles, initialTopics, steamDocuments, steamSteps, readinessItems, demoThreads, studio, publisherServices, payoutFlow, payoutFacts, roadmap, steamFaq, PUBLISHER_FEE, publisherPerks, studioGames } from './data.js';
 import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
-import { trustLevels, levelTier, levelTiers } from './trust.js';
+import { trustLevels, levelTier, levelTiers, helpLevels, helpPoints, helpAreas, commentHelp } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
 import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds } from './ads.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
 import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
-import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons, sortComments, commentSorts, feedbackKinds, reviewTags } from './social.js';
+import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons, sortComments, commentSorts, feedbackKinds, reviewTags, commentLabels } from './social.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, imageRatios, focusStyle, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
 
 const main = document.querySelector('main');
@@ -1555,9 +1555,9 @@ function renderProfile(handle, tab) {
   }
   const base = mine ? '#/me' : `#/u/${encodeURIComponent(handle)}`;
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
-  const badges = `${levelChip(person)}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
+  const badges = `${levelChip(person)}${person.help?.level >= 2 ? `<span class="help-chip">${icon('check')}${escapeHtml(person.help.title)}</span>` : ''}${person.plus ? `<span class="plus-chip">${icon('crown')} Плюс</span>` : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}${trustBadge(person)}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head">${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label]) => `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div>${online ? helpCardHtml(person, handle, mine) : ''}</div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1567,6 +1567,24 @@ function openRate(handle) {
   const current = remote.myRatings?.[handle];
   const score = current?.score || 0;
   showDialog(`<div class="sheet-body"><div class="rate-head">${avatar(person, 'lg')}<div><h2 id="modal-title">Оценить ${escapeHtml(person.name)}</h2><p class="lead">Насколько можно доверять этому человеку? Оценка видна всем, одна от тебя.</p></div></div><form id="rate-form" class="form" data-handle="${escapeHtml(handle)}"><div class="star-pick" role="radiogroup" aria-label="Оценка">${[5, 4, 3, 2, 1].map(value => `<label><input type="radio" name="score" value="${value}" ${value === score ? 'checked' : ''} required><span aria-label="${value}">★</span></label>`).join('')}</div><textarea name="text" rows="3" maxlength="500" placeholder="Почему такая оценка? Например: помог с билдом, вовремя ответил" aria-label="Отзыв">${escapeHtml(current?.text || '')}</textarea><button class="btn btn-primary btn-block" type="submit">${icon('check')} Сохранить оценку</button>${current ? `<button type="button" class="text-link" data-action="unrate" data-handle="${escapeHtml(handle)}">Убрать мою оценку</button>` : ''}</form></div>`, { kind: 'rate' });
+}
+
+// Help: how a person helped other people's projects. It grows from what authors did with their comments.
+function helpCardHtml(person, handle, mine) {
+  const help = person.help;
+  if (!help || (!mine && !help.points)) return '';
+  const nextLevel = helpLevels[help.level];
+  const kinds = Object.entries(help.kinds || {}).sort((a, b) => b[1] - a[1]).map(([kind, value]) => `<i class="kind-chip ${escapeHtml(kind)}">${escapeHtml(feedbackKinds.find(([key]) => key === kind)?.[1] || kind)} · ${value}</i>`).join('');
+  const area = help.area ? ` · сильнее всего в ${helpAreas[help.area] === 'баги' ? 'поиске багов' : helpAreas[help.area]}` : '';
+  const facts = help.points ? `Помог ${help.projects} ${plural(help.projects, 'проекту', 'проектам', 'проектам')} · пригодилось ${help.helped} ${plural(help.helped, 'отзыв', 'отзыва', 'отзывов')}${help.reviews ? ` · оценил ${help.reviews} ${plural(help.reviews, 'демо', 'демо', 'демо')}` : ''}` : 'Оставляй отзывы на демо и комментарии к чужим проектам: когда автор отметит «Помогло» или отдаст отзыв ИИ, здесь вырастет уровень помощи.';
+  return `<section class="help-card"><button class="help-head" data-action="help-info" data-handle="${escapeHtml(handle)}"><span class="help-badge lv${help.level}">${icon('check')}</span><span><b>${escapeHtml(help.title)}</b><small>Помощь авторам · ${help.points} ${plural(help.points, 'очко', 'очка', 'очков')}${escapeHtml(area)}</small></span>${icon('chevronRight')}</button>${nextLevel ? `<span class="help-bar" aria-hidden="true"><i style="width:${Math.round(help.progress * 100)}%"></i></span><small class="help-next">До «${escapeHtml(nextLevel.name)}» — ${help.next - help.points}</small>` : ''}${kinds ? `<div class="help-kinds">${kinds}</div>` : ''}<p class="help-facts">${facts}</p></section>`;
+}
+
+function openHelpInfo(handle) {
+  const person = userByHandle(handle);
+  const help = person?.help;
+  const rows = [['Автор отдал отзыв ИИ', helpPoints.tasked], ['Учтено в обновлении', helpPoints.fixed], ['Автор отметил «Помогло»', helpPoints.accepted], ['Комментарий закрепили', helpPoints.pinned], ['Оценка демо', helpPoints.review], ['♥ от других, до 5 на комментарий', helpPoints.like]];
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Помощь авторам</h2><p class="lead">Отдельно от рейтинга: рейтинг — это доверие людей, а помощь — насколько комментарии человека пригодились чужим проектам. Очки дают действия автора, а не число сообщений.</p>${help ? `<p class="fine">${escapeHtml(person.name)}: «${escapeHtml(help.title)}», ${help.points} ${plural(help.points, 'очко', 'очка', 'очков')}.</p>` : ''}<ul class="explain-list">${rows.map(([label, value]) => `<li><b>+${value}</b> — ${label}</li>`).join('')}</ul><div class="help-ladder">${helpLevels.map((level, index) => `<span class="${help && help.level === index + 1 ? 'on' : ''}"><b>${escapeHtml(level.name)}</b><small>${level.from}+</small></span>`).join('')}</div><p class="fine">Свой комментарий можно пометить как баг, идею, отзыв, вопрос или решение — удержи его или нажми «···». Ответ, который помог, может отметить и тот, кто спрашивал.</p></div>`, { kind: 'help-info' });
 }
 
 function openTrustInfo(handle) {
@@ -2423,6 +2441,7 @@ function plusRowHtml() {
 
 function openPlus() {
   if (needLogin('Чтобы оформить Плюс, войди в аккаунт')) return;
+  closeLayer();
   const mode = remote?.config?.payments;
   const until = hasPlusNow() ? `<p class="fine">Сейчас Плюс действует до ${shortDate(remote.account.plusUntil)} — новый месяц добавится сверху.</p>` : '';
   showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя Плюса за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Оформить за ${rub(plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
@@ -3311,19 +3330,15 @@ document.addEventListener('click', async event => {
   else if (action === 'review-demo') openReview(id);
   else if (action === 'fb-filter') { feedbackFilter = target.dataset.kind || 'all'; rerenderHub(id); }
   else if (action === 'fb-open') { feedbackOpenOnly = !feedbackOpenOnly; rerenderHub(id); }
-  else if (action === 'fb-pick') {
-    const key = target.dataset.comment;
-    if (feedbackPicked.has(key)) feedbackPicked.delete(key); else feedbackPicked.add(key);
-    rerenderHub(id);
+  else if (action === 'fb-helpers') { helpersAll = !helpersAll; rerenderHub(id); }
+  else if (action === 'comment-menu') {
+    const rect = target.getBoundingClientRect?.();
+    openCommentMenu(target.dataset.project, id, rect ? { x: rect.left + rect.width / 2, y: rect.bottom - 6 } : null);
   }
-  else if (action === 'fb-all') {
-    const project = projectById(id);
-    const rows = [...(modal.querySelectorAll?.(`.hub[data-hub="${id}"] .fb-row`) || [])].map(row => row.dataset.comment);
-    const every = rows.length && rows.every(key => feedbackPicked.has(key));
-    for (const key of rows) if (every) feedbackPicked.delete(key); else feedbackPicked.add(key);
-    if (project) rerenderHub(id);
-  }
-  else if (action === 'fb-task') openFeedbackTask(id);
+  else if (action === 'comment-label') labelComment(target.dataset.project, id, target.dataset.label || '');
+  else if (action === 'comment-prompt') openCommentPrompt(target.dataset.project, id);
+  else if (action === 'help-info') openHelpInfo(target.dataset.handle);
+  else if (action === 'fb-task') openFeedbackTask(id, target.dataset.kind);
   else if (action === 'hub-repo-check') { target.disabled = true; hubCall(id, 'repo-check', {}, 'Репозиторий проверен'); }
   else if (action === 'hub-steam') hubCall(id, 'steam', { status: target.dataset.status }).then(result => { if (result?.releaseBoost) toast('Поздравляем с релизом! Пост сутки продвигается бесплатно'); });
   else if (action === 'hub-check') {
@@ -4396,7 +4411,26 @@ document.addEventListener('contextmenu', event => {
   const row = event.target.closest?.('.msg-row[data-msg]');
   if (row) { event.preventDefault(); openReactBar(row); }
 });
+document.addEventListener('pointerdown', event => {
+  clearTimeout(commentHold);
+  const row = event.target.closest?.('.comment[data-comment]');
+  if (!online || !row?.dataset.comment || event.button > 0 || event.target.closest('[data-action], a, input, textarea, audio, video')) return;
+  commentHoldStart = { x: event.clientX, y: event.clientY };
+  commentHold = setTimeout(() => openCommentMenu(row.dataset.project, row.dataset.comment, commentHoldStart), 480);
+});
+['pointerup', 'pointercancel'].forEach(name => document.addEventListener(name, () => clearTimeout(commentHold)));
+document.addEventListener('pointermove', event => {
+  if (commentHoldStart && Math.hypot(event.clientX - commentHoldStart.x, event.clientY - commentHoldStart.y) > 8) clearTimeout(commentHold);
+});
+document.addEventListener('contextmenu', event => {
+  const row = event.target.closest?.('.comment[data-comment]');
+  if (!online || !row?.dataset.comment) return;
+  event.preventDefault();
+  clearTimeout(commentHold);
+  openCommentMenu(row.dataset.project, row.dataset.comment, { x: event.clientX, y: event.clientY });
+});
 modal.addEventListener('close', () => {
+  closeCommentMenu();
   resetSheet();
   modal.querySelectorAll?.('video').forEach(video => video.pause?.());
   document.querySelectorAll?.('.feed-item.in-view').forEach(syncFeedVideo);
@@ -4461,7 +4495,7 @@ function hubCodeHtml(project) {
   }
   const task = linked.lastTask;
   const last = task ? `<div class="hub-task"><span class="hub-task-state ${escapeHtml(task.status)}"></span><span><b>${escapeHtml(task.prompt.split('\n')[0].slice(0, 90))}</b><small>${escapeHtml(statusNames[task.status] || task.status)} · ${timeAgo(task.createdAt) || ''}</small></span></div>` : '<p class="hub-hint">Задач пока не было.</p>';
-  return `<a class="hub-ws" href="#/ai/w/${encodeURIComponent(linked.id)}"><span class="ws-head-icon">${icon('folder')}<i class="presence ${linked.device?.online ? 'on' : ''}"></i></span><span><b>${escapeHtml(linked.name)}</b><small>${escapeHtml(linked.device?.name || '')} · ${linked.device?.online ? 'в сети' : 'не в сети'} · задач: ${linked.taskCount || 0}</small></span>${icon('chevronRight')}</a>${last}<div class="hub-actions"><button class="btn btn-ghost btn-sm" data-action="hub-demo-task" data-id="${pid}">${icon('play')} ${project.demo ? 'Обновить веб-демо' : 'Собрать веб-демо'}</button>${commentCount(project) ? `<button class="btn btn-ghost btn-sm" data-action="hub-digest-task" data-id="${pid}">${icon('sparkle')} План по всем отзывам</button>` : ''}<button class="btn btn-ghost btn-sm" data-action="hub-link" data-id="${pid}" data-workspace="">${icon('close')} Отвязать</button></div><p class="hub-hint">Агент соберёт веб-версию и выложит её на GitHub Pages, itch.io или Netlify — ссылка сама предложится в пост. Отзывы игроков — во вкладке «Отзывы»: отметь нужные и отправь агенту одной задачей.</p>`;
+  return `<a class="hub-ws" href="#/ai/w/${encodeURIComponent(linked.id)}"><span class="ws-head-icon">${icon('folder')}<i class="presence ${linked.device?.online ? 'on' : ''}"></i></span><span><b>${escapeHtml(linked.name)}</b><small>${escapeHtml(linked.device?.name || '')} · ${linked.device?.online ? 'в сети' : 'не в сети'} · задач: ${linked.taskCount || 0}</small></span>${icon('chevronRight')}</a>${last}<div class="hub-actions"><button class="btn btn-ghost btn-sm" data-action="hub-demo-task" data-id="${pid}">${icon('play')} ${project.demo ? 'Обновить веб-демо' : 'Собрать веб-демо'}</button>${commentCount(project) ? `<button class="btn btn-ghost btn-sm" data-action="hub-digest-task" data-id="${pid}">${icon('sparkle')} План по всем отзывам</button>` : ''}<button class="btn btn-ghost btn-sm" data-action="hub-link" data-id="${pid}" data-workspace="">${icon('close')} Отвязать</button></div><p class="hub-hint">Агент соберёт веб-версию и выложит её на GitHub Pages, itch.io или Netlify — ссылка сама предложится в пост. Удерживай комментарий игрока — его можно отдать агенту как есть или, с Плюсом, ИИ сначала разберёт его в контексте проекта.</p>`;
 }
 
 function projectReadiness(project) {
@@ -4513,7 +4547,7 @@ function demoDraftHtml(project) {
 
 let feedbackFilter = 'all';
 let feedbackOpenOnly = true;
-const feedbackPicked = new Set();
+let helpersAll = false;
 const kindOrder = feedbackKinds.map(([key]) => key);
 
 // Comments and demo reviews from players, without the author's own replies.
@@ -4521,41 +4555,64 @@ function playerFeedback(project) {
   return projectComments(project).filter(comment => comment.id && !comment.mine && !comment.byAuthor && !hiddenLocally.has(`c:${comment.id}`));
 }
 
+// Who helped this project: the same points as the help level, counted for this post only.
+function projectHelpers(project) {
+  const people = new Map();
+  for (const comment of playerFeedback(project)) {
+    const key = comment.handle || comment.name;
+    const entry = people.get(key) || { handle: comment.handle, name: comment.name, initials: comment.initials, color: comment.color, avatar: comment.avatar, points: 0, comments: 0, helped: 0, kinds: {}, reviewed: false };
+    const { points, helpful } = commentHelp(comment);
+    entry.points += points;
+    entry.comments += 1;
+    if (comment.review && !entry.reviewed) { entry.reviewed = true; entry.points += helpPoints.review; }
+    if (helpful) { entry.helped += 1; entry.kinds[comment.kind] = (entry.kinds[comment.kind] || 0) + 1; }
+    people.set(key, entry);
+  }
+  return [...people.values()].sort((a, b) => b.points - a.points || b.comments - a.comments);
+}
+
+function openFeedbackOf(project, kind) {
+  return playerFeedback(project).filter(comment => !comment.resolved && !comment.tasked && comment.kind === kind);
+}
+
 function hubFeedbackHtml(project) {
   const pid = escapeHtml(project.id);
   const all = playerFeedback(project);
   if (!all.length) return `<p class="hub-hint">${project.demo ? 'Отзывов пока нет. Игроки оценят демо прямо из ленты — звёзды, отметки и пара слов появятся здесь.' : 'Отзывов пока нет. Добавь веб-демо — в него сыграют прямо с телефона и оставят отзыв. Собрать его может ИИ во вкладке «Код и ИИ».'}</p>`;
   const pool = feedbackOpenOnly ? all.filter(comment => !comment.resolved) : all;
-  const count = key => pool.filter(comment => (comment.kind || 'other') === key).length;
-  const shown = pool.filter(comment => feedbackFilter === 'all' || (comment.kind || 'other') === feedbackFilter)
-    .sort((a, b) => kindOrder.indexOf(a.kind || 'other') - kindOrder.indexOf(b.kind || 'other') || (b.createdAt || 0) - (a.createdAt || 0));
-  for (const id of [...feedbackPicked]) if (!all.some(comment => comment.id === id)) feedbackPicked.delete(id);
+  const count = key => pool.filter(comment => comment.kind === key).length;
+  const shown = pool.filter(comment => feedbackFilter === 'all' || comment.kind === feedbackFilter)
+    .sort((a, b) => kindOrder.indexOf(a.kind) - kindOrder.indexOf(b.kind) || (b.createdAt || 0) - (a.createdAt || 0));
   const rating = project.demoRating;
-  const reviews = all.filter(comment => comment.review);
   const latest = new Map();
-  for (const comment of [...reviews].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))) latest.set(comment.handle || comment.id, comment.review);
+  for (const comment of all.filter(item => item.review).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))) latest.set(comment.handle || comment.id, comment.review);
   const spread = [5, 4, 3, 2, 1].map(step => [step, [...latest.values()].filter(review => review.stars === step).length]);
   const tagCounts = new Map();
   for (const review of latest.values()) for (const tag of review.tags || []) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
   const topTags = [...tagCounts].sort((a, b) => b[1] - a[1]).slice(0, 4);
   const summary = rating?.count ? `<div class="fb-rating"><span class="fb-score"><b>${demoRatingText(project)}</b>${starsHtml(Math.round(rating.average))}<small>${rating.count} ${plural(rating.count, 'оценка', 'оценки', 'оценок')} демо</small></span><span class="fb-spread">${spread.map(([step, value]) => `<span><small>${step}</small><i><i style="width:${Math.round(value / Math.max(1, latest.size) * 100)}%"></i></i></span>`).join('')}</span></div>${topTags.length ? `<p class="fb-tags">Чаще отмечают: ${topTags.map(([tag, value]) => `<i class="${reviewTags.good.some(([key]) => key === tag) ? 'good' : 'bad'}">${escapeHtml(reviewTagNames[tag] || tag)} · ${value}</i>`).join('')}</p>` : ''}` : '';
+  const helpers = projectHelpers(project);
+  const helperRows = (helpersAll ? helpers : helpers.slice(0, 5)).map(person => {
+    const global = person.handle ? userByHandle(person.handle)?.help : null;
+    const kinds = Object.entries(person.kinds).sort((a, b) => b[1] - a[1]).map(([kind, value]) => `${(kindLabels[kind] || 'Другое').toLowerCase()}${value > 1 ? ` ×${value}` : ''}`).join(', ');
+    const note = kinds ? `помог: ${kinds}` : `${person.comments} ${plural(person.comments, 'комментарий', 'комментария', 'комментариев')}${person.reviewed ? ', оценил демо' : ''}`;
+    return `<button class="helper-row" ${person.handle ? `data-action="profile" data-handle="${escapeHtml(person.handle)}"` : 'disabled'}>${avatar(person)}<span><b>${escapeHtml(person.name)}${global?.level >= 2 ? `<i class="help-title">${escapeHtml(global.title)}</i>` : ''}</b><small>${escapeHtml(note)}</small></span><em>+${person.points}</em></button>`;
+  }).join('');
+  const helpersBlock = `<div class="hub-group"><h4>Кто помог</h4><div class="helpers">${helperRows}</div>${helpers.length > 5 ? `<button class="text-link inline" data-action="fb-helpers" data-id="${pid}">${helpersAll ? 'Свернуть' : `Все ${helpers.length}`}</button>` : ''}</div>`;
   const filters = `<div class="fb-kinds" role="radiogroup" aria-label="Что показать"><button role="radio" aria-checked="${feedbackFilter === 'all'}" class="${feedbackFilter === 'all' ? 'on' : ''}" data-action="fb-filter" data-id="${pid}" data-kind="all">Все <b>${pool.length}</b></button>${feedbackKinds.filter(([key]) => count(key) || feedbackFilter === key).map(([key, label]) => `<button role="radio" aria-checked="${feedbackFilter === key}" class="${feedbackFilter === key ? 'on' : ''} ${key}" data-action="fb-filter" data-id="${pid}" data-kind="${key}">${label} <b>${count(key)}</b></button>`).join('')}</div><button class="fb-open ${feedbackOpenOnly ? 'on' : ''}" data-action="fb-open" data-id="${pid}" aria-pressed="${feedbackOpenOnly}"><i class="toggle" aria-hidden="true"></i>Только неучтённые</button>`;
   const rows = shown.length ? shown.map(comment => {
-    const on = feedbackPicked.has(comment.id);
     const text = comment.text || (comment.voice ? 'Голосовой комментарий' : comment.review ? 'Без текста' : '');
-    const flag = comment.resolved ? `<span class="comment-flag ok">${icon('check')}Учтено</span>` : comment.tasked ? `<span class="comment-flag ai">${icon('sparkle')}У ИИ</span>` : '';
-    return `<button class="fb-row ${on ? 'on' : ''}" data-action="fb-pick" data-id="${pid}" data-comment="${escapeHtml(comment.id)}" aria-pressed="${on}"><i class="fb-check">${icon('check')}</i><span class="fb-main"><span class="fb-top"><b>${escapeHtml(comment.name)}</b>${comment.review ? starsHtml(comment.review.stars, 'small') : ''}${kindLabels[comment.kind] ? `<span class="kind-chip ${escapeHtml(comment.kind)}">${kindLabels[comment.kind]}</span>` : ''}${flag}<small>${escapeHtml(timeAgo(comment.createdAt) || '')}</small></span><span class="fb-text">${escapeHtml(text)}</span>${comment.review?.tags?.length ? `<span class="fb-marks">${comment.review.tags.map(tag => escapeHtml(reviewTagNames[tag] || tag)).join(' · ')}</span>` : ''}</span></button>`;
+    const flag = comment.resolved ? `<span class="comment-flag ok">${icon('check')}Учтено</span>` : comment.tasked ? `<span class="comment-flag ai">${icon('sparkle')}У ИИ</span>` : comment.accepted ? `<span class="comment-flag ok">${icon('check')}Помог</span>` : '';
+    return `<button class="fb-row" data-action="comment-menu" data-id="${escapeHtml(comment.id)}" data-project="${pid}"><span class="fb-main"><span class="fb-top"><b>${escapeHtml(comment.name)}</b>${comment.review ? starsHtml(comment.review.stars, 'small') : ''}${kindLabels[comment.kind] ? `<span class="kind-chip ${comment.label ? '' : 'auto'} ${escapeHtml(comment.kind)}">${kindLabels[comment.kind]}</span>` : ''}${flag}<small>${escapeHtml(timeAgo(comment.createdAt) || '')}</small></span><span class="fb-text">${escapeHtml(text)}</span>${comment.review?.tags?.length ? `<span class="fb-marks">${comment.review.tags.map(tag => escapeHtml(reviewTagNames[tag] || tag)).join(' · ')}</span>` : ''}</span>${icon('more')}</button>`;
   }).join('') : '<p class="hub-hint">Здесь пусто — попробуй другой фильтр.</p>';
-  const chosen = all.filter(comment => feedbackPicked.has(comment.id));
-  const linked = Boolean(project.workspaceId);
-  const prompt = chosen.length ? taskFromFeedback(project, chosen) : '';
-  const bar = `<div class="fb-bar"><button class="text-link inline" data-action="fb-all" data-id="${pid}">${shown.length && shown.every(comment => feedbackPicked.has(comment.id)) ? 'Снять выбор' : 'Выбрать все'}</button><span></span>${chosen.length ? `<button class="icon-btn" data-action="copy" data-copy="${escapeHtml(prompt)}" aria-label="Скопировать как промпт">${icon('doc')}</button>` : ''}${linked ? `<button class="btn btn-grad btn-sm" data-action="fb-task" data-id="${pid}" ${chosen.length ? '' : 'disabled'}>${icon('sparkle')} В задачу ИИ${chosen.length ? ` · ${chosen.length}` : ''}</button>` : `<button class="btn btn-ghost btn-sm" data-action="hub-tab" data-id="${pid}" data-tab="code">${icon('link')} Связать с кодом</button>`}</div>`;
-  return `${summary}${filters}<div class="fb-list">${rows}</div>${bar}<p class="hub-hint">${linked ? 'Выбранные отзывы уйдут агенту одной задачей: баги, просьбы и вопросы по группам. Когда опубликуешь из неё обновление, авторы отзывов получат по 15 искр.' : 'Свяжи пост с папкой в ИИ-мире — и выбранные отзывы уйдут агенту одной задачей. А пока их можно скопировать как промпт.'}</p>`;
+  const batch = feedbackFilter !== 'all' && project.workspaceId ? openFeedbackOf(project, feedbackFilter) : [];
+  const batchButton = batch.length >= 2 ? `<button class="btn btn-ghost btn-block" data-action="fb-task" data-id="${pid}" data-kind="${escapeHtml(feedbackFilter)}">${icon('sparkle')} Отдать ИИ ${batch.length} ${plural(batch.length, 'открытый', 'открытых', 'открытых')} одной задачей</button>` : '';
+  return `${summary}${helpersBlock}<div class="hub-group"><h4>Все отзывы</h4>${filters}<div class="fb-list">${rows}</div>${batchButton}</div><p class="hub-hint">${icon('more')} Удерживай комментарий или нажми на отзыв: пометить, отметить «Помогло», отдать ИИ.</p>`;
 }
 
-function openFeedbackTask(projectId) {
+function openFeedbackTask(projectId, kind) {
   const project = projectById(projectId);
-  const chosen = project ? playerFeedback(project).filter(comment => feedbackPicked.has(comment.id)) : [];
+  const chosen = project ? openFeedbackOf(project, kind) : [];
   if (!chosen.length) return;
   const workspace = linkedWorkspaceFor(project);
   const dialog = openLayer(`<div class="crop comment-task"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">${chosen.length} ${plural(chosen.length, 'отзыв', 'отзыва', 'отзывов')} в задачу</b><span></span></div><p class="hub-hint">Уйдёт в папку «${escapeHtml(workspace?.name || 'проекта')}»${workspace?.device?.name ? ` на компьютере «${escapeHtml(workspace.device.name)}»` : ''}${workspace?.device?.online === false ? ' — он сейчас не в сети, задача подождёт' : ''}. Текст можно поправить.</p><textarea class="field" rows="10" maxlength="8000" aria-label="Текст задачи">${escapeHtml(taskFromFeedback(project, chosen))}</textarea><div class="seg" role="radiogroup"><button role="radio" aria-checked="false" data-mode="read">Только план</button><button role="radio" aria-checked="true" class="on" data-mode="edit">Исправить</button></div><button class="btn btn-grad btn-block task-send">${icon('send')} Отправить в ИИ-мир</button></div>`, 'comment-task');
@@ -4570,7 +4627,6 @@ function openFeedbackTask(projectId) {
     try {
       const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/feedback-task`, { ids: chosen.map(comment => comment.id), prompt: dialog.querySelector('textarea').value, mode });
       replaceProject(result.project);
-      feedbackPicked.clear();
       closeLayer();
       rerenderHub(projectId);
       toast('Задача ушла в ИИ-мир. Когда агент закончит, придёт уведомление');
@@ -5937,23 +5993,152 @@ async function importLink(button) {
 function commentHtml(project, comment, reply = false) {
   const ownProject = isMine(project.handle);
   const name = comment.handle ? `<button class="text-link inline" data-action="profile" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>` : escapeHtml(comment.name);
-  const face = ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', comment.handle ? userByHandle(comment.handle) : null);
+  const person = comment.handle ? userByHandle(comment.handle) : null;
+  const face = ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', person);
   const id = escapeHtml(comment.id || '');
   const pid = escapeHtml(project.id);
   const live = online && Boolean(comment.id);
-  const actions = live ? [
-    me ? `<button data-action="reply-comment" data-id="${id}" data-project="${pid}" data-name="${escapeHtml(comment.name)}">Ответить</button>` : '',
-    ownProject && !reply ? `<button data-action="pin-comment" data-id="${id}" data-project="${pid}">${comment.pinned ? 'Открепить' : 'Закрепить'}</button>` : '',
-    comment.mine || ownProject ? `<button data-action="delete-comment" data-id="${id}" data-project="${pid}">Удалить</button>` : '',
-    ownProject && !comment.mine && me ? `<button data-action="comment-accept" data-id="${id}" data-project="${pid}">${comment.accepted ? 'Снять «принято»' : 'Принять'}</button>` : '',
-    ownProject && !comment.mine && me && project.workspaceId ? `<button data-action="comment-task" data-id="${id}" data-project="${pid}">${comment.tasked ? 'Ещё задачу ИИ' : 'В задачу ИИ'}</button>` : '',
-    me && !comment.mine && !ownProject ? `<button data-action="report" data-kind="comment" data-id="${id}" data-project="${pid}">Пожаловаться</button>` : ''
-  ].join('') : '';
+  const actions = live ? `<div class="comment-actions">${me ? `<button data-action="reply-comment" data-id="${id}" data-project="${pid}" data-name="${escapeHtml(comment.name)}">Ответить</button>` : ''}<button class="comment-more" data-action="comment-menu" data-id="${id}" data-project="${pid}" aria-label="Действия с комментарием">${icon('more')}</button></div>` : '';
   const like = live ? `<button class="comment-like ${comment.liked ? 'on' : ''}" data-action="like-comment" data-id="${id}" data-project="${pid}" aria-pressed="${Boolean(comment.liked)}" aria-label="Нравится">${icon('heart')}${comment.likes ? `<b>${comment.likes}</b>` : ''}</button>` : '';
-  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}${comment.accepted ? `<span class="comment-flag ok">${icon('check')}Принято</span>` : ''}${comment.resolved ? `<span class="comment-flag ok">${icon('check')}Учтено в обновлении</span>` : comment.tasked ? `<span class="comment-flag ai">${icon('sparkle')}В работе у ИИ</span>` : ''}${ownProject && !comment.mine && kindLabels[comment.kind] ? `<span class="kind-chip ${escapeHtml(comment.kind)}">${kindLabels[comment.kind]}</span>` : ''}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.review ? reviewLineHtml(comment.review) : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${actions ? `<div class="comment-actions">${actions}</div>` : ''}</div>${like}</div>`;
+  const help = person?.help?.level >= 2 && !comment.byAuthor ? `<span class="help-title" title="Помощь авторам: ${person.help.points}">${escapeHtml(person.help.title)}</span>` : '';
+  const label = comment.label && kindLabels[comment.label]
+    ? `<span class="kind-chip ${escapeHtml(comment.label)}">${kindLabels[comment.label]}</span>`
+    : ownProject && !comment.mine && kindLabels[comment.kind] ? `<span class="kind-chip auto ${escapeHtml(comment.kind)}" title="Определено по тексту">${kindLabels[comment.kind]}</span>` : '';
+  const helped = !comment.byAuthor && (comment.accepted || comment.tasked || comment.resolved)
+    ? `<span class="helped-line">${icon('check')}<b>${comment.label === 'solution' && comment.accepted ? 'Решение помогло' : 'Помог проекту'}</b>${comment.resolved ? '<small>учтено в обновлении</small>' : comment.tasked ? '<small>автор отдал ИИ в работу</small>' : ''}</span>` : '';
+  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}" data-project="${pid}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}${help}${label}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.review ? reviewLineHtml(comment.review) : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${helped}${actions}</div>${like}</div>`;
 }
 
-const kindLabels = { bug: 'Баг', idea: 'Идея', question: 'Вопрос', praise: 'Похвала' };
+const kindLabels = Object.fromEntries(commentLabels);
+
+/* The comment menu: hold a comment (or right-click it, or tap ···) */
+
+let commentMenuHost = null;
+let commentMenuAt = 0;
+let commentHold = null;
+let commentHoldStart = null;
+
+function closeCommentMenu() {
+  if (commentMenuHost?.open) commentMenuHost.close();
+}
+
+function openCommentMenu(projectId, commentId, point = null) {
+  const project = projectById(projectId);
+  const list = project ? projectComments(project) : [];
+  const comment = list.find(item => item.id === commentId);
+  if (!online || !comment) return;
+  const own = isMine(project.handle);
+  const root = comment.replyTo ? list.find(item => item.id === comment.replyTo) : null;
+  const attrs = `data-id="${escapeHtml(comment.id)}" data-project="${escapeHtml(project.id)}"`;
+  const item = (action, iconName, label, extra = '', className = '') => `<button role="menuitem" class="${className}" data-action="${action}" ${attrs} ${extra}>${icon(iconName)}<span>${label}</span></button>`;
+  const canLabel = me && (comment.mine || own);
+  const canAccept = me && !comment.mine && (own || root?.mine);
+  const items = [
+    me ? item('reply-comment', 'comment', 'Ответить', `data-name="${escapeHtml(comment.name)}"`) : '',
+    me ? item('like-comment', 'heart', comment.liked ? 'Убрать ♥' : 'Нравится') : '',
+    comment.text ? item('copy', 'doc', 'Скопировать текст', `data-copy="${escapeHtml(comment.text)}"`) : '',
+    canAccept ? item('comment-accept', 'check', comment.accepted ? 'Убрать «Помогло»' : own ? 'Помогло проекту' : 'Это помогло') : '',
+    own && !comment.replyTo ? item('pin-comment', 'pin', comment.pinned ? 'Открепить' : 'Закрепить') : '',
+    own && !comment.mine && project.workspaceId ? item('comment-task', 'code', comment.tasked ? 'Ещё задачу ИИ' : 'В задачу ИИ как есть') : '',
+    own && !comment.mine ? `<button role="menuitem" class="cmenu-plus" data-action="comment-prompt" ${attrs}>${icon('sparkle')}<span>Промпт с ИИ<small>разберёт отзыв в контексте проекта</small></span><i class="plus-chip">${icon('crown')}Плюс</i></button>` : '',
+    comment.mine || own ? item('delete-comment', 'trash', 'Удалить', '', 'danger') : '',
+    me && !comment.mine && !own ? item('report', 'flag', 'Пожаловаться', 'data-kind="comment"', 'danger') : ''
+  ].join('');
+  const current = comment.label || '';
+  const labels = canLabel ? `<div class="cmenu-labels"><small>${comment.mine ? 'Что это?' : 'Пометить отзыв'}</small><div>${commentLabels.map(([key, label]) => `<button class="kind-chip ${key} ${current === key ? 'on' : ''}" data-action="comment-label" ${attrs} data-label="${current === key ? '' : key}" aria-pressed="${current === key}">${label}</button>`).join('')}</div></div>` : '';
+  const text = comment.text || (comment.voice ? 'Голосовой комментарий' : comment.review ? `Оценка демо: ${comment.review.stars} из 5` : '');
+  if (!commentMenuHost) {
+    commentMenuHost = document.createElement('dialog');
+    commentMenuHost.className = 'cmenu-host';
+    commentMenuHost.setAttribute('aria-label', 'Действия с комментарием');
+    commentMenuHost.addEventListener('click', event => {
+      if (Date.now() - commentMenuAt < 350) return;
+      if (event.target === commentMenuHost || event.target.closest?.('[data-action]')) closeCommentMenu();
+    });
+    commentMenuHost.addEventListener('close', () => document.querySelectorAll('.comment.held').forEach(row => row.classList.remove('held')));
+    document.body.appendChild(commentMenuHost);
+  }
+  commentMenuHost.innerHTML = `<div class="cmenu" role="menu" tabindex="-1" autofocus><div class="cmenu-preview"><b>${escapeHtml(comment.name)}</b>${text ? `<p>${escapeHtml(text)}</p>` : ''}</div>${labels}<div class="cmenu-list">${items}</div></div>`;
+  document.querySelectorAll(`.comment[data-comment="${globalThis.CSS?.escape ? CSS.escape(comment.id) : comment.id}"]`).forEach(row => row.classList.add('held'));
+  if (!commentMenuHost.open) commentMenuHost.showModal();
+  commentMenuAt = Date.now();
+  const menu = commentMenuHost.querySelector('.cmenu');
+  const width = menu.offsetWidth || 280;
+  const height = menu.offsetHeight || 320;
+  const x = point?.x ?? innerWidth / 2;
+  const y = point?.y ?? innerHeight / 2;
+  const top = y + 12 + height < innerHeight - 12 ? y + 12 : Math.max(12, y - height - 12);
+  menu.style.left = `${Math.round(Math.max(12, Math.min(innerWidth - width - 12, x - width / 2)))}px`;
+  menu.style.top = `${Math.round(top)}px`;
+  menu.style.transformOrigin = `${Math.round(x - parseFloat(menu.style.left))}px ${top > y ? 0 : height}px`;
+  navigator.vibrate?.(10);
+}
+
+async function labelComment(projectId, id, label) {
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(id)}/label`, { label });
+    replaceProject(result.project);
+    rerenderComments(projectId);
+    rerenderHub(projectId);
+    toast(label ? `Помечено: «${kindLabels[label]}»` : 'Пометка снята');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+// Plus: the AI reads the post, README, files and thread and writes a task; it goes to the folder at once.
+async function openCommentPrompt(projectId, commentId) {
+  const project = projectById(projectId);
+  const comment = project?.comments?.find(item => item.id === commentId);
+  if (!project || !comment) return;
+  if (!hasPlusNow()) {
+    openLayer(`<div class="crop comment-task"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Закрыть">${icon('close')}</button><b id="layer-title">Промпт с ИИ</b><span class="plus-chip">${icon('crown')} Плюс</span></div><p class="prompt-pitch">Короткий отзыв вроде «кнопки мелкие» ИИ превратит в точную задачу: прочитает README, файлы проекта и обсуждение, поймёт, о чём речь, и сразу отдаст агенту в папку проекта.</p><button class="btn btn-grad btn-block" data-action="plus">${icon('crown')} Подключить Плюс</button></div>`, 'comment-task');
+    return;
+  }
+  if (!project.workspaceId) {
+    toast('Сначала свяжи пост с папкой в ИИ-мире: блок проекта → «Код и ИИ»');
+    hubTab = 'code';
+    rerenderHub(projectId);
+    return;
+  }
+  const workspace = linkedWorkspaceFor(project);
+  const text = comment.text || (comment.review ? `Оценка демо: ${comment.review.stars} из 5` : 'Голосовой комментарий');
+  const dialog = openLayer(`<div class="crop comment-task prompt-task"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">Промпт с ИИ</b><span class="plus-chip">${icon('crown')} Плюс</span></div><div class="prompt-quote"><b>${escapeHtml(comment.name)}</b><p>${escapeHtml(text)}</p></div><div class="prompt-state"><i class="spin"></i><span>ИИ читает README, файлы проекта и обсуждение…</span></div><textarea class="field" rows="10" maxlength="8000" aria-label="Текст задачи" hidden></textarea><small class="prompt-source"></small><div class="seg" role="radiogroup"><button role="radio" aria-checked="false" data-mode="read">Только план</button><button role="radio" aria-checked="true" class="on" data-mode="edit">Исправить</button></div><button class="btn btn-grad btn-block task-send" disabled>${icon('send')} Отправить и открыть папку</button></div>`, 'comment-task');
+  let mode = 'edit';
+  dialog.querySelectorAll('.seg button').forEach(button => button.addEventListener('click', () => {
+    mode = button.dataset.mode;
+    dialog.querySelectorAll('.seg button').forEach(item => { item.classList.toggle('on', item === button); item.setAttribute('aria-checked', String(item === button)); });
+  }));
+  const field = dialog.querySelector('textarea');
+  const state = dialog.querySelector('.prompt-state');
+  const send = dialog.querySelector('.task-send');
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(commentId)}/prompt`);
+    if (!dialog.open || !dialog.querySelector('.prompt-task')) return;
+    field.value = result.prompt;
+    field.hidden = false;
+    state.remove();
+    send.disabled = false;
+    const seen = [result.context?.readme ? 'README' : '', result.context?.files ? `${result.context.files} ${plural(result.context.files, 'файл', 'файла', 'файлов')} в корне` : '', result.context?.thread > 1 ? `ветка из ${result.context.thread}` : ''].filter(Boolean).join(' · ');
+    dialog.querySelector('.prompt-source').textContent = `${result.source === 'ai' ? 'Написал Claude' : 'Собрано по шаблону — ИИ сейчас недоступен'}${seen ? `. Учтено: ${seen}` : ''}${result.context?.readme || result.context?.files ? '' : '. Компьютер не в сети — README и файлы не прочитаны'}. Текст можно поправить.`;
+  } catch (error) {
+    state.innerHTML = `${icon('close')}<span>${escapeHtml(error.message)}</span>`;
+    return;
+  }
+  send.addEventListener('click', async () => {
+    send.disabled = true;
+    try {
+      const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(commentId)}/task`, { prompt: field.value, mode });
+      replaceProject(result.project);
+      closeLayer();
+      toast('Задача ушла агенту — открываю папку проекта');
+      location.hash = `#/ai/w/${encodeURIComponent(result.workspaceId)}`;
+    } catch (error) {
+      send.disabled = false;
+      toast(error.message);
+    }
+  });
+}
 
 function reviewLineHtml(review) {
   const good = new Set(reviewTags.good.map(([key]) => key));
@@ -6010,6 +6195,7 @@ async function commentAction(method, projectId, id, path) {
     replaceProject(result.project);
     refresh();
     rerenderComments(projectId);
+    rerenderHub(projectId);
   } catch (error) {
     toast(error.message);
   }

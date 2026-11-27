@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanSteam, repoChecks, steamReadiness, publisherShouldNotice, taskFromComment, taskFromDigest, taskFromFeedback, demoTaskPrompt, demoUrlFromText, updateFromTask } from '../src/ecosystem.js';
+import { cleanSteam, repoChecks, steamReadiness, publisherShouldNotice, taskFromComment, taskFromDigest, taskFromFeedback, demoTaskPrompt, demoUrlFromText, promptFromComment, updateFromTask } from '../src/ecosystem.js';
 
 test('a repository file list says what a Steam release already has', () => {
   const checks = repoChecks([
@@ -55,12 +55,12 @@ test('picked feedback becomes one task: bugs first, with stars and marks', () =>
   const prompt = taskFromFeedback({ title: 'Маяк' }, [
     { handle: 'oleg', kind: 'idea', text: 'Добавьте кооператив' },
     { handle: 'vera', kind: 'bug', text: 'Вылетает после босса', review: { stars: 2, tags: ['bugs', 'hard'] } },
-    { name: 'Гость', kind: 'praise', text: '', review: { stars: 5, tags: [] } }
+    { name: 'Гость', kind: 'review', text: '', review: { stars: 5, tags: [] } }
   ]);
   assert.match(prompt, /^Отзывы игроков о «Маяк»/);
   assert.ok(prompt.indexOf('Баги и проблемы:') < prompt.indexOf('Просьбы и идеи:'), 'bugs come before requests');
   assert.match(prompt, /1\. @vera \(★2, баги, сложно\): «Вылетает после босса»/);
-  assert.match(prompt, /Что нравится:\n1\. Гость \(★5\): «без текста»/);
+  assert.match(prompt, /Отзывы и впечатления:\n1\. Гость \(★5\): «без текста»/);
   assert.match(prompt, /перечисли, что сделано по каждому пункту/);
 });
 
@@ -70,4 +70,18 @@ test('a web build task asks for a playable link, and the link is found in the an
   assert.equal(demoUrlFromText('Загрузил на https://itch.io/embed-upload/123?color=333, проверь'), 'https://itch.io/embed-upload/123?color=333');
   assert.equal(demoUrlFromText('Ссылка: https://html-classic.itch.zone/html/5/index.html'), 'https://html-classic.itch.zone/html/5/index.html');
   assert.equal(demoUrlFromText('Не настроено: нужен репозиторий на https://github.com'), '');
+});
+
+test('a comment as a task in the project context: the thread, the files and where to start', () => {
+  const prompt = promptFromComment(
+    { title: 'Маяк', summary: 'Уютная игра про шторм', tags: ['Инди', 'Новый проект'], madeWith: ['Godot'] },
+    { id: 'c1', handle: 'vera', kind: 'bug', text: 'кнопки мелкие', review: { stars: 3, tags: ['hard'] } },
+    { thread: [{ id: 'c1', text: 'кнопки мелкие' }, { id: 'c2', handle: 'author', byAuthor: true, text: 'На каком телефоне?' }, { id: 'c3', handle: 'vera', text: 'iPhone SE, кнопка прыжка' }], files: ['project.godot', 'scenes/'], readme: '# Маяк\nИгра про смотрителя маяка' }
+  );
+  assert.match(prompt, /^Проект «Маяк» — Уютная игра про шторм · Инди · сделано на Godot\./);
+  assert.match(prompt, /@vera оставил сообщение о баге \(★3, сложно\):\n«кнопки мелкие»/);
+  assert.match(prompt, /— @author \(автор\): «На каком телефоне\?»\n— @vera: «iPhone SE, кнопка прыжка»/);
+  assert.match(prompt, /Файлы в корне проекта: project\.godot, scenes\//);
+  assert.match(prompt, /Из README: Игра про смотрителя маяка/);
+  assert.match(prompt, /перечисли, что уточнить у игрока/);
 });

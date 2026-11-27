@@ -61,3 +61,65 @@ export function trustSummary({ scores = [], projects = 0, votesReceived = 0, fol
     levelProgress: level >= 50 ? 1 : Math.max(0, Math.min(1, (xp - floor) / (next - floor)))
   };
 }
+
+/* Help: what a person did for other people's projects, apart from how much people trust them */
+
+export const helpLevels = [
+  { from: 0, name: 'Зритель' },
+  { from: 10, name: 'Помощник' },
+  { from: 40, name: 'Тестер' },
+  { from: 100, name: 'Следопыт' },
+  { from: 250, name: 'Наставник' },
+  { from: 600, name: 'Соавтор' },
+  { from: 1500, name: 'Опора сообщества' }
+];
+export const helpPoints = { review: 2, like: 1, pinned: 5, accepted: 10, tasked: 15, fixed: 25 };
+export const helpAreas = { bug: 'баги', idea: 'идеи', solution: 'решения', review: 'отзывы', question: 'вопросы' };
+
+// One comment on someone else's project: likes count a little (at most five), the author's reactions a lot.
+export function commentHelp(comment) {
+  const likes = Math.min(5, Array.isArray(comment?.likes) ? comment.likes.filter(id => id !== comment.userId).length : Number(comment?.likes) || 0);
+  const tasked = Boolean(comment?.taskId || comment?.tasked);
+  const points = likes * helpPoints.like + (comment?.pinned ? helpPoints.pinned : 0) + (comment?.accepted ? helpPoints.accepted : 0) + (tasked ? helpPoints.tasked : 0) + (comment?.resolved ? helpPoints.fixed : 0);
+  return { points, helpful: Boolean(comment?.accepted || tasked || comment?.resolved || comment?.pinned) };
+}
+
+export function emptyHelp() {
+  return { points: 0, helped: 0, projects: new Set(), reviewed: new Set(), kinds: {} };
+}
+
+// Adds a comment to a person's help; a demo review counts once per project.
+export function addHelp(entry, comment, kind, projectId) {
+  const { points, helpful } = commentHelp(comment);
+  entry.points += points;
+  if (comment.review && !entry.reviewed.has(projectId)) {
+    entry.reviewed.add(projectId);
+    entry.points += helpPoints.review;
+  }
+  if (helpful) {
+    entry.helped += 1;
+    entry.projects.add(projectId);
+    entry.kinds[kind] = (entry.kinds[kind] || 0) + 1;
+  }
+  return entry;
+}
+
+export function helpSummary(entry) {
+  const points = Math.max(0, Math.round(Number(entry?.points) || 0));
+  const index = helpLevels.reduce((found, level, position) => points >= level.from ? position : found, 0);
+  const next = helpLevels[index + 1];
+  const kinds = Object.fromEntries(Object.entries(entry?.kinds || {}).filter(([key, value]) => helpAreas[key] && value > 0));
+  const top = Object.entries(kinds).sort((left, right) => right[1] - left[1])[0];
+  return {
+    points,
+    level: index + 1,
+    title: helpLevels[index].name,
+    next: next ? next.from : null,
+    progress: next ? Math.max(0, Math.min(1, (points - helpLevels[index].from) / (next.from - helpLevels[index].from))) : 1,
+    helped: Number(entry?.helped) || 0,
+    projects: entry?.projects instanceof Set ? entry.projects.size : Number(entry?.projects) || 0,
+    reviews: entry?.reviewed instanceof Set ? entry.reviewed.size : Number(entry?.reviews) || 0,
+    kinds,
+    area: top && top[1] >= 2 ? top[0] : ''
+  };
+}

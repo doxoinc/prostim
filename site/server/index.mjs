@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './db.mjs';
 import { HttpError, fail, sha256, token, hashPassword, verifyPassword, pairingCode, parseCookies, clip, cleanText, safeHttpUrl, initialsOf, colorFor, limiter } from './util.mjs';
-import { trustSummary } from '../src/trust.js';
+import { addHelp, emptyHelp, helpSummary, trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
 import { cleanStats, cleanTaste, emptyTaste, projectQuality, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
 import { cleanDemoUrl, cleanFocus, cleanPostFields, normalizeUrl } from '../src/page.js';
@@ -14,12 +14,12 @@ import { codeLetter, createMailer } from './mail.mjs';
 import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
 import { aiLimits, boostPlan, boostPrice, plusPlan } from '../src/ads.js';
-import { cleanSteam, demoTaskPrompt, demoUrlFromText, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback } from '../src/ecosystem.js';
-import { cleanFeedPrefs, cleanReview, commentDigest, demoRating, feedbackKind, reportReasons } from '../src/social.js';
+import { cleanSteam, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback } from '../src/ecosystem.js';
+import { cleanFeedPrefs, cleanLabel, cleanReview, commentDigest, commentKind, demoRating, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
 import { vapidKeys } from './push.mjs';
 import { embeddable, linkDraft, safeFetch } from './linkpreview.mjs';
-import { aiAvailable, aiCommentSummary, aiPostDraft, aiSteamTexts } from './ai.mjs';
+import { aiAvailable, aiCommentPrompt, aiCommentSummary, aiPostDraft, aiSteamTexts } from './ai.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -140,8 +140,13 @@ function addDemoPages() {
 /* Views */
 
 function userStats() {
-  const stats = new Map(Object.keys(D.users).map(id => [id, { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [] }]));
+  const stats = new Map(Object.keys(D.users).map(id => [id, { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [], help: emptyHelp() }]));
   for (const project of D.projects) {
+    for (const comment of project.comments) {
+      if (comment.hidden || !comment.userId || comment.userId === project.ownerId) continue;
+      const helper = stats.get(comment.userId);
+      if (helper) addHelp(helper.help, comment, commentKind(comment), project.id);
+    }
     const entry = stats.get(project.ownerId);
     if (!entry) continue;
     entry.projects += 1;
@@ -158,12 +163,13 @@ function userStats() {
 
 function publicUser(user, stats = userStats()) {
   if (!user) return null;
-  const entry = stats.get(user.id) || { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [] };
+  const entry = stats.get(user.id) || { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [], help: emptyHelp() };
   return {
     id: user.id, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', bio: user.bio || '',
     createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official), plus: hasPlus(user),
     projects: entry.projects, followers: entry.followers, following: entry.following, votesReceived: entry.votesReceived,
-    ...trustSummary(entry)
+    ...trustSummary(entry),
+    help: helpSummary(entry.help)
   };
 }
 
@@ -204,7 +210,7 @@ function projectView(project, meId) {
       voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId),
       byAuthor: comment.userId ? comment.userId === project.ownerId : comment.name === owner.name, mention: D.users[comment.mentionId]?.handle || '',
       accepted: Boolean(comment.accepted), taskId: project.ownerId === meId ? comment.taskId || '' : '', tasked: Boolean(comment.taskId),
-      kind: feedbackKind(comment.text, comment.review), review: comment.review || null, resolved: comment.resolved || ''
+      kind: commentKind(comment), label: comment.label || '', review: comment.review || null, resolved: comment.resolved || ''
     }))
   };
 }
@@ -1102,7 +1108,7 @@ on('POST', '/api/projects/:id/comments', async ({ user, params, body }) => {
   const parent = body.replyTo ? requireComment(project, String(body.replyTo)) : null;
   const root = parent?.replyTo ? project.comments.find(comment => comment.id === parent.replyTo) || parent : parent;
   const mentionId = parent && parent.id !== root?.id && parent.userId !== user.id ? parent.userId : '';
-  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], kind: feedbackKind(text, review), ...(review ? { review } : {}), ...(root ? { replyTo: root.id } : {}), ...(mentionId ? { mentionId } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
+  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], ...(cleanLabel(body.label) ? { label: cleanLabel(body.label) } : {}), ...(review ? { review } : {}), ...(root ? { replyTo: root.id } : {}), ...(mentionId ? { mentionId } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
   project.comments.push(comment);
   db.save();
   const url = `/#/project/${project.id}`;
@@ -1195,8 +1201,9 @@ const rewardLimit = limiter(15, 24 * 3600 * 1000);
 on('POST', '/api/projects/:id/comments/:cid/accept', async ({ user, params }) => {
   needUser(user);
   const project = requireProject(params.id);
-  if (project.ownerId !== user.id) fail(403, 'Принимать отчёты может только автор');
   const comment = requireComment(project, params.cid);
+  const root = comment.replyTo ? project.comments.find(item => item.id === comment.replyTo) : null;
+  if (project.ownerId !== user.id && !(root && root.userId === user.id)) fail(403, 'Отметить «Помогло» может автор проекта или тот, кто спрашивал');
   if (comment.userId === user.id) fail(400, 'Свой комментарий принимать не нужно');
   if (!comment.accepted && !rewardLimit(user.id)) fail(429, 'На сегодня хватит наград');
   comment.accepted = !comment.accepted;
@@ -1205,6 +1212,47 @@ on('POST', '/api/projects/:id/comments/:cid/accept', async ({ user, params }) =>
   }
   db.save();
   return { project: projectView(project, user.id) };
+});
+
+// The person who wrote a comment says what it is: a bug, an idea, a review, a question or a solution.
+on('POST', '/api/projects/:id/comments/:cid/label', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  const comment = requireComment(project, params.cid);
+  if (comment.userId !== user.id && project.ownerId !== user.id) fail(403, 'Пометить может автор комментария или проекта');
+  const label = cleanLabel(body.label);
+  if (label) comment.label = label;
+  else delete comment.label;
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+// Plus: the AI reads the project (post, README, files, the thread) and turns a comment into a task.
+on('POST', '/api/projects/:id/comments/:cid/prompt', async ({ user, params }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  if (!hasPlus(user)) fail(402, 'Промпт с ИИ — в Плюсе');
+  const comment = requireComment(project, params.cid);
+  const { workspace, device } = linkedWorkspace(project, user);
+  const rootId = comment.replyTo || comment.id;
+  const thread = project.comments.filter(item => !item.hidden && (item.id === rootId || item.replyTo === rootId))
+    .map(item => ({ ...item, ...personRef(item.userId, item.name), byAuthor: item.userId === project.ownerId }));
+  let files = [];
+  let readme = '';
+  if (agentStreams.has(device?.id)) {
+    try { files = ((await callAgent(device, 'tree', { workspaceKey: workspace.key }, 8000))?.entries || []).filter(entry => !entry.path.includes('/')).map(entry => entry.dir ? `${entry.path}/` : entry.path); } catch {}
+    for (const path of ['README.md', 'readme.md', 'README.ru.md', 'README.txt']) {
+      try {
+        const file = await callAgent(device, 'read', { workspaceKey: workspace.key, path }, 8000);
+        if (file?.content) { readme = file.content; break; }
+      } catch {}
+    }
+  }
+  const view = { ...comment, ...personRef(comment.userId, comment.name), kind: commentKind(comment) };
+  const plain = promptFromComment(project, view, { thread, files, readme });
+  const material = `${plain}\n\nREADME целиком:\n${String(readme).slice(0, 8000)}\n\nОписание поста:\n${String(project.description || '').slice(0, 3000)}`;
+  const written = await aiCommentPrompt(process.env, material);
+  return { prompt: written?.prompt || plain, title: written?.title || '', source: written ? 'ai' : 'template', context: { files: files.length, readme: Boolean(readme), thread: thread.length } };
 });
 
 /* One project across the feed, ИИ-мир and Steam */
@@ -1258,7 +1306,7 @@ on('POST', '/api/projects/:id/feedback-task', async ({ user, params, body }) => 
   const ids = new Set((Array.isArray(body.ids) ? body.ids : []).map(String).slice(0, 40));
   const chosen = project.comments.filter(comment => ids.has(comment.id) && !comment.hidden && comment.userId !== user.id);
   if (!chosen.length) fail(400, 'Выбери отзывы игроков');
-  const view = chosen.map(comment => ({ ...comment, ...personRef(comment.userId, comment.name), kind: feedbackKind(comment.text, comment.review) }));
+  const view = chosen.map(comment => ({ ...comment, ...personRef(comment.userId, comment.name), kind: commentKind(comment) }));
   const prompt = cleanText(body.prompt, 8000) || taskFromFeedback(project, view);
   const task = createTask(user, workspace.id, { prompt, mode: body.mode === 'read' ? 'read' : 'edit' }, { projectId: project.id, feedback: chosen.map(comment => comment.id) });
   for (const comment of chosen) {

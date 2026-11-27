@@ -433,7 +433,7 @@ test('demo reviews: sorted feedback, one task for the AI, an update that pays th
   const again = (await vera('POST', `/api/projects/${post.id}/comments`, { review: { stars: 4, tags: [] } })).body.project;
   assert.deepEqual(again.demoRating, { average: 4.5, count: 2 }, 'the latest review of each player counts');
   const byId = Object.fromEntries(again.comments.map(comment => [comment.id, comment]));
-  assert.deepEqual([byId[bug].kind, byId[praise].kind, byId[idea].kind], ['bug', 'praise', 'idea']);
+  assert.deepEqual([byId[bug].kind, byId[praise].kind, byId[idea].kind], ['bug', 'review', 'idea']);
   assert.deepEqual(byId[bug].review, { stars: 2, tags: ['bugs', 'hard'] });
   const notices = (await author('GET', '/api/notifications')).body.items;
   assert.equal(notices.filter(item => item.type === 'review').length, 3);
@@ -474,6 +474,59 @@ test('demo reviews: sorted feedback, one task for the AI, an update that pays th
   mine = (await author('POST', `/api/projects/${post.id}/demo`, { url: mine.demoDraft.url })).body.project;
   assert.deepEqual([mine.demo, mine.demoDraft], ['https://fbauthor.github.io/gavan/', null]);
   assert.match((await vera('GET', '/api/notifications')).body.items[0].text, /новая версия демо/);
+  device.close();
+});
+
+test('the comment menu: labels, «Помогло» from the one who asked, a Plus prompt in the project context, help in profiles', async () => {
+  const author = await person('menuauthor');
+  const asker = await person('menuasker');
+  const helper = await person('menuhelper');
+  const device = await connectAgent(author);
+  const post = await project(author, 'Маяк');
+  await author('POST', `/api/projects/${post.id}/link`, { workspaceId: device.workspaceId });
+
+  // the person who wrote a comment says what it is; the author of the project may correct it
+  const question = (await asker('POST', `/api/projects/${post.id}/comments`, { text: 'Кнопки мелкие на телефоне', label: 'question' })).body.comment;
+  const answer = (await helper('POST', `/api/projects/${post.id}/comments`, { text: 'Включи крупный интерфейс в настройках', replyTo: question })).body.comment;
+  assert.equal((await helper('POST', `/api/projects/${post.id}/comments/${question}/label`, { label: 'bug' })).status, 403, 'not their comment');
+  let view = (await helper('POST', `/api/projects/${post.id}/comments/${answer}/label`, { label: 'solution' })).body.project;
+  assert.deepEqual(['label', 'kind'].map(key => view.comments.find(item => item.id === answer)[key]), ['solution', 'solution']);
+  view = (await author('POST', `/api/projects/${post.id}/comments/${question}/label`, { label: 'bug' })).body.project;
+  assert.equal(view.comments.find(item => item.id === question).kind, 'bug');
+  view = (await author('POST', `/api/projects/${post.id}/comments/${question}/label`, { label: 'nope' })).body.project;
+  assert.deepEqual([view.comments.find(item => item.id === question).label, view.comments.find(item => item.id === question).kind], ['', 'other'], 'a wrong label clears it, and the words alone say little');
+  await author('POST', `/api/projects/${post.id}/comments/${question}/label`, { label: 'bug' });
+
+  // the one who asked marks the reply that helped; a stranger cannot
+  const stranger = await person('menustranger');
+  assert.equal((await stranger('POST', `/api/projects/${post.id}/comments/${answer}/accept`)).status, 403);
+  view = (await asker('POST', `/api/projects/${post.id}/comments/${answer}/accept`)).body.project;
+  assert.equal(view.comments.find(item => item.id === answer).accepted, true);
+  assert.equal((await helper('GET', '/api/bootstrap')).body.account.sparks, 20);
+
+  // the prompt with AI is part of Plus; it reads the thread and the files on the computer
+  assert.equal((await author('POST', `/api/projects/${post.id}/comments/${question}/prompt`)).status, 402);
+  const { payment } = (await author('POST', '/api/plus')).body;
+  await author('POST', `/api/payments/${payment.id}/test`);
+  const prompt = (await author('POST', `/api/projects/${post.id}/comments/${question}/prompt`)).body;
+  assert.equal(prompt.source, 'template', 'no AI key in tests: the template still carries the context');
+  assert.match(prompt.prompt, /^Проект «Маяк» — Маяк — коротко\./);
+  assert.match(prompt.prompt, /@menuasker оставил сообщение о баге:\n«Кнопки мелкие на телефоне»/);
+  assert.match(prompt.prompt, /— @menuhelper: «Включи крупный интерфейс в настройках»/);
+  assert.match(prompt.prompt, /Файлы в корне проекта: README\.md, LICENSE/);
+  assert.match(prompt.prompt, /Из README: Игра про шторм/);
+  assert.deepEqual(prompt.context, { files: 2, readme: true, thread: 2 });
+  assert.equal((await helper('POST', `/api/projects/${post.id}/comments/${question}/prompt`)).status, 403, 'only the author of the project');
+  const sent = (await author('POST', `/api/projects/${post.id}/comments/${question}/task`, { prompt: prompt.prompt })).body;
+  assert.equal(sent.workspaceId, device.workspaceId);
+
+  // help shows in profiles: the helper's solution, the asker's report taken to the AI
+  const users = (await stranger('GET', '/api/bootstrap')).body.users;
+  const helperHelp = users.find(item => item.handle === 'menuhelper').help;
+  assert.deepEqual([helperHelp.points, helperHelp.helped, helperHelp.kinds], [10, 1, { solution: 1 }]);
+  const askerHelp = users.find(item => item.handle === 'menuasker').help;
+  assert.deepEqual([askerHelp.points, askerHelp.title, askerHelp.kinds], [15, 'Помощник', { bug: 1 }]);
+  assert.equal(users.find(item => item.handle === 'menuauthor').help.points, 0, 'the author does not earn help on their own project');
   device.close();
 });
 

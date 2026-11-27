@@ -117,12 +117,12 @@ export function updateFromTask(task, commits = []) {
   return { title, text: [answer, log ? `Изменения:\n${log}` : ''].filter(Boolean).join('\n\n').slice(0, 2000) };
 }
 
-const kindTitles = { bug: 'Баги и проблемы', idea: 'Просьбы и идеи', question: 'Вопросы', praise: 'Что нравится', other: 'Другое' };
+const kindTitles = { bug: 'Баги и проблемы', idea: 'Просьбы и идеи', question: 'Вопросы', solution: 'Решения от игроков', review: 'Отзывы и впечатления', other: 'Другое' };
 const tagNames = { visuals: 'графика', controls: 'управление', sound: 'звук', idea: 'идея', mood: 'атмосфера', bugs: 'баги', hard: 'сложно', unclear: 'непонятно', slow: 'тормозит', short: 'мало контента' };
 
 // Several pieces of feedback as one task: grouped by kind, bugs first, with the stars and marks of demo reviews.
 export function taskFromFeedback(project, comments) {
-  const order = ['bug', 'idea', 'question', 'praise', 'other'];
+  const order = ['bug', 'idea', 'question', 'solution', 'review', 'other'];
   const groups = order.map(kind => {
     const list = (comments || []).filter(comment => (comment.kind || 'other') === kind);
     if (!list.length) return '';
@@ -146,4 +146,25 @@ const demoHosts = /https:\/\/(?:[\w-]+\.)*(?:github\.io|itch\.io|itch\.zone|netl
 export function demoUrlFromText(text) {
   const found = String(text || '').match(demoHosts);
   return found ? found[found.length - 1].replace(/[.,;:!]+$/, '') : '';
+}
+
+const kindWords = { bug: 'сообщение о баге', idea: 'идею', question: 'вопрос', solution: 'решение', review: 'отзыв', other: 'комментарий' };
+
+// A comment as a task the agent can act on: the project, the player's words, the thread around them and
+// where to start. Used when there is no AI to write the task, and as the material when there is.
+export function promptFromComment(project, comment, { thread = [], files = [], readme = '' } = {}) {
+  const who = comment.handle ? `@${comment.handle}` : comment.name || 'Игрок';
+  const about = [project.summary, (project.tags || []).filter(tag => tag !== 'Новый проект').join(', '), (project.madeWith || []).length ? `сделано на ${project.madeWith.join(', ')}` : ''].filter(Boolean).join(' · ');
+  const review = comment.review ? ` (★${comment.review.stars}${comment.review.tags?.length ? `, ${comment.review.tags.map(tag => tagNames[tag] || tag).join(', ')}` : ''})` : '';
+  const replies = thread.filter(item => item.text && item.id !== comment.id).slice(-8).map(item => `— ${item.handle ? `@${item.handle}` : item.name || 'игрок'}${item.byAuthor ? ' (автор)' : ''}: «${clipText(item.text, 300)}»`).join('\n');
+  const top = files.filter(Boolean).slice(0, 30).join(', ');
+  const readmeLine = clipText(String(readme || '').replace(/^#.*$/m, ''), 400);
+  return [
+    `Проект «${project.title}»${about ? ` — ${about}` : ''}.`,
+    readmeLine ? `Из README: ${readmeLine}` : '',
+    `${who} оставил ${kindWords[comment.kind] || kindWords.other}${review}:\n«${String(comment.text || '').trim() || 'без текста'}»`,
+    replies ? `Уточнения в обсуждении:\n${replies}` : '',
+    top ? `Файлы в корне проекта: ${top}` : '',
+    'Что сделать:\n1. Найди в коде, к чему относится этот отзыв.\n2. Если это баг — найди причину; если просьба — придумай самое простое решение, которое подходит игре.\n3. Внеси правку и проверь, что остальное работает.\n4. В конце коротко опиши для игроков, что изменилось.\nЕсли из отзыва непонятно, что именно не так, — не гадай: перечисли, что уточнить у игрока.'
+  ].filter(Boolean).join('\n\n');
 }

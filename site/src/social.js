@@ -165,7 +165,9 @@ export function commentDigest(comments) {
 
 /* Feedback: what a comment is about, and quick reviews after playing a demo */
 
-export const feedbackKinds = [['bug', 'Баги'], ['idea', 'Просьбы'], ['question', 'Вопросы'], ['praise', 'Похвала'], ['other', 'Другое']];
+export const feedbackKinds = [['bug', 'Баги'], ['idea', 'Идеи'], ['question', 'Вопросы'], ['solution', 'Решения'], ['review', 'Отзывы'], ['other', 'Другое']];
+// What the person who wrote a comment says it is; the author of the project may correct it.
+export const commentLabels = [['bug', 'Баг'], ['idea', 'Идея'], ['review', 'Отзыв'], ['question', 'Вопрос'], ['solution', 'Решение']];
 export const reviewTags = {
   good: [['visuals', 'Графика'], ['controls', 'Управление'], ['sound', 'Звук'], ['idea', 'Идея'], ['mood', 'Атмосфера']],
   bad: [['bugs', 'Баги'], ['hard', 'Сложно'], ['unclear', 'Непонятно'], ['slow', 'Тормозит'], ['short', 'Мало контента']]
@@ -191,8 +193,17 @@ export function feedbackKind(text, review = null) {
   if (bugWords.test(value) || review?.tags?.some(tag => ['bugs', 'slow'].includes(tag))) return 'bug';
   if (ideaWords.test(value)) return 'idea';
   if (questionWords.test(value.trim())) return 'question';
-  if (praiseWords.test(value) || (review && review.stars >= 4 && !value.trim())) return 'praise';
-  return review ? (review.stars >= 4 ? 'praise' : 'idea') : 'other';
+  if (praiseWords.test(value) || review) return 'review';
+  return 'other';
+}
+
+export function cleanLabel(value) {
+  return commentLabels.some(([key]) => key === value) ? value : '';
+}
+
+// A label set by a person wins over the guess from the words.
+export function commentKind(comment) {
+  return cleanLabel(comment?.label) || feedbackKind(comment?.text, comment?.review);
 }
 
 // The demo's score: the latest review of each person counts once.

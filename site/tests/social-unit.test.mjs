@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanFeedPrefs, withFeedPref, searchProjects, commentDigest, sortComments, cleanReview, feedbackKind, demoRating } from '../src/social.js';
+import { cleanFeedPrefs, withFeedPref, searchProjects, commentDigest, sortComments, cleanReview, feedbackKind, demoRating, commentKind, cleanLabel } from '../src/social.js';
+import { commentHelp, emptyHelp, addHelp, helpSummary } from '../src/trust.js';
 import { rankFeed, hiddenByPrefs, emptyTaste } from '../src/recommend.js';
 import { normalizeUrl, cleanDemoUrl, cleanPage, linkKind, cleanFocus, pageHtml } from '../src/page.js';
 import { parseMeta, htmlToText, steamDraft, githubDraft, pageFromText, metaDraft } from '../server/linkpreview.mjs';
@@ -156,12 +157,13 @@ test('a demo review keeps stars from 1 to 5 and known marks only', () => {
   assert.equal(cleanReview('5'), null);
 });
 
-test('feedback is sorted into bugs, requests, questions and praise', () => {
+test('feedback is sorted into bugs, requests, questions and reviews', () => {
   assert.equal(feedbackKind('Вылетает на втором уровне, добавьте сохранение'), 'bug', 'a crash comes first even when it asks for more');
   assert.equal(feedbackKind('Добавьте кооператив, пожалуйста'), 'idea');
   assert.equal(feedbackKind('А когда выйдет на Android?'), 'question');
-  assert.equal(feedbackKind('Очень красиво, круто!'), 'praise');
-  assert.equal(feedbackKind('', { stars: 5, tags: [] }), 'praise');
+  assert.equal(feedbackKind('Очень красиво, круто!'), 'review');
+  assert.equal(feedbackKind('', { stars: 5, tags: [] }), 'review');
+  assert.equal(feedbackKind('', { stars: 2, tags: ['hard'] }), 'review');
   assert.equal(feedbackKind('', { stars: 3, tags: ['slow'] }), 'bug');
   assert.equal(feedbackKind('На телефоне управление неудобное, кнопки мелкие'), 'bug', 'a problem with controls is something to fix');
   assert.equal(feedbackKind('Привет'), 'other');
@@ -172,4 +174,30 @@ test('the demo score counts the latest review of each person once', () => {
     { userId: 'a', review: { stars: 2 } }, { userId: 'b', review: { stars: 5 } }, { userId: 'a', review: { stars: 4 } }, { userId: 'c', text: 'без оценки' }
   ]), { average: 4.5, count: 2 });
   assert.deepEqual(demoRating([]), { average: 0, count: 0 });
+});
+
+test('a label from a person wins over the guess from the words', () => {
+  assert.equal(commentKind({ text: 'Вылетает на старте', label: 'solution' }), 'solution');
+  assert.equal(commentKind({ text: 'Вылетает на старте', label: 'nonsense' }), 'bug');
+  assert.equal(cleanLabel('idea'), 'idea');
+  assert.equal(cleanLabel('praise'), '');
+});
+
+test('help grows from what authors did with a comment, not from how many comments there are', () => {
+  assert.deepEqual(commentHelp({ userId: 'a', likes: ['a', 'b', 'c'] }), { points: 2, helpful: false }, 'own like does not count');
+  assert.deepEqual(commentHelp({ likes: 40 }), { points: 5, helpful: false }, 'likes count at most five');
+  assert.deepEqual(commentHelp({ accepted: true, tasked: true, resolved: 'u1' }), { points: 50, helpful: true });
+  const entry = emptyHelp();
+  addHelp(entry, { review: { stars: 4 }, accepted: true }, 'bug', 'p1');
+  addHelp(entry, { review: { stars: 5 }, taskId: 'k1' }, 'bug', 'p1');
+  addHelp(entry, { text: 'спасибо' }, 'review', 'p2');
+  addHelp(entry, { pinned: true }, 'solution', 'p3');
+  const help = helpSummary(entry);
+  assert.equal(help.points, 32, '10 + 15 + 5 for the author\'s reactions, 2 for one demo review per project');
+  assert.deepEqual([help.level, help.title, help.next], [2, 'Помощник', 40]);
+  assert.deepEqual([help.helped, help.projects, help.reviews], [3, 2, 1]);
+  assert.deepEqual(help.kinds, { bug: 2, solution: 1 });
+  assert.equal(help.area, 'bug');
+  assert.equal(helpSummary({ points: 5000 }).title, 'Опора сообщества');
+  assert.equal(helpSummary({ points: 5000 }).next, null);
 });
