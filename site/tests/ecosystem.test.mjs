@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanSteam, repoChecks, steamReadiness, publisherShouldNotice, taskFromComment, taskFromDigest, updateFromTask } from '../src/ecosystem.js';
+import { cleanSteam, repoChecks, steamReadiness, publisherShouldNotice, taskFromComment, taskFromDigest, taskFromFeedback, demoTaskPrompt, demoUrlFromText, updateFromTask } from '../src/ecosystem.js';
 
 test('a repository file list says what a Steam release already has', () => {
   const checks = repoChecks([
@@ -49,4 +49,25 @@ test('drafts between the parts: a comment as a task, a digest as a task, a task 
   const update = updateFromTask({ prompt: 'Исправь вылет на втором уровне. Проверь сохранения', events: [{ kind: 'text', text: 'Смотрю' }, { kind: 'done', text: 'Исправил проверку пустого инвентаря.' }] }, [{ subject: 'Fix crash on level 2' }, { subject: 'Add test' }]);
   assert.equal(update.title, 'Исправь вылет на втором уровне');
   assert.equal(update.text, 'Исправил проверку пустого инвентаря.\n\nИзменения:\n• Fix crash on level 2\n• Add test');
+});
+
+test('picked feedback becomes one task: bugs first, with stars and marks', () => {
+  const prompt = taskFromFeedback({ title: 'Маяк' }, [
+    { handle: 'oleg', kind: 'idea', text: 'Добавьте кооператив' },
+    { handle: 'vera', kind: 'bug', text: 'Вылетает после босса', review: { stars: 2, tags: ['bugs', 'hard'] } },
+    { name: 'Гость', kind: 'praise', text: '', review: { stars: 5, tags: [] } }
+  ]);
+  assert.match(prompt, /^Отзывы игроков о «Маяк»/);
+  assert.ok(prompt.indexOf('Баги и проблемы:') < prompt.indexOf('Просьбы и идеи:'), 'bugs come before requests');
+  assert.match(prompt, /1\. @vera \(★2, баги, сложно\): «Вылетает после босса»/);
+  assert.match(prompt, /Что нравится:\n1\. Гость \(★5\): «без текста»/);
+  assert.match(prompt, /перечисли, что сделано по каждому пункту/);
+});
+
+test('a web build task asks for a playable link, and the link is found in the answer', () => {
+  assert.match(demoTaskPrompt({ title: 'Маяк' }), /веб-версию «Маяк».*ссылку на играбельную версию/s);
+  assert.equal(demoUrlFromText('Собрал. Пример: https://example.com/x\nИгра: https://vera.github.io/mayak/.'), 'https://vera.github.io/mayak/');
+  assert.equal(demoUrlFromText('Загрузил на https://itch.io/embed-upload/123?color=333, проверь'), 'https://itch.io/embed-upload/123?color=333');
+  assert.equal(demoUrlFromText('Ссылка: https://html-classic.itch.zone/html/5/index.html'), 'https://html-classic.itch.zone/html/5/index.html');
+  assert.equal(demoUrlFromText('Не настроено: нужен репозиторий на https://github.com'), '');
 });

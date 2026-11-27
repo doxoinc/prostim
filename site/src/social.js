@@ -162,3 +162,43 @@ export function commentDigest(comments) {
   ];
   return { summary: `${total} ${forms[0]}. ${mood}.${common.length ? ` Чаще всего пишут про: ${common.join(', ')}.` : ''}`, points };
 }
+
+/* Feedback: what a comment is about, and quick reviews after playing a demo */
+
+export const feedbackKinds = [['bug', 'Баги'], ['idea', 'Просьбы'], ['question', 'Вопросы'], ['praise', 'Похвала'], ['other', 'Другое']];
+export const reviewTags = {
+  good: [['visuals', 'Графика'], ['controls', 'Управление'], ['sound', 'Звук'], ['idea', 'Идея'], ['mood', 'Атмосфера']],
+  bad: [['bugs', 'Баги'], ['hard', 'Сложно'], ['unclear', 'Непонятно'], ['slow', 'Тормозит'], ['short', 'Мало контента']]
+};
+const reviewTagKeys = [...reviewTags.good, ...reviewTags.bad].map(([key]) => key);
+
+const bugWords = /(баг|ошиб|вылет|краш|завис|не работ|не запуск|не грузит|тормоз|лаг|глюк|сломал|пада|чёрный экран|черный экран|неудобн|непонятн|не понятн|мешает|раздража|crash|bug|freeze|softlock)/iu;
+const ideaWords = /(добав|хотел[оаи]?с?ь? бы|было бы (здорово|круто|классно|удобно)|предлага|можно (ли )?(сделать|добавить)|не хватает|сделайте|сделай|пожалуйста|а если|стоит добавить)/iu;
+const questionWords = /(\?|^(как|когда|где|почему|зачем|будет ли|а будет|сколько|есть ли)\b)/iu;
+const praiseWords = /(круто|класс|нрав|супер|топ|огон|шикар|красив|отлич|любл|кайф|лучш|молод|вау|wow|cool|❤|🔥|👍|😍)/iu;
+
+export function cleanReview(value) {
+  if (!value || typeof value !== 'object') return null;
+  const stars = Math.round(Number(value.stars));
+  if (!(stars >= 1 && stars <= 5)) return null;
+  const tags = [...new Set((Array.isArray(value.tags) ? value.tags : []).filter(tag => reviewTagKeys.includes(tag)))].slice(0, 6);
+  return { stars, tags };
+}
+
+// Bugs first: a report that mentions a crash is a bug even if it also asks for something.
+export function feedbackKind(text, review = null) {
+  const value = String(text || '');
+  if (bugWords.test(value) || review?.tags?.some(tag => ['bugs', 'slow'].includes(tag))) return 'bug';
+  if (ideaWords.test(value)) return 'idea';
+  if (questionWords.test(value.trim())) return 'question';
+  if (praiseWords.test(value) || (review && review.stars >= 4 && !value.trim())) return 'praise';
+  return review ? (review.stars >= 4 ? 'praise' : 'idea') : 'other';
+}
+
+// The demo's score: the latest review of each person counts once.
+export function demoRating(comments) {
+  const latest = new Map();
+  for (const comment of comments || []) if (comment?.review?.stars) latest.set(comment.userId || comment.handle || comment.id, comment.review.stars);
+  const scores = [...latest.values()];
+  return scores.length ? { average: Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length * 10) / 10, count: scores.length } : { average: 0, count: 0 };
+}

@@ -414,6 +414,69 @@ test('one project across the feed, ИИ-мир and Steam: links, tasks from comm
   device.close();
 });
 
+test('demo reviews: sorted feedback, one task for the AI, an update that pays the players back, a new web build', async () => {
+  const author = await person('fbauthor');
+  const vera = await person('fbvera');
+  const oleg = await person('fboleg');
+  const device = await connectAgent(author);
+  const post = await project(author, 'Гавань', { demo: 'https://itch.io/embed-upload/7' });
+  const plain = await project(author, 'Без демо');
+  await author('POST', `/api/projects/${post.id}/link`, { workspaceId: device.workspaceId });
+  await vera('POST', `/api/projects/${post.id}/watch`);
+
+  // reviews: stars and marks with or without words; only for a demo, not from the author, not in replies
+  const bug = (await vera('POST', `/api/projects/${post.id}/comments`, { text: 'Вылетает после босса', review: { stars: 2, tags: ['bugs', 'hard', 'hack'] } })).body.comment;
+  const praise = (await oleg('POST', `/api/projects/${post.id}/comments`, { review: { stars: 5, tags: ['mood'] } })).body.comment;
+  const idea = (await oleg('POST', `/api/projects/${post.id}/comments`, { text: 'Добавьте кооператив, пожалуйста' })).body.comment;
+  assert.equal((await author('POST', `/api/projects/${post.id}/comments`, { review: { stars: 5 } })).status, 400, 'the author does not rate their own demo');
+  assert.equal((await vera('POST', `/api/projects/${plain.id}/comments`, { review: { stars: 5 } })).status, 400, 'no demo, nothing to rate');
+  const again = (await vera('POST', `/api/projects/${post.id}/comments`, { review: { stars: 4, tags: [] } })).body.project;
+  assert.deepEqual(again.demoRating, { average: 4.5, count: 2 }, 'the latest review of each player counts');
+  const byId = Object.fromEntries(again.comments.map(comment => [comment.id, comment]));
+  assert.deepEqual([byId[bug].kind, byId[praise].kind, byId[idea].kind], ['bug', 'praise', 'idea']);
+  assert.deepEqual(byId[bug].review, { stars: 2, tags: ['bugs', 'hard'] });
+  const notices = (await author('GET', '/api/notifications')).body.items;
+  assert.equal(notices.filter(item => item.type === 'review').length, 3);
+  assert.match(notices.find(item => item.type === 'review').text, /оценивает демо «Гавань»: «★4»/);
+
+  // picked feedback goes to the AI as one task, the players get sparks for it
+  assert.equal((await vera('POST', `/api/projects/${post.id}/feedback-task`, { ids: [bug] })).status, 403);
+  assert.equal((await author('POST', `/api/projects/${post.id}/feedback-task`, { ids: [] })).status, 400);
+  const sent = (await author('POST', `/api/projects/${post.id}/feedback-task`, { ids: [bug, idea, 'missing'], mode: 'edit' })).body;
+  assert.match(sent.task.prompt, /Баги и проблемы:\n1\. @fbvera \(★2, баги, сложно\): «Вылетает после босса»/);
+  assert.match(sent.task.prompt, /Просьбы и идеи:\n1\. @fboleg: «Добавьте кооператив, пожалуйста»/);
+  assert.deepEqual([sent.task.projectId, sent.task.feedback, sent.task.mode], [post.id, 2, 'edit']);
+  assert.equal(sent.project.comments.find(comment => comment.id === bug).tasked, true);
+  assert.equal((await vera('GET', '/api/bootstrap')).body.account.sparks, 10);
+
+  // the agent finishes: the author hears about it; the update closes the feedback and pays the players
+  await device.agent('/api/agent/events', { taskId: sent.task.id, status: 'done', events: [{ kind: 'done', ok: true, text: 'Исправил вылет, добавил кооператив' }] });
+  assert.match((await author('GET', '/api/notifications')).body.items[0].text, /^ИИ закончил задачу по «Гавань»/);
+  const update = (await author('POST', `/api/projects/${post.id}/updates`, { title: 'Кооператив и без вылетов', taskId: sent.task.id })).body.project;
+  assert.ok(update.comments.find(comment => comment.id === bug).resolved);
+  assert.ok(update.comments.find(comment => comment.id === idea).resolved);
+  assert.equal(update.comments.find(comment => comment.id === praise).resolved, '');
+  await author('POST', `/api/projects/${post.id}/updates`, { title: 'Ещё раз', taskId: sent.task.id });
+  assert.equal((await vera('GET', '/api/bootstrap')).body.account.sparks, 25, '10 for the task and 15 once for the fix');
+  assert.equal((await oleg('GET', '/api/bootstrap')).body.account.sparks, 25);
+  assert.ok((await vera('GET', '/api/notifications')).body.items.some(item => item.type === 'fixed' && /твой отзыв учли в обновлении/.test(item.text)));
+
+  // a web build through the agent: the link from its answer is offered to the post
+  const demoTask = (await author('POST', `/api/projects/${post.id}/demo-task`)).body.task;
+  assert.deepEqual([demoTask.purpose, demoTask.mode], ['demo', 'edit']);
+  await device.agent('/api/agent/events', { taskId: demoTask.id, status: 'done', events: [{ kind: 'done', ok: true, text: 'Собрал и выложил.\nhttps://fbauthor.github.io/gavan/' }] });
+  assert.equal((await author('GET', '/api/notifications')).body.items[0].type, 'demo-ready');
+  let mine = (await author('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id);
+  assert.equal(mine.demoDraft.url, 'https://fbauthor.github.io/gavan/');
+  assert.equal((await vera('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id).demoDraft, undefined, 'only the author sees the draft');
+  assert.equal((await author('POST', `/api/projects/${post.id}/demo`, { url: 'http://insecure.example' })).status, 400);
+  assert.equal((await vera('POST', `/api/projects/${post.id}/demo`, { url: mine.demoDraft.url })).status, 403);
+  mine = (await author('POST', `/api/projects/${post.id}/demo`, { url: mine.demoDraft.url })).body.project;
+  assert.deepEqual([mine.demo, mine.demoDraft], ['https://fbauthor.github.io/gavan/', null]);
+  assert.match((await vera('GET', '/api/notifications')).body.items[0].text, /новая версия демо/);
+  device.close();
+});
+
 test('Plus across the parts: a free day of promotion a month, more computers, priority in Steam', async () => {
   const member = await person('plusmember');
   const post = await project(member, 'Плюсовый');

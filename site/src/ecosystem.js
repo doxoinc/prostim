@@ -85,7 +85,8 @@ export function publisherShouldNotice(project, quality, { watchers = 0, saves = 
 export const sparkRules = {
   accepted: { amount: 20, label: 'Автор принял отчёт' },
   pinned: { amount: 10, label: 'Комментарий закрепили' },
-  tasked: { amount: 10, label: 'Отзыв взяли в работу' }
+  tasked: { amount: 10, label: 'Отзыв взяли в работу' },
+  fixed: { amount: 15, label: 'Отчёт учли в обновлении' }
 };
 export const sparkPrices = { boostDay: 100, plusWeek: 300 };
 
@@ -114,4 +115,35 @@ export function updateFromTask(task, commits = []) {
   const answer = clipText(done?.text || '', 900);
   const log = (commits || []).slice(0, 6).map(commit => `• ${clipText(commit.subject, 120)}`).join('\n');
   return { title, text: [answer, log ? `Изменения:\n${log}` : ''].filter(Boolean).join('\n\n').slice(0, 2000) };
+}
+
+const kindTitles = { bug: 'Баги и проблемы', idea: 'Просьбы и идеи', question: 'Вопросы', praise: 'Что нравится', other: 'Другое' };
+const tagNames = { visuals: 'графика', controls: 'управление', sound: 'звук', idea: 'идея', mood: 'атмосфера', bugs: 'баги', hard: 'сложно', unclear: 'непонятно', slow: 'тормозит', short: 'мало контента' };
+
+// Several pieces of feedback as one task: grouped by kind, bugs first, with the stars and marks of demo reviews.
+export function taskFromFeedback(project, comments) {
+  const order = ['bug', 'idea', 'question', 'praise', 'other'];
+  const groups = order.map(kind => {
+    const list = (comments || []).filter(comment => (comment.kind || 'other') === kind);
+    if (!list.length) return '';
+    const lines = list.map((comment, index) => {
+      const who = comment.handle ? `@${comment.handle}` : comment.name || 'игрок';
+      const review = comment.review ? ` (★${comment.review.stars}${comment.review.tags?.length ? `, ${comment.review.tags.map(tag => tagNames[tag] || tag).join(', ')}` : ''})` : '';
+      return `${index + 1}. ${who}${review}: «${clipText(comment.text || 'без текста', 400)}»`;
+    }).join('\n');
+    return `${kindTitles[kind]}:\n${lines}`;
+  }).filter(Boolean).join('\n\n');
+  return `Отзывы игроков о «${project.title}» после демо и в комментариях.\n\n${groups}\n\nИсправь баги, оцени просьбы и сделай те, что подходят игре. В конце ответа коротко перечисли, что сделано по каждому пункту, — это станет обновлением для игроков.`;
+}
+
+export function demoTaskPrompt(project) {
+  return `Собери веб-версию «${project.title}» (HTML5 / WebGL), чтобы в неё можно было играть в браузере с телефона и компьютера, и опубликуй её туда, где проект уже настроен: GitHub Pages, itch.io (butler), Netlify, Vercel или Cloudflare Pages. Если ничего не настроено — опиши по шагам, что нужно сделать. В конце ответа напиши ссылку на играбельную версию отдельной строкой.`;
+}
+
+const demoHosts = /https:\/\/(?:[\w-]+\.)*(?:github\.io|itch\.io|itch\.zone|netlify\.app|vercel\.app|pages\.dev|gitlab\.io|surge\.sh|glitch\.me)(?:\/[^\s)<>"'«»]*)?/giu;
+
+// The last link to a known web host in the agent's answer is the new demo.
+export function demoUrlFromText(text) {
+  const found = String(text || '').match(demoHosts);
+  return found ? found[found.length - 1].replace(/[.,;:!]+$/, '') : '';
 }

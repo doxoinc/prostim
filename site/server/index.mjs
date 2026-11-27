@@ -14,8 +14,8 @@ import { codeLetter, createMailer } from './mail.mjs';
 import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
 import { aiLimits, boostPlan, boostPrice, plusPlan } from '../src/ads.js';
-import { cleanSteam, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest } from '../src/ecosystem.js';
-import { cleanFeedPrefs, commentDigest, reportReasons } from '../src/social.js';
+import { cleanSteam, demoTaskPrompt, demoUrlFromText, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback } from '../src/ecosystem.js';
+import { cleanFeedPrefs, cleanReview, commentDigest, demoRating, feedbackKind, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
 import { vapidKeys } from './push.mjs';
 import { embeddable, linkDraft, safeFetch } from './linkpreview.mjs';
@@ -189,6 +189,7 @@ function projectView(project, meId) {
     saves: project.saves.length,
     stats: cleanStats(D.feedStats[project.id]),
     demoBlocked: Boolean(project.demoBlocked),
+    demoRating: demoRating(project.comments.filter(comment => !comment.hidden)),
     lastUpdateAt: project.lastUpdateAt || 0,
     updates: (project.updates || []).map(update => ({ id: update.id, title: update.title, text: update.text || '', version: update.version || '', image: update.image || '', createdAt: update.createdAt })),
     watchers: (project.watchers || []).length,
@@ -196,13 +197,14 @@ function projectView(project, meId) {
     reposters: (project.reposts || []).filter(id => id === meId || privacyOf(D.users[id]).reposts).slice(-30).map(id => D.users[id]?.handle).filter(Boolean),
     flagged: project.ownerId === meId && Boolean(project.flagged),
     steam: { status: project.steam?.status || 'none', releaseAt: project.steam?.releaseAt || 0, ...(project.ownerId === meId ? { checklist: project.steam?.checklist || {} } : {}) },
-    ...(project.ownerId === meId ? { workspaceId: project.workspaceId || '', repo: project.repo || null, publisherNoticed: project.publisherNoticed || 0, applicationId: project.applicationId || '' } : {}),
+    ...(project.ownerId === meId ? { workspaceId: project.workspaceId || '', repo: project.repo || null, publisherNoticed: project.publisherNoticed || 0, applicationId: project.applicationId || '', demoDraft: project.demoDraft?.url !== project.demo ? project.demoDraft || null : null } : {}),
     comments: project.comments.filter(comment => !comment.hidden && !blockedEither(meId, comment.userId)).map(comment => ({
       id: comment.id, ...personRef(comment.userId, comment.name), text: comment.text || '', time: comment.time || '', createdAt: comment.createdAt,
       likes: (comment.likes || []).length, liked: Boolean(meId && (comment.likes || []).includes(meId)), replyTo: comment.replyTo || '',
       voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId),
       byAuthor: comment.userId ? comment.userId === project.ownerId : comment.name === owner.name, mention: D.users[comment.mentionId]?.handle || '',
-      accepted: Boolean(comment.accepted), taskId: project.ownerId === meId ? comment.taskId || '' : '', tasked: Boolean(comment.taskId)
+      accepted: Boolean(comment.accepted), taskId: project.ownerId === meId ? comment.taskId || '' : '', tasked: Boolean(comment.taskId),
+      kind: feedbackKind(comment.text, comment.review), review: comment.review || null, resolved: comment.resolved || ''
     }))
   };
 }
@@ -256,7 +258,7 @@ function workspaceAudience(workspace) {
 
 function taskSummary(task) {
   const author = D.users[task.userId];
-  return { id: task.id, prompt: task.prompt, attachments: task.attachments || [], mode: task.mode, status: task.status, engine: task.engine, createdAt: task.createdAt, finishedAt: task.finishedAt || null, costUsd: task.costUsd ?? null, handle: author?.handle || '', author: author?.name || '' };
+  return { id: task.id, prompt: task.prompt, attachments: task.attachments || [], mode: task.mode, status: task.status, engine: task.engine, createdAt: task.createdAt, finishedAt: task.finishedAt || null, costUsd: task.costUsd ?? null, handle: author?.handle || '', author: author?.name || '', projectId: task.projectId || '', purpose: task.purpose || '', demoUrl: task.demoUrl || '', feedback: (task.feedback || []).length };
 }
 
 function workspaceView(workspace, userId, detailed = false) {
@@ -334,7 +336,19 @@ function deliverTask(task) {
 }
 
 function updateTask(task, patch, events = []) {
+  const finishing = patch.status === 'done' && task.status !== 'done';
   Object.assign(task, patch);
+  if (finishing && task.projectId && !task.doneNotified) {
+    task.doneNotified = true;
+    const answer = [...task.events, ...events].reverse().find(event => event.kind === 'done')?.text || '';
+    const project = D.projects.find(item => item.id === task.projectId);
+    if (task.purpose === 'demo') task.demoUrl = cleanDemoUrl(demoUrlFromText(answer));
+    if (project) {
+      const demo = task.purpose === 'demo' && task.demoUrl;
+      if (demo) project.demoDraft = { url: task.demoUrl, taskId: task.id, at: Date.now() };
+      notifier.notify(task.userId, { type: demo ? 'demo-ready' : 'task-done', actorId: 'prostim', projectId: project.id, snippet: demo ? '' : task.prompt.split('\n')[0], url: demo ? `/#/project/${project.id}` : `/#/ai/w/${task.workspaceId}` });
+    }
+  }
   if (events.length) {
     events = events.slice(0, 200);
     for (const event of events) event.seq = task.nextSeq = (task.nextSeq || 0) + 1;
@@ -1083,17 +1097,19 @@ on('POST', '/api/projects/:id/comments', async ({ user, params, body }) => {
   if (!commentLimit(user.id)) fail(429, 'Слишком часто, подожди немного');
   const text = cleanText(body.text, 1200);
   const voice = body.voice ? ownedUpload(body.voice, user, 'audio').url : '';
-  if (!text && !voice) fail(400, 'Пустой комментарий');
+  const review = project.demo && project.ownerId !== user.id && !body.replyTo ? cleanReview(body.review) : null;
+  if (!text && !voice && !review) fail(400, 'Пустой комментарий');
   const parent = body.replyTo ? requireComment(project, String(body.replyTo)) : null;
   const root = parent?.replyTo ? project.comments.find(comment => comment.id === parent.replyTo) || parent : parent;
   const mentionId = parent && parent.id !== root?.id && parent.userId !== user.id ? parent.userId : '';
-  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], ...(root ? { replyTo: root.id } : {}), ...(mentionId ? { mentionId } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
+  const comment = { id: randomUUID(), userId: user.id, text, createdAt: Date.now(), likes: [], kind: feedbackKind(text, review), ...(review ? { review } : {}), ...(root ? { replyTo: root.id } : {}), ...(mentionId ? { mentionId } : {}), ...(voice ? { voice, duration: Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) } : {}) };
   project.comments.push(comment);
   db.save();
   const url = `/#/project/${project.id}`;
   const snippet = text || 'Голосовой комментарий';
   if (parent?.userId && parent.userId !== user.id) notifier.notify(parent.userId, { type: 'reply', actorId: user.id, projectId: project.id, snippet, url });
-  if (project.ownerId !== parent?.userId) notifier.notify(project.ownerId, { type: 'comment', actorId: user.id, projectId: project.id, snippet, url });
+  if (review) notifier.notify(project.ownerId, { type: 'review', actorId: user.id, projectId: project.id, snippet: `★${review.stars}${text ? ` ${text}` : ''}`, url });
+  else if (project.ownerId !== parent?.userId) notifier.notify(project.ownerId, { type: 'comment', actorId: user.id, projectId: project.id, snippet, url });
   return { project: projectView(project, user.id), comment: comment.id };
 });
 
@@ -1226,13 +1242,61 @@ on('POST', '/api/projects/:id/comments/:cid/task', async ({ user, params, body }
   const { workspace } = linkedWorkspace(project, user);
   const name = personRef(comment.userId, comment.name);
   const prompt = cleanText(body.prompt, 8000) || taskFromComment(project, { ...comment, handle: name.handle, name: name.name });
-  const task = createTask(user, workspace.id, { prompt, mode: body.mode === 'read' ? 'read' : 'edit' });
+  const task = createTask(user, workspace.id, { prompt, mode: body.mode === 'read' ? 'read' : 'edit' }, { projectId: project.id, feedback: [comment.id] });
   comment.taskId = task.id;
   if (comment.userId && comment.userId !== user.id && awardSparks(comment.userId, 'tasked', comment.id)) {
     notifier.notify(comment.userId, { type: 'tasked', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
   }
   db.save();
   return { task, workspaceId: workspace.id, project: projectView(project, user.id) };
+});
+
+on('POST', '/api/projects/:id/feedback-task', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const { workspace } = linkedWorkspace(project, user);
+  const ids = new Set((Array.isArray(body.ids) ? body.ids : []).map(String).slice(0, 40));
+  const chosen = project.comments.filter(comment => ids.has(comment.id) && !comment.hidden && comment.userId !== user.id);
+  if (!chosen.length) fail(400, 'Выбери отзывы игроков');
+  const view = chosen.map(comment => ({ ...comment, ...personRef(comment.userId, comment.name), kind: feedbackKind(comment.text, comment.review) }));
+  const prompt = cleanText(body.prompt, 8000) || taskFromFeedback(project, view);
+  const task = createTask(user, workspace.id, { prompt, mode: body.mode === 'read' ? 'read' : 'edit' }, { projectId: project.id, feedback: chosen.map(comment => comment.id) });
+  for (const comment of chosen) {
+    comment.taskId = task.id;
+    if (comment.userId && awardSparks(comment.userId, 'tasked', comment.id)) notifier.notify(comment.userId, { type: 'tasked', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
+  }
+  db.save();
+  return { task, workspaceId: workspace.id, project: projectView(project, user.id) };
+});
+
+// A web build through the agent: it builds the demo and publishes it where the project is set up.
+on('POST', '/api/projects/:id/demo-task', async ({ user, params }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const { workspace, device } = linkedWorkspace(project, user);
+  const mode = MODES.indexOf(device?.allow || 'edit') >= 2 ? 'full' : 'edit';
+  const task = createTask(user, workspace.id, { prompt: demoTaskPrompt(project), mode }, { projectId: project.id, purpose: 'demo' });
+  db.save();
+  return { task, workspaceId: workspace.id };
+});
+
+on('POST', '/api/projects/:id/demo', async ({ request, user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  if (body.dismiss) {
+    delete project.demoDraft;
+    db.save();
+    return { project: projectView(project, user.id) };
+  }
+  const url = cleanDemoUrl(body.url) || fail(400, 'Нужна ссылка https:// на веб-версию');
+  const changed = project.demo !== url;
+  project.demo = url;
+  delete project.demoBlocked;
+  delete project.demoDraft;
+  checkDemo(project, request);
+  if (changed) for (const id of project.watchers || []) notifier.notify(id, { type: 'update', actorId: user.id, projectId: project.id, snippet: 'новая версия демо — можно играть в браузере', url: `/#/project/${project.id}` });
+  db.save();
+  return { project: projectView(project, user.id) };
 });
 
 on('POST', '/api/projects/:id/digest-task', async ({ user, params, body }) => {
@@ -1242,7 +1306,7 @@ on('POST', '/api/projects/:id/digest-task', async ({ user, params, body }) => {
   const comments = project.comments.filter(comment => !comment.hidden && comment.userId !== user.id);
   if (!comments.length) fail(400, 'Пока нечего разбирать');
   const digest = project.digest || commentDigest(comments);
-  const task = createTask(user, workspace.id, { prompt: taskFromDigest(project, digest, comments), mode: body.mode === 'edit' ? 'edit' : 'read' });
+  const task = createTask(user, workspace.id, { prompt: taskFromDigest(project, digest, comments), mode: body.mode === 'edit' ? 'edit' : 'read' }, { projectId: project.id });
   db.save();
   return { task, workspaceId: workspace.id };
 });
@@ -1319,6 +1383,16 @@ on('POST', '/api/projects/:id/updates', async ({ user, params, body }) => {
   const update = { id: randomUUID().slice(0, 12), title, text: cleanText(body.text, 2000), version: cleanText(body.version, 24), ...(image ? { image } : {}), ...(taskId ? { taskId } : {}), createdAt: Date.now() };
   project.updates = [update, ...(project.updates || [])].slice(0, 50);
   project.lastUpdateAt = update.createdAt;
+  if (taskId) {
+    const fromTask = new Set(D.tasks[taskId].feedback || []);
+    for (const comment of project.comments) {
+      if (comment.resolved || !(comment.taskId === taskId || fromTask.has(comment.id))) continue;
+      comment.resolved = update.id;
+      if (comment.userId && comment.userId !== user.id && awardSparks(comment.userId, 'fixed', comment.id)) {
+        notifier.notify(comment.userId, { type: 'fixed', actorId: user.id, projectId: project.id, snippet: title, url: `/#/project/${project.id}` });
+      }
+    }
+  }
   db.save();
   for (const id of project.watchers || []) notifier.notify(id, { type: 'update', actorId: user.id, projectId: project.id, snippet: update.version ? `${update.version} · ${title}` : title, url: `/#/project/${project.id}` });
   return { project: projectView(project, user.id) };
@@ -1724,7 +1798,7 @@ on('POST', '/api/workspaces/:id/tasks', async ({ user, params, body }) => {
   return { task: createTask(user, params.id, body) };
 });
 
-function createTask(user, workspaceId, body) {
+function createTask(user, workspaceId, body, extra = {}) {
   const { workspace, role, device } = requireWorkspace(workspaceId, user, 'run');
   const prompt = cleanText(body.prompt, 8000);
   if (!prompt) fail(400, 'Опиши задачу');
@@ -1744,7 +1818,7 @@ function createTask(user, workspaceId, body) {
     if (!meta || meta.type !== 'file' || meta.userId !== user.id) fail(400, 'Вложение не найдено, загрузи его ещё раз');
     return { id: String(id), filename: meta.filename, size: meta.size, kind: meta.kind };
   });
-  const task = { id: `k-${randomUUID().slice(0, 12)}`, workspaceId: workspace.id, userId: user.id, prompt, attachments, mode, engine, resumeSessionId, status: 'waiting', createdAt: Date.now(), events: [] };
+  const task = { id: `k-${randomUUID().slice(0, 12)}`, workspaceId: workspace.id, userId: user.id, prompt, attachments, mode, engine, resumeSessionId, status: 'waiting', createdAt: Date.now(), events: [], ...extra };
   D.tasks[task.id] = task;
   const delivered = deliverTask(task);
   updateTask(task, { status: delivered ? 'sent' : 'waiting' });

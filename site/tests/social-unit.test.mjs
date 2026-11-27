@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanFeedPrefs, withFeedPref, searchProjects, commentDigest, sortComments } from '../src/social.js';
+import { cleanFeedPrefs, withFeedPref, searchProjects, commentDigest, sortComments, cleanReview, feedbackKind, demoRating } from '../src/social.js';
 import { rankFeed, hiddenByPrefs, emptyTaste } from '../src/recommend.js';
 import { normalizeUrl, cleanDemoUrl, cleanPage, linkKind, cleanFocus, pageHtml } from '../src/page.js';
 import { parseMeta, htmlToText, steamDraft, githubDraft, pageFromText, metaDraft } from '../server/linkpreview.mjs';
@@ -147,4 +147,29 @@ test('pictures keep a focus point and page images a chosen shape', () => {
   const blocks = cleanPage([{ type: 'image', url: '/uploads/i-1.png', ratio: '4:5', focus: [30, 20] }, { type: 'image', url: '/uploads/i-2.png', ratio: '7:1', focus: [30, 20] }], block => ({ url: block.url, type: 'image' }));
   assert.deepEqual(blocks, [{ type: 'image', url: '/uploads/i-1.png', ratio: '4:5', focus: [30, 20] }, { type: 'image', url: '/uploads/i-2.png' }]);
   assert.match(pageHtml(blocks), /aspect-ratio:4 \/ 5;object-fit:cover;object-position:30% 20%/);
+});
+
+test('a demo review keeps stars from 1 to 5 and known marks only', () => {
+  assert.deepEqual(cleanReview({ stars: 4.6, tags: ['controls', 'hack', 'controls', 'bugs'] }), { stars: 5, tags: ['controls', 'bugs'] });
+  assert.equal(cleanReview({ stars: 0 }), null);
+  assert.equal(cleanReview({ stars: 9 }), null);
+  assert.equal(cleanReview('5'), null);
+});
+
+test('feedback is sorted into bugs, requests, questions and praise', () => {
+  assert.equal(feedbackKind('Вылетает на втором уровне, добавьте сохранение'), 'bug', 'a crash comes first even when it asks for more');
+  assert.equal(feedbackKind('Добавьте кооператив, пожалуйста'), 'idea');
+  assert.equal(feedbackKind('А когда выйдет на Android?'), 'question');
+  assert.equal(feedbackKind('Очень красиво, круто!'), 'praise');
+  assert.equal(feedbackKind('', { stars: 5, tags: [] }), 'praise');
+  assert.equal(feedbackKind('', { stars: 3, tags: ['slow'] }), 'bug');
+  assert.equal(feedbackKind('На телефоне управление неудобное, кнопки мелкие'), 'bug', 'a problem with controls is something to fix');
+  assert.equal(feedbackKind('Привет'), 'other');
+});
+
+test('the demo score counts the latest review of each person once', () => {
+  assert.deepEqual(demoRating([
+    { userId: 'a', review: { stars: 2 } }, { userId: 'b', review: { stars: 5 } }, { userId: 'a', review: { stars: 4 } }, { userId: 'c', text: 'без оценки' }
+  ]), { average: 4.5, count: 2 });
+  assert.deepEqual(demoRating([]), { average: 0, count: 0 });
 });

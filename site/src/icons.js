@@ -73,7 +73,8 @@ const paths = {
   phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/>',
   pause: '<path d="M8.5 5v14M15.5 5v14"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3.3-3.3a4 4 0 0 0-5.7-5.7L12 6.3M14 10a4 4 0 0 0-5.7 0L5 13.3a4 4 0 0 0 5.7 5.7l1.3-1.3"/>',
-  skip: '<path d="m6 6 6 6 6-6M6 12.5l6 6 6-6"/>'
+  skip: '<path d="m6 6 6 6 6-6M6 12.5l6 6 6-6"/>',
+  star: '<path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>'
 };
 
 export function icon(name, className = '') {
