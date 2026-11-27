@@ -3046,66 +3046,6 @@ dialog.card-host:has(.pcard-wrap.desk)::backdrop { background: transparent; -web
   .hub-tabs button span { overflow: visible; }
 }
 
-/* Motion on Steam and ИИ-мир: a scene behind the content, parallax in the hero, blocks that rise in.
-   Driven by --sy (scroll), --px and --py (lean) on <html>; see syncAmbient() in app.js. */
-#ambient { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
-#ambient:empty { display: none; }
-.amb { position: absolute; left: var(--x); top: var(--y); translate: calc(var(--px, 0) * var(--d) * -40px) calc(min(var(--sy, 0), 6000) * var(--d) * -1px + var(--py, 0) * var(--d) * -26px); will-change: translate; }
-.amb > i { display: block; animation: amb-float 11s ease-in-out infinite alternate; animation-delay: calc(var(--i) * -1.7s); }
-@keyframes amb-float { from { transform: translate3d(-6px, 8px, 0) rotate(-4deg); } to { transform: translate3d(8px, -12px, 0) rotate(5deg); } }
-
-/* Steam: drops of liquid steel, films of temper colour, steel shards and glints */
-.amb.drop > i { width: 84px; aspect-ratio: 1; border-radius: 43% 57% 62% 38% / 40% 45% 55% 60%; background: radial-gradient(38% 30% at 30% 26%, rgba(255, 255, 255, .95), rgba(255, 255, 255, 0) 70%), radial-gradient(45% 40% at 74% 72%, rgba(217, 224, 232, .8), rgba(217, 224, 232, 0) 70%), linear-gradient(140deg, #3a4352, #151a21 45%, #2a313c 70%, #0c0f14); box-shadow: inset -10px -14px 26px rgba(0, 0, 0, .6), inset 8px 9px 18px rgba(255, 255, 255, .25); animation: amb-float 13s ease-in-out infinite alternate, morph 14s ease-in-out infinite; }
-.amb.drop > i::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(128deg, #f6e2a4, #e3a64e 18%, #8c2f6c 34%, #2c45c8 50%, #6fd8ea 66%, #e6f6f2 80%); mix-blend-mode: color; opacity: .8; }
-.amb.drop > i { position: relative; }
-.amb.drop.far > i { width: 40px; opacity: .55; }
-.amb.drop.near > i { width: 150px; opacity: .32; }
-.amb.film > i { width: 170px; aspect-ratio: 1; border-radius: 50%; background: conic-gradient(from 0deg, #f6e2a4, #e3a64e, #8c2f6c, #5b2aa8, #2c45c8, #6fd8ea, #e6f6f2, #f6e2a4); -webkit-mask: radial-gradient(closest-side, transparent 90%, #000 92%, #000 98%, transparent); mask: radial-gradient(closest-side, transparent 90%, #000 92%, #000 98%, transparent); opacity: .38; animation: amb-spin 28s linear infinite; }
-.amb.film.small > i { width: 90px; opacity: .3; animation-direction: reverse; }
-.amb.shard > i { width: 12px; height: 130px; border-radius: 8px; background: linear-gradient(180deg, rgba(244, 247, 251, .9), #7d8794 30%, #f6e2a4 52%, #6fd8ea 72%, rgba(42, 134, 224, .2)); opacity: .34; rotate: 28deg; }
-.amb.shard.alt > i { height: 90px; rotate: -38deg; opacity: .26; }
-.amb.glint > i { width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 10px 3px rgba(159, 202, 255, .7), 0 0 26px 8px rgba(246, 226, 164, .25); animation: amb-twinkle 4.2s ease-in-out infinite; animation-delay: calc(var(--i) * -.9s); }
-@keyframes amb-spin { to { transform: rotate(1turn); } }
-@keyframes amb-twinkle { 0%, 100% { opacity: .15; transform: scale(.6); } 50% { opacity: 1; transform: scale(1.15); } }
-
-/* ИИ-мир: soft orbs, small networks, orbits and bits of data */
-.amb.orb > i { width: 260px; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(closest-side, rgba(185, 163, 255, .3), rgba(185, 163, 255, 0)); }
-.amb.orb.cyan > i { background: radial-gradient(closest-side, rgba(103, 232, 249, .2), rgba(103, 232, 249, 0)); }
-.amb.orb.small > i { width: 150px; }
-.amb.orb { margin: -130px 0 0 -130px; }
-.amb.net > i { width: 190px; opacity: .55; animation: amb-float 12s ease-in-out infinite alternate, amb-spin 90s linear infinite; }
-.amb.net.alt > i { width: 140px; opacity: .4; animation-direction: alternate, reverse; }
-.amb.net svg { display: block; width: 100%; height: auto; overflow: visible; }
-.amb.net line { stroke: rgba(185, 163, 255, .35); stroke-width: .5; }
-.amb.net circle { fill: #b9a3ff; }
-.amb.net circle:nth-of-type(3n) { fill: #67e8f9; }
-.amb.net circle:last-of-type { fill: #fff; filter: drop-shadow(0 0 2px #b9a3ff); }
-.amb.ring > i { width: 280px; aspect-ratio: 1; border-radius: 50%; border: 1px dashed rgba(103, 232, 249, .22); animation: amb-spin 60s linear infinite; }
-.amb.ring > i::after { content: ""; position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; border-radius: 50%; background: #67e8f9; box-shadow: 0 0 12px #67e8f9; }
-.amb.ring > i { position: relative; }
-.amb.ring.small > i { width: 150px; border-color: rgba(185, 163, 255, .2); animation-direction: reverse; }
-.amb.bit > i { width: 5px; height: 5px; border-radius: 1.5px; background: #67e8f9; box-shadow: 0 0 8px rgba(103, 232, 249, .9); animation: amb-rise 6s ease-in-out infinite; animation-delay: calc(var(--i) * -1.1s); }
-.amb.bit:nth-child(odd) > i { background: #b9a3ff; box-shadow: 0 0 8px rgba(185, 163, 255, .9); }
-@keyframes amb-rise { 0% { transform: translateY(20px); opacity: 0; } 30%, 70% { opacity: 1; } 100% { transform: translateY(-46px); opacity: 0; } }
-
-/* The hero objects move faster than the text in front of them, and lean with the mouse or the phone */
-html.motion-page .chrome-art .liquid { translate: calc(var(--px, 0) * -16px) calc(min(var(--sy, 0), 900) * .32px + var(--py, 0) * -10px); rotate: calc(min(var(--sy, 0), 900) * .05deg); }
-html.motion-page .steam-hero .hero-waves { translate: 0 calc(min(var(--sy, 0), 900) * -.1px); }
-html.motion-page .steam-hero .hero-copy { translate: 0 calc(min(var(--sy, 0), 900) * .12px); }
-html.motion-page .steam-hero .hero-fee { translate: calc(var(--px, 0) * 8px) calc(min(var(--sy, 0), 900) * -.18px); }
-html.motion-page .split-glow .liquid { translate: 0 calc(min(var(--sy, 0), 2400) * -.06px); rotate: calc(min(var(--sy, 0), 2400) * .03deg); }
-html.motion-page .ai-hero .neural { translate: calc(var(--px, 0) * -14px) calc(min(var(--sy, 0), 900) * .3px + var(--py, 0) * -10px); rotate: calc(min(var(--sy, 0), 900) * .14deg); }
-
-/* Blocks rise into place once; the classes go away after, so hover effects keep their own transitions */
-html.motion-page .rv { opacity: 0; translate: 0 28px; scale: .975; transition: opacity .75s var(--ease), translate .75s var(--ease), scale .75s var(--ease); transition-delay: calc(var(--rv, 0) * 70ms); }
-html.motion-page .rv.in { opacity: 1; translate: 0 0; scale: 1; }
-
-
-@media (prefers-reduced-motion: reduce) {
-  #ambient { display: none; }
-  .amb > i { animation: none !important; }
-}
-
 /* The author's own reward for testers, and Plus side by side */
 .pt-bounty { display: grid; grid-template-columns: repeat(4, 1fr); }
 .pt-bounty label { position: relative; display: grid; place-items: center; min-height: 38px; border-radius: 12px; color: var(--muted); font-size: 13.5px; font-weight: 750; cursor: pointer; }

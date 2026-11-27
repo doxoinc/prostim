@@ -576,9 +576,7 @@ function afterRender(view, changedPage, current) {
   if (view === 'u' && current.extra === 'reviews') loadReviews(current.page);
   if (view === 'me' && current.page === 'reviews' && me) loadReviews(me.handle);
   if (view === 'activity') loadActivity();
-  syncAmbient(view);
   if (view !== 'feed') {
-    revealBlocks(view);
     if (changedPage && !(view === 'ai' && current.page === 'w' && !current.more)) { if (view === 'inbox' && route().page) scrollChatEnd(); else window.scrollTo?.(0, 0); }
     return;
   }
@@ -5504,128 +5502,6 @@ document.addEventListener?.('change', event => {
   if (['checkbox', 'radio'].includes(event.target?.type) && !event.target.hasAttribute?.('switch')) haptic('select');
 });
 
-/* Motion on the Steam and ИИ-мир pages: objects behind the content drift at their own depth as the page
-   scrolls, the hero drop and the neural core move faster than the text in front of them, blocks rise
-   into place the first time they scroll in, and the scene leans after the mouse or the tilt of the
-   phone. Everything is CSS transforms driven by three numbers on <html>: --sy (scroll), --px and --py
-   (lean, from -1 to 1). With «reduce motion» the scene stands still. */
-
-const motionPages = ['steam', 'ai'];
-const reducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-let ambient = null;
-let motionFrame = 0;
-let motionLean = { x: 0, y: 0 };
-let revealRoute = '';
-let revealObserver = null;
-
-// Each object: where it floats (percent of the screen), how fast it follows the scroll (depth) and its look.
-const ambientScenes = {
-  steam: [
-    ['drop far', 12, 18, 0.12], ['drop', 82, 34, 0.28], ['drop near', 70, 92, 0.55], ['drop far', 30, 120, 0.18],
-    ['film', 88, 8, 0.2], ['film small', 6, 66, 0.4], ['shard', 58, 54, 0.34], ['shard alt', 18, 150, 0.46],
-    ['glint', 24, 30, 0.22], ['glint', 64, 76, 0.3], ['glint', 90, 130, 0.38], ['glint', 40, 170, 0.26]
-  ],
-  ai: [
-    ['orb violet', 86, 12, 0.14], ['orb cyan', 8, 58, 0.24], ['orb violet small', 74, 118, 0.36],
-    ['net', 70, 40, 0.2], ['net alt', 12, 132, 0.3], ['ring', 92, 86, 0.18], ['ring small', 4, 18, 0.32],
-    ['bit', 30, 22, 0.42], ['bit', 54, 64, 0.5], ['bit', 80, 150, 0.58], ['bit', 20, 104, 0.46], ['bit', 46, 186, 0.4]
-  ]
-};
-
-// A tiny network: nodes joined by lines, drawn once per page.
-function netSvg() {
-  const nodes = [[12, 20], [44, 8], [78, 26], [64, 62], [28, 70], [90, 78], [50, 40]];
-  const links = [[0, 1], [1, 2], [2, 6], [6, 0], [6, 3], [3, 4], [4, 0], [3, 5], [2, 5]];
-  return `<svg viewBox="0 0 100 90" aria-hidden="true">${links.map(([a, b]) => `<line x1="${nodes[a][0]}" y1="${nodes[a][1]}" x2="${nodes[b][0]}" y2="${nodes[b][1]}"/>`).join('')}${nodes.map(([x, y], index) => `<circle cx="${x}" cy="${y}" r="${index === 6 ? 3.4 : 2.2}"/>`).join('')}</svg>`;
-}
-
-function ambientHtml(section) {
-  return (ambientScenes[section] || []).map(([kind, left, top, depth], index) => `<i class="amb ${kind}" style="--x:${left}%;--y:${top}vh;--d:${depth};--i:${index}"><i>${kind.startsWith('net') ? netSvg() : ''}</i></i>`).join('');
-}
-
-// Sets the scene for the page: objects for Steam or ИИ-мир, nothing elsewhere.
-function syncAmbient(view) {
-  if (typeof document.createElement !== 'function' || !document.body?.insertBefore) return;
-  const section = motionPages.includes(view) ? view : '';
-  if (!section) revealRoute = '';
-  if (!ambient) {
-    ambient = document.createElement('div');
-    ambient.id = 'ambient';
-    ambient.setAttribute('aria-hidden', 'true');
-    document.body.insertBefore(ambient, main);
-  }
-  if (ambient.dataset.section !== section) {
-    ambient.dataset.section = section;
-    ambient.innerHTML = section ? ambientHtml(section) : '';
-  }
-  document.documentElement.classList.toggle('motion-page', Boolean(section) && !reducedMotion());
-  updateMotion();
-}
-
-function updateMotion() {
-  motionFrame = 0;
-  const root = document.documentElement;
-  if (!root?.style) return;
-  root.style.setProperty('--sy', String(Math.round(window.scrollY || 0)));
-  root.style.setProperty('--px', motionLean.x.toFixed(3));
-  root.style.setProperty('--py', motionLean.y.toFixed(3));
-}
-
-function queueMotion() {
-  if (motionFrame || !document.documentElement?.classList?.contains('motion-page')) return;
-  motionFrame = requestAnimationFrame(updateMotion);
-}
-
-window.addEventListener?.('scroll', queueMotion, { passive: true });
-
-// The mouse on a computer leans the scene a little.
-document.addEventListener?.('pointermove', event => {
-  if (event.pointerType !== 'mouse') return;
-  motionLean = { x: (event.clientX / innerWidth) * 2 - 1, y: (event.clientY / innerHeight) * 2 - 1 };
-  queueMotion();
-}, { passive: true });
-
-// The tilt of a phone does the same. Android gives it freely; iPhone asks for permission, so it is not
-// asked for — on iPhone the scene follows the scroll only.
-if (typeof window.DeviceOrientationEvent === 'function' && typeof window.DeviceOrientationEvent.requestPermission !== 'function') {
-  window.addEventListener?.('deviceorientation', event => {
-    if (event.gamma == null || event.beta == null) return;
-    motionLean = { x: Math.max(-1, Math.min(1, event.gamma / 25)), y: Math.max(-1, Math.min(1, (event.beta - 50) / 25)) };
-    queueMotion();
-  }, { passive: true });
-}
-
-// Blocks rise into place the first time they scroll into view; a redraw of the same page keeps them put.
-const revealSelector = ':is(.steam-hero, .ai-hero, .money-split, .block, .perk, .game-card, .ws-card, .how-node, .how .privacy, .studio-card, .blocks-2 > *, .tile-grid > *, .topic-row, .method)';
-
-function revealBlocks(view) {
-  revealObserver?.disconnect();
-  revealObserver = null;
-  if (!motionPages.includes(view) || reducedMotion() || typeof IntersectionObserver !== 'function' || !main.querySelectorAll) return;
-  const key = location.hash;
-  const again = revealRoute === key;
-  revealRoute = key;
-  if (again) return;
-  // Only the innermost matches move: a grid stays, its cards rise one after another.
-  const items = [...main.querySelectorAll(revealSelector)].filter(item => !item.querySelector(revealSelector));
-  revealObserver = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const item = entry.target;
-      revealObserver?.unobserve(item);
-      item.classList.add('in');
-      // Once in place, the classes go: hover and press effects get their own transitions back.
-      setTimeout(() => item.classList.remove('rv', 'in'), 1300);
-    }
-  }, { threshold: 0.08, rootMargin: '0px 0px -6% 0px' });
-  items.forEach(item => {
-    // Neighbours in one row arrive one after another.
-    const siblings = [...(item.parentElement?.children || [])].filter(child => child.matches?.(revealSelector));
-    item.style.setProperty('--rv', String(Math.min(5, Math.max(0, siblings.indexOf(item)))));
-    item.classList.add('rv');
-    revealObserver.observe(item);
-  });
-}
 
 function currentTheme() {
   const value = readSetting(THEME_KEY, 'auto');
