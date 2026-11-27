@@ -35,7 +35,7 @@ npm run build
 | `src/trust.js` | Рейтинг доверия и уровень, общий для сервера и браузера |
 | `server/index.mjs` | HTTP API, SSE-события, протокол агента |
 | `server/db.mjs` | Хранение: JSON-файл или Postgres |
-| `server/mail.mjs` | Письма с кодом: Resend, Brevo, SendGrid, SMTP (в том числе Gmail) или файл для тестов |
+| `server/mail.mjs` | Письма с кодом: Gmail API, Resend, Brevo, SendGrid, SMTP или файл для тестов |
 | `server/oauth.mjs` | Вход через Google, Apple, Яндекс ID и GitHub |
 | `server/payments.mjs` | Оплата через ЮKassa и тестовый режим |
 | `server/notify.mjs` | Уведомления: список в приложении, группировка, настройки, тихие часы, рассылка push |
@@ -89,6 +89,7 @@ Apple отвечает не переходом, а POST-формой со сво
 
 | Что | Переменные |
 | --- | --- |
+| Почта Gmail студии через Gmail API — так же, как в The Box 26 (HTTPS, работает на бесплатном Render) | `GOOGLE_MAIL_CLIENT_ID`, `GOOGLE_MAIL_CLIENT_SECRET`, `GOOGLE_MAIL_REFRESH_TOKEN`, `GOOGLE_MAIL_SENDER` — те же четыре переменные, их можно скопировать из The Box 26 как есть. Письма уходят с адреса из `GOOGLE_MAIL_SENDER`; имя отправителя берётся из `MAIL_FROM`, иначе «про.стим». Этот способ главнее остальных |
 | Отправитель писем | `MAIL_FROM` (или `EMAIL_FROM`), например `Warkuda Games <noreply@домен>` |
 | Почта через API (работает на бесплатном Render, где SMTP-порты закрыты) | `RESEND_API_KEY`, `BREVO_API_KEY` или `SENDGRID_API_KEY` |
 | Почта через SMTP (Яндекс 360, Gmail, Mail.ru — на платном плане или другом хостинге) | `SMTP_HOST`, `SMTP_PORT` (465 или 587), `SMTP_USER`, `SMTP_PASS`. Подходят и имена из других проектов: `EMAIL_HOST` / `EMAIL_PORT` / `EMAIL_USER` / `EMAIL_PASS` (или `EMAIL_PASSWORD`), `MAIL_*` так же, а для Gmail хватит `GMAIL_USER` и `GMAIL_APP_PASSWORD` — сервер сам возьмёт `smtp.gmail.com` |

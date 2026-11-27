@@ -6,8 +6,10 @@ import path from 'node:path';
 
 // Letters from the studio mailbox: a code to confirm an e-mail or to sign in.
 // Transports, picked by environment variables:
-//   RESEND_API_KEY, BREVO_API_KEY or SENDGRID_API_KEY — e-mail over HTTPS (works on Render's free plan,
-//   which blocks SMTP ports);
+//   GOOGLE_MAIL_CLIENT_ID, GOOGLE_MAIL_CLIENT_SECRET, GOOGLE_MAIL_REFRESH_TOKEN, GOOGLE_MAIL_SENDER — the
+//   studio's Gmail account sends through the Gmail API, as The Box 26 does (HTTPS, so it works on Render's
+//   free plan, which blocks SMTP ports);
+//   RESEND_API_KEY, BREVO_API_KEY or SENDGRID_API_KEY — e-mail over HTTPS as well;
 //   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS — any mailbox with SMTP (Yandex 360, Gmail, Mail.ru). The
 //   names other projects use work too: EMAIL_* or MAIL_* (HOST, PORT, USER, PASS or PASSWORD), and
 //   GMAIL_USER with GMAIL_APP_PASSWORD, which needs no host;
@@ -25,17 +27,47 @@ export function smtpSettings(env = process.env) {
   return host ? { host, port, user, pass, secure: secureFlag ? secureFlag !== 'false' : port === 465 } : null;
 }
 
+// The Gmail API with an OAuth refresh token. The token's name is matched by its start, so
+// GOOGLE_MAIL_REFRESH_TOKEN and shorter spellings work alike.
+export function gmailSettings(env = process.env) {
+  const refreshKey = Object.keys(env).filter(key => key.startsWith('GOOGLE_MAIL_REFRESH') && env[key]).sort()[0];
+  const settings = { clientId: env.GOOGLE_MAIL_CLIENT_ID || '', clientSecret: env.GOOGLE_MAIL_CLIENT_SECRET || '', refreshToken: refreshKey ? env[refreshKey] : '', sender: env.GOOGLE_MAIL_SENDER || '' };
+  return Object.values(settings).every(Boolean) ? settings : null;
+}
+
 export function createMailer(env = process.env, dataDir = '.') {
   const hosted = env.NODE_ENV === 'production' || Boolean(env.RENDER);
   const smtp = smtpSettings(env);
+  const gmail = gmailSettings(env);
   const kind = env.MAIL_TRANSPORT
-    || (env.RESEND_API_KEY ? 'resend' : env.BREVO_API_KEY ? 'brevo' : env.SENDGRID_API_KEY ? 'sendgrid' : smtp ? 'smtp' : hosted ? '' : 'console');
+    || (gmail ? 'gmail' : env.RESEND_API_KEY ? 'resend' : env.BREVO_API_KEY ? 'brevo' : env.SENDGRID_API_KEY ? 'sendgrid' : smtp ? 'smtp' : hosted ? '' : 'console');
   const sender = env.MAIL_FROM || env.EMAIL_FROM || env.SMTP_FROM;
-  const from = parseAddress(sender || (smtp?.user ? `про.стим <${smtp.user}>` : 'про.стим <noreply@localhost>'));
+  let from = parseAddress(sender || (smtp?.user ? `про.стим <${smtp.user}>` : 'про.стим <noreply@localhost>'));
+  // Gmail sends only from its own address: MAIL_FROM may give the name, the address is the account's.
+  if (kind === 'gmail') {
+    const account = parseAddress(gmail.sender);
+    from = { name: (sender ? from.name : '') || account.name || 'про.стим', email: account.email };
+  }
   // A real mailbox means accounts must confirm their address; the outbox and console are for development.
-  const real = ['resend', 'brevo', 'sendgrid', 'smtp'].includes(kind);
+  const real = ['gmail', 'resend', 'brevo', 'sendgrid', 'smtp'].includes(kind);
+  let gmailToken = null;
+
+  async function gmailSend(to, subject, text, html) {
+    const base = env.GOOGLE_MAIL_MOCK_URL;
+    if (!gmailToken || gmailToken.expiresAt < Date.now() + 60000) {
+      const response = await fetch(base ? `${base}/token` : 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body: new URLSearchParams({ client_id: gmail.clientId, client_secret: gmail.clientSecret, refresh_token: gmail.refreshToken, grant_type: 'refresh_token' }), signal: AbortSignal.timeout(15000) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.access_token) throw new Error(`Gmail не выдал доступ: ${response.status} ${data.error || ''} ${data.error_description || ''}`.trim());
+      gmailToken = { value: data.access_token, expiresAt: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+    }
+    const raw = Buffer.from(buildMessage(from, to, subject, text, html)).toString('base64url');
+    return post(base ? `${base}/send` : 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { Authorization: `Bearer ${gmailToken.value}` }, { raw });
+  }
 
   async function send({ to, subject, text, html }) {
+    if (kind === 'gmail') {
+      return gmailSend(to, subject, text, html);
+    }
     if (kind === 'resend') {
       return post('https://api.resend.com/emails', { Authorization: `Bearer ${env.RESEND_API_KEY}` }, { from: formatAddress(from), to: [to], subject, text, html });
     }
