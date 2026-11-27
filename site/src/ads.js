@@ -14,8 +14,11 @@ export const PLUS_DISCOUNT = 0.2;
 
 export const plusPlan = {
   id: 'plus', title: 'про.стим Плюс', price: 299, days: 30,
-  perks: ['Лента без рекламы', 'Значок Плюс рядом с именем', `Скидка ${PLUS_DISCOUNT * 100}% на продвижение постов`, 'Новые функции ИИ-мира — первым']
+  perks: ['Лента без рекламы', `Скидка ${PLUS_DISCOUNT * 100}% на продвижение и день продвижения бесплатно каждый месяц`, 'ИИ-мир: до 6 компьютеров, файлы до 100 МБ, история задач длиннее', 'Steam: заявку смотрят первой, проверка документов бесплатно', 'Значок Плюс и новые функции первым']
 };
+
+// What Plus changes in ИИ-мир.
+export const aiLimits = { free: { devices: 2, fileMb: 25, history: 60 }, plus: { devices: 6, fileMb: 100, history: 200 } };
 
 export function boostPlan(id) {
   return boostPlans.find(plan => plan.id === id) || null;

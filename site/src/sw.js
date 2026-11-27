@@ -2,10 +2,10 @@
 // the app shell and pictures in a cache, so the site opens fast and survives a bad connection.
 // Pages and code always come from the network first, so a deploy is picked up on the next visit.
 
-const SHELL_CACHE = 'prostim-shell-v1';
+const SHELL_CACHE = 'prostim-shell-v2';
 const MEDIA_CACHE = 'prostim-media';
 const MEDIA_LIMIT = 240;
-const SHELL = ['/', '/styles.css', '/app.js', '/data.js', '/icons.js', '/state.js', '/page.js', '/chat.js', '/ads.js', '/social.js', '/trust.js', '/timeline.js', '/recommend.js', '/manifest.webmanifest', '/icon-192.png', '/badge-96.png'];
+const SHELL = ['/', '/styles.css', '/app.js', '/data.js', '/icons.js', '/state.js', '/page.js', '/chat.js', '/ads.js', '/social.js', '/ecosystem.js', '/trust.js', '/timeline.js', '/recommend.js', '/manifest.webmanifest', '/icon-192.png', '/badge-96.png'];
 
 self.addEventListener('install', event => {
   self.skipWaiting();

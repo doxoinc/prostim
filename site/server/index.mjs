@@ -7,18 +7,19 @@ import { openDatabase } from './db.mjs';
 import { HttpError, fail, sha256, token, hashPassword, verifyPassword, pairingCode, parseCookies, clip, cleanText, safeHttpUrl, initialsOf, colorFor, limiter } from './util.mjs';
 import { trustSummary } from '../src/trust.js';
 import { demoProjects, initialTopics } from '../src/data.js';
-import { cleanStats, cleanTaste, emptyTaste, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
+import { cleanStats, cleanTaste, emptyTaste, projectQuality, recordSignal, recordStat, statSignals, tasteSignals } from '../src/recommend.js';
 import { cleanDemoUrl, cleanFocus, cleanPostFields, normalizeUrl } from '../src/page.js';
 import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 import { codeLetter, createMailer } from './mail.mjs';
 import { authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
-import { boostPlan, boostPrice, plusPlan } from '../src/ads.js';
+import { aiLimits, boostPlan, boostPrice, plusPlan } from '../src/ads.js';
+import { cleanSteam, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest } from '../src/ecosystem.js';
 import { cleanFeedPrefs, commentDigest, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
 import { vapidKeys } from './push.mjs';
 import { embeddable, linkDraft, safeFetch } from './linkpreview.mjs';
-import { aiAvailable, aiCommentSummary, aiPostDraft } from './ai.mjs';
+import { aiAvailable, aiCommentSummary, aiPostDraft, aiSteamTexts } from './ai.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const staticRoot = path.join(root, 'src');
@@ -47,6 +48,7 @@ function migrate() {
     project.updates ||= [];
     project.watchers ||= [];
     project.reposts ||= [];
+    project.steam = cleanSteam(project.steam);
   }
   vapidKeys(process.env, D.secrets);
   db.save();
@@ -193,11 +195,14 @@ function projectView(project, meId) {
     reposts: (project.reposts || []).length,
     reposters: (project.reposts || []).filter(id => id === meId || privacyOf(D.users[id]).reposts).slice(-30).map(id => D.users[id]?.handle).filter(Boolean),
     flagged: project.ownerId === meId && Boolean(project.flagged),
+    steam: { status: project.steam?.status || 'none', releaseAt: project.steam?.releaseAt || 0, ...(project.ownerId === meId ? { checklist: project.steam?.checklist || {} } : {}) },
+    ...(project.ownerId === meId ? { workspaceId: project.workspaceId || '', repo: project.repo || null, publisherNoticed: project.publisherNoticed || 0, applicationId: project.applicationId || '' } : {}),
     comments: project.comments.filter(comment => !comment.hidden && !blockedEither(meId, comment.userId)).map(comment => ({
       id: comment.id, ...personRef(comment.userId, comment.name), text: comment.text || '', time: comment.time || '', createdAt: comment.createdAt,
       likes: (comment.likes || []).length, liked: Boolean(meId && (comment.likes || []).includes(meId)), replyTo: comment.replyTo || '',
       voice: comment.voice || '', duration: comment.duration || 0, pinned: project.pinnedComment === comment.id, mine: Boolean(meId && comment.userId === meId),
-      byAuthor: comment.userId ? comment.userId === project.ownerId : comment.name === owner.name, mention: D.users[comment.mentionId]?.handle || ''
+      byAuthor: comment.userId ? comment.userId === project.ownerId : comment.name === owner.name, mention: D.users[comment.mentionId]?.handle || '',
+      accepted: Boolean(comment.accepted), taskId: project.ownerId === meId ? comment.taskId || '' : '', tasked: Boolean(comment.taskId)
     }))
   };
 }
@@ -688,11 +693,39 @@ on('POST', '/api/promotions', async ({ request, user, body }) => {
   if (D.promotions.some(item => item.projectId === project.id && promotionLive(item))) fail(409, 'Этот проект уже продвигается');
   for (const item of D.promotions) if (item.projectId === project.id && item.status === 'pending') item.status = 'canceled';
   const promotion = { id: `ad-${randomUUID().slice(0, 12)}`, projectId: project.id, ownerId: user.id, plan: plan.id, days: plan.days, impressions: plan.impressions, shown: 0, clicks: 0, status: 'pending', createdAt: Date.now() };
+  if (body.pay === 'plus' || body.pay === 'sparks') {
+    if (plan.id !== 'day') fail(400, 'Так можно взять только день продвижения');
+    if (body.pay === 'plus') {
+      if (!plusCreditLeft(user)) fail(403, hasPlus(user) ? 'Бесплатный день в этом месяце уже использован' : 'Бесплатный день — часть Плюса');
+      user.plus.credit = monthKey();
+    } else {
+      if ((user.sparks || 0) < sparkPrices.boostDay) fail(403, `Нужно ${sparkPrices.boostDay} искр`);
+      spendSparks(user, sparkPrices.boostDay, 'Продвижение за искры');
+    }
+    const now = Date.now();
+    Object.assign(promotion, { status: 'active', gift: body.pay, startsAt: now, endsAt: now + 864e5 });
+    D.promotions.push(promotion);
+    db.save();
+    return { promotion: promotionView(promotion), payment: null };
+  }
   D.promotions.push(promotion);
   const payment = await startPayment(request, user, { kind: 'promotion', amount: boostPrice(plan, hasPlus(user)), description: `Продвижение «${clip(project.title, 60)}» · ${plan.title}`, ref: promotion.id });
   promotion.paymentId = payment.id;
   db.save();
   return { promotion: promotionView(promotion), payment: paymentView(payment) };
+});
+
+const monthKey = (time = Date.now()) => new Date(time).toISOString().slice(0, 7);
+const plusCreditLeft = user => hasPlus(user) && user.plus.credit !== monthKey();
+
+on('POST', '/api/plus/sparks', async ({ user }) => {
+  needUser(user);
+  if ((user.sparks || 0) < sparkPrices.plusWeek) fail(403, `Нужно ${sparkPrices.plusWeek} искр`);
+  spendSparks(user, sparkPrices.plusWeek, 'Неделя Плюса за искры');
+  const now = Date.now();
+  user.plus = { ...(user.plus || {}), until: Math.max(now, user.plus?.until || 0) + 7 * 864e5, since: user.plus?.since || now };
+  db.save();
+  return { plusUntil: user.plus.until, sparks: user.sparks };
 });
 
 on('POST', '/api/plus', async ({ request, user }) => {
@@ -775,7 +808,7 @@ on('GET', '/api/bootstrap', async ({ user }) => {
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
-    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true } : null,
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'] } : null,
     activity: meId ? { unread: notifier.unread(meId) } : { unread: 0 },
     watching: meId ? D.projects.filter(project => (project.watchers || []).includes(meId)).map(project => project.id) : [],
     reposted: meId ? D.projects.filter(project => (project.reposts || []).includes(meId)).map(project => project.id) : [],
@@ -865,7 +898,7 @@ on('POST', '/api/uploads', async ({ user, request }) => {
 });
 
 // Attachments for AI tasks: any file up to 25 MB, private to its owner and to the computer that runs the task.
-const FILE_LIMIT = 25 * 1024 * 1024;
+const FILE_LIMIT = 25 * 1024 * 1024; // without Plus; aiLimits in src/ads.js has both
 const audioExtensions = /\.(mp3|m4a|wav|ogg|oga|aac|flac|opus|webm)$/i;
 const videoExtensions = /\.(mp4|mov|m4v|webm|mkv|avi)$/i;
 
@@ -880,6 +913,7 @@ function fileKind(bytes, declared, filename) {
 
 on('POST', '/api/files', async ({ user, request }) => {
   needUser(user);
+  const fileLimit = aiLimits[hasPlus(user) ? 'plus' : 'free'].fileMb * 1024 * 1024;
   if (!uploadLimit(user.id)) fail(429, 'Слишком много загрузок, подожди немного');
   let filename = 'file';
   try { filename = decodeURIComponent(String(request.headers['x-file-name'] || 'file')); } catch { filename = 'file'; }
@@ -888,7 +922,7 @@ on('POST', '/api/files', async ({ user, request }) => {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > FILE_LIMIT) fail(413, 'Файл больше 25 МБ');
+    if (size > fileLimit) fail(413, `Файл больше ${fileLimit / 1024 / 1024} МБ${hasPlus(user) ? '' : ' — с Плюсом можно до 100 МБ'}`);
     chunks.push(chunk);
   }
   if (!size) fail(400, 'Пустой файл');
@@ -1083,7 +1117,10 @@ on('POST', '/api/projects/:id/comments/:cid/pin', async ({ user, params }) => {
   const pinned = project.pinnedComment !== comment.id;
   project.pinnedComment = pinned ? comment.id : '';
   db.save();
-  if (pinned && comment.userId) notifier.notify(comment.userId, { type: 'pin', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
+  if (pinned && comment.userId) {
+    if (comment.userId !== user.id) awardSparks(comment.userId, 'pinned', comment.id);
+    notifier.notify(comment.userId, { type: 'pin', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
+  }
   return { project: projectView(project, user.id) };
 });
 
@@ -1116,6 +1153,159 @@ on('GET', '/api/projects/:id/comments/summary', async ({ user, params }) => {
   return project.digest;
 });
 
+/* Sparks: authors reward people who help them */
+
+function awardSparks(userId, rule, ref) {
+  const user = D.users[userId];
+  const amount = sparkRules[rule]?.amount;
+  if (!user || !amount) return false;
+  user.sparkRefs ||= [];
+  const key = `${rule}:${ref}`;
+  if (user.sparkRefs.includes(key)) return false;
+  user.sparkRefs = [...user.sparkRefs, key].slice(-300);
+  user.sparks = (user.sparks || 0) + amount;
+  user.sparkLog = [{ amount, label: sparkRules[rule].label, at: Date.now() }, ...(user.sparkLog || [])].slice(0, 30);
+  return true;
+}
+
+function spendSparks(user, amount, label) {
+  user.sparks = (user.sparks || 0) - amount;
+  user.sparkLog = [{ amount: -amount, label, at: Date.now() }, ...(user.sparkLog || [])].slice(0, 30);
+}
+
+const rewardLimit = limiter(15, 24 * 3600 * 1000);
+
+// The author accepts a report: the person who wrote it gets sparks.
+on('POST', '/api/projects/:id/comments/:cid/accept', async ({ user, params }) => {
+  needUser(user);
+  const project = requireProject(params.id);
+  if (project.ownerId !== user.id) fail(403, 'Принимать отчёты может только автор');
+  const comment = requireComment(project, params.cid);
+  if (comment.userId === user.id) fail(400, 'Свой комментарий принимать не нужно');
+  if (!comment.accepted && !rewardLimit(user.id)) fail(429, 'На сегодня хватит наград');
+  comment.accepted = !comment.accepted;
+  if (comment.accepted && comment.userId && awardSparks(comment.userId, 'accepted', comment.id)) {
+    notifier.notify(comment.userId, { type: 'accepted', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
+  }
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+/* One project across the feed, ИИ-мир and Steam */
+
+function requireOwnProject(id, user) {
+  const project = requireProject(id);
+  if (project.ownerId !== user.id) fail(403, 'Это может только автор проекта');
+  return project;
+}
+
+function linkedWorkspace(project, user) {
+  if (!project.workspaceId || !D.workspaces[project.workspaceId]) fail(409, 'Сначала свяжи проект с папкой в ИИ-мире');
+  return requireWorkspace(project.workspaceId, user, 'run');
+}
+
+on('POST', '/api/projects/:id/link', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const id = String(body.workspaceId || '');
+  if (id) {
+    const workspace = D.workspaces[id] || fail(404, 'Папка не найдена');
+    if (roleFor(workspace, user.id) !== 'owner') fail(403, 'Связать можно только свою папку');
+  }
+  project.workspaceId = id;
+  if (!id) delete project.repo;
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+// A player's comment, or the whole discussion, becomes a task for the AI on the author's computer.
+on('POST', '/api/projects/:id/comments/:cid/task', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const comment = requireComment(project, params.cid);
+  const { workspace } = linkedWorkspace(project, user);
+  const name = personRef(comment.userId, comment.name);
+  const prompt = cleanText(body.prompt, 8000) || taskFromComment(project, { ...comment, handle: name.handle, name: name.name });
+  const task = createTask(user, workspace.id, { prompt, mode: body.mode === 'read' ? 'read' : 'edit' });
+  comment.taskId = task.id;
+  if (comment.userId && comment.userId !== user.id && awardSparks(comment.userId, 'tasked', comment.id)) {
+    notifier.notify(comment.userId, { type: 'tasked', actorId: user.id, projectId: project.id, snippet: comment.text || '', url: `/#/project/${project.id}` });
+  }
+  db.save();
+  return { task, workspaceId: workspace.id, project: projectView(project, user.id) };
+});
+
+on('POST', '/api/projects/:id/digest-task', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const { workspace } = linkedWorkspace(project, user);
+  const comments = project.comments.filter(comment => !comment.hidden && comment.userId !== user.id);
+  if (!comments.length) fail(400, 'Пока нечего разбирать');
+  const digest = project.digest || commentDigest(comments);
+  const task = createTask(user, workspace.id, { prompt: taskFromDigest(project, digest, comments), mode: body.mode === 'edit' ? 'edit' : 'read' });
+  db.save();
+  return { task, workspaceId: workspace.id };
+});
+
+// What the repository already has for a Steam release, from the file list on the author's computer.
+on('POST', '/api/projects/:id/repo-check', async ({ user, params }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const { workspace, device } = linkedWorkspace(project, user);
+  const tree = await callAgent(device, 'tree', { workspaceKey: workspace.key });
+  project.repo = { ...repoChecks(tree?.entries), at: Date.now() };
+  db.save();
+  return { project: projectView(project, user.id) };
+});
+
+// Texts for the Steam page: Claude writes them from the post and the README when a key is set,
+// otherwise they are put together from what the post already says.
+on('POST', '/api/projects/:id/steam-texts', async ({ user, params }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  let readme = '';
+  if (project.workspaceId && D.workspaces[project.workspaceId]) {
+    try {
+      const { workspace, device } = requireWorkspace(project.workspaceId, user);
+      for (const path of ['README.md', 'readme.md', 'README.ru.md', 'README.txt', 'README']) {
+        try {
+          const file = await callAgent(device, 'read', { workspaceKey: workspace.key, path }, 8000);
+          if (file?.content) { readme = file.content; break; }
+        } catch { if (!agentStreams.has(device?.id)) break; }
+      }
+    } catch {}
+  }
+  const pageText = (project.page || []).map(block => [block.text, ...(block.items || [])].filter(Boolean).join('\n')).join('\n\n');
+  const written = await aiSteamTexts(process.env, { ...project, text: `${project.description || ''}\n${pageText}` }, readme);
+  if (written) return { ...written, source: 'ai', readme: Boolean(readme) };
+  const paragraphs = [project.description, ...(project.page || []).filter(block => block.type === 'text').map(block => block.text)].filter(Boolean).slice(0, 4);
+  const features = (project.page || []).filter(block => block.type === 'list').flatMap(block => block.items).slice(0, 8);
+  return { short: clip(project.summary, 300), about: paragraphs.length ? paragraphs : [project.summary], features, tags: (project.tags || []).filter(tag => tag !== 'Новый проект'), source: 'post', readme: Boolean(readme) };
+});
+
+// The Steam status of a project. "Скоро" and "Вышла" tell the people who follow it; the release day
+// comes with a free day of promotion.
+on('POST', '/api/projects/:id/steam', async ({ user, params, body }) => {
+  needUser(user);
+  const project = requireOwnProject(params.id, user);
+  const before = project.steam?.status || 'none';
+  project.steam = cleanSteam(body, project.steam);
+  const status = project.steam.status;
+  if (status !== before && (status === 'coming' || status === 'released')) {
+    const snippet = status === 'released' ? 'вышла в Steam' : 'скоро в Steam — добавь в желаемое';
+    for (const id of project.watchers || []) notifier.notify(id, { type: 'steam', actorId: user.id, projectId: project.id, snippet, url: `/#/project/${project.id}` });
+  }
+  if (status === 'released' && !project.releaseBoost) {
+    const now = Date.now();
+    project.releaseBoost = now;
+    if (!D.promotions.some(item => item.projectId === project.id && promotionLive(item))) {
+      D.promotions.push({ id: `ad-${randomUUID().slice(0, 12)}`, projectId: project.id, ownerId: user.id, plan: 'day', days: 1, impressions: 300, shown: 0, clicks: 0, status: 'active', gift: 'release', createdAt: now, startsAt: now, endsAt: now + 864e5 });
+    }
+  }
+  db.save();
+  return { project: projectView(project, user.id), releaseBoost: status === 'released' && project.releaseBoost && Date.now() - project.releaseBoost < 5000 };
+});
+
 /* Project updates: a devlog in episodes, and people who follow one project */
 
 on('POST', '/api/projects/:id/updates', async ({ user, params, body }) => {
@@ -1125,7 +1315,8 @@ on('POST', '/api/projects/:id/updates', async ({ user, params, body }) => {
   const title = cleanText(body.title, 100);
   if (!title) fail(400, 'Нужен заголовок обновления');
   const image = body.image ? ownedUpload(body.image, user, 'image').url : '';
-  const update = { id: randomUUID().slice(0, 12), title, text: cleanText(body.text, 2000), version: cleanText(body.version, 24), ...(image ? { image } : {}), createdAt: Date.now() };
+  const taskId = typeof body.taskId === 'string' && D.tasks[body.taskId]?.workspaceId === project.workspaceId ? body.taskId : '';
+  const update = { id: randomUUID().slice(0, 12), title, text: cleanText(body.text, 2000), version: cleanText(body.version, 24), ...(image ? { image } : {}), ...(taskId ? { taskId } : {}), createdAt: Date.now() };
   project.updates = [update, ...(project.updates || [])].slice(0, 50);
   project.lastUpdateAt = update.createdAt;
   db.save();
@@ -1345,6 +1536,13 @@ on('POST', '/api/feed/events', async ({ user, request, body }) => {
     accepted += 1;
   }
   if (taste) D.tastes[user.id] = taste;
+  for (const project of new Set(events.map(event => byId.get(String(event?.id || ''))).filter(Boolean))) {
+    const quality = projectQuality({ votes: project.votes.length + (project.seedVotes || 0), saves: project.saves.length, comments: project.comments.length }, D.feedStats[project.id]);
+    if (publisherShouldNotice(project, quality, { watchers: (project.watchers || []).length, saves: project.saves.length })) {
+      project.publisherNoticed = Date.now();
+      notifier.notify(project.ownerId, { type: 'publisher', actorId: 'prostim', projectId: project.id, url: `/#/project/${project.id}` });
+    }
+  }
   if (accepted) db.save();
   return { accepted };
 });
@@ -1434,6 +1632,13 @@ on('POST', '/api/applications', async ({ user, body }) => {
     status: 'Отправлена', createdAt: Date.now()
   };
   if (!application.title || !application.description || !application.contact) fail(400, 'Заполни название, описание и контакт');
+  const project = body.projectId ? D.projects.find(item => item.id === String(body.projectId) && item.ownerId === user.id) : null;
+  if (project) {
+    application.projectId = project.id;
+    project.applicationId = application.id;
+    if (['none', 'preparing'].includes(project.steam?.status || 'none')) project.steam = cleanSteam({ status: 'applied' }, project.steam);
+  }
+  if (hasPlus(user)) Object.assign(application, { priority: true, documentReview: true });
   D.applications.unshift(application);
   D.messages.push({ id: randomUUID(), from: 'prostim', to: user.id, text: `Заявка «${application.title}» отправлена издателю. Ответ придёт в этот чат.`, createdAt: Date.now() });
   db.save();
@@ -1492,6 +1697,9 @@ on('POST', '/api/messages/:handle/read', async ({ user, params }) => {
 
 on('POST', '/api/devices/pair-code', async ({ user }) => {
   needUser(user);
+  const limit = aiLimits[hasPlus(user) ? 'plus' : 'free'].devices;
+  const owned = Object.values(D.devices).filter(device => device.ownerId === user.id).length;
+  if (owned >= limit) fail(403, hasPlus(user) ? `Подключено ${owned} компьютеров — это предел. Отключи один в ИИ-мире.` : `Без Плюса можно подключить ${limit} компьютера. С Плюсом — до ${aiLimits.plus.devices}.`);
   for (const [code, entry] of Object.entries(D.pairCodes)) if (entry.expiresAt < Date.now() || entry.userId === user.id) delete D.pairCodes[code];
   const code = pairingCode();
   D.pairCodes[code] = { userId: user.id, expiresAt: Date.now() + 15 * 60 * 1000 };
@@ -1513,7 +1721,11 @@ on('GET', '/api/workspaces/:id', async ({ user, params }) => {
 on('POST', '/api/workspaces/:id/tasks', async ({ user, params, body }) => {
   needUser(user);
   if (!writeLimit(user.id)) fail(429, 'Слишком много задач подряд');
-  const { workspace, role, device } = requireWorkspace(params.id, user, 'run');
+  return { task: createTask(user, params.id, body) };
+});
+
+function createTask(user, workspaceId, body) {
+  const { workspace, role, device } = requireWorkspace(workspaceId, user, 'run');
   const prompt = cleanText(body.prompt, 8000);
   if (!prompt) fail(400, 'Опиши задачу');
   const mode = MODES.includes(body.mode) ? body.mode : 'read';
@@ -1537,9 +1749,10 @@ on('POST', '/api/workspaces/:id/tasks', async ({ user, params, body }) => {
   const delivered = deliverTask(task);
   updateTask(task, { status: delivered ? 'sent' : 'waiting' });
   const ids = Object.values(D.tasks).filter(item => item.workspaceId === workspace.id).sort((left, right) => left.createdAt - right.createdAt).map(item => item.id);
-  for (const old of ids.slice(0, Math.max(0, ids.length - 60))) delete D.tasks[old];
-  return { task: { ...taskSummary(task), events: task.events } };
-});
+  const keep = aiLimits[hasPlus(D.users[workspace.ownerId]) ? 'plus' : 'free'].history;
+  for (const old of ids.slice(0, Math.max(0, ids.length - keep))) delete D.tasks[old];
+  return { ...taskSummary(task), events: task.events };
+}
 
 on('POST', '/api/tasks/:id/cancel', async ({ user, params }) => {
   needUser(user);

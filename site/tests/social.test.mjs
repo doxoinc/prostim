@@ -324,3 +324,127 @@ test('comments say who is the author and whom a reply answers; pictures keep the
   const edited = (await owner('PATCH', `/api/projects/${post.id}`, { title: 'Отметки', summary: 'коротко', media: [{ url: upload.body.url, focus: [50, 50] }] })).body.project;
   assert.equal(edited.media[0].focus, undefined, 'back to the centre');
 });
+
+// A stand-in for the agent on the author's computer: it answers the commands the server sends.
+async function connectAgent(owner) {
+  const { code } = (await owner('POST', '/api/devices/pair-code')).body;
+  const claim = await fetch(`${base}/api/agent/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Mac', allow: 'edit' }) }).then(response => response.json());
+  const agent = (url, body) => fetch(`${base}${url}`, { method: 'POST', headers: { Authorization: `Bearer ${claim.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(response => response.json());
+  const hello = await agent('/api/agent/hello', { engines: [{ id: 'demo', label: 'Демо', ok: true }], workspaces: [{ key: 'game', name: 'game' }], allow: 'edit' });
+  const controller = new AbortController();
+  const answers = { tree: { entries: [{ path: 'README.md', size: 10 }, { path: 'LICENSE', size: 4 }, { path: 'builds/game.exe', size: 99 }], truncated: false }, read: { content: '# Маяк\nИгра про шторм' } };
+  const stream = await fetch(`${base}/api/agent/stream`, { headers: { Authorization: `Bearer ${claim.token}` }, signal: controller.signal });
+  (async () => {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for await (const chunk of stream.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let end;
+        while ((end = buffer.indexOf('\n\n')) >= 0) {
+          const block = buffer.slice(0, end);
+          buffer = buffer.slice(end + 2);
+          if (!block.includes('event: cmd')) continue;
+          const command = JSON.parse(block.split('\n').find(line => line.startsWith('data: ')).slice(6));
+          if (answers[command.type]) await agent('/api/agent/reply', { id: command.id, ok: true, data: answers[command.type] });
+        }
+      }
+    } catch {}
+  })();
+  await wait(150);
+  return { workspaceId: hello.workspaces.game, agent, close: () => controller.abort() };
+}
+
+test('one project across the feed, ИИ-мир and Steam: links, tasks from comments, sparks, the way to Steam', async () => {
+  const author = await person('ecoauthor');
+  const fan = await person('ecofan');
+  const stranger = await person('ecostranger');
+  const device = await connectAgent(author);
+  const post = await project(author, 'Маяк', { tags: ['Инди'] });
+  assert.equal((await stranger('POST', `/api/projects/${post.id}/link`, { workspaceId: device.workspaceId })).status, 403);
+  const linked = (await author('POST', `/api/projects/${post.id}/link`, { workspaceId: device.workspaceId })).body.project;
+  assert.equal(linked.workspaceId, device.workspaceId);
+  assert.equal((await fan('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id).workspaceId, undefined, 'only the author sees the link');
+
+  // a comment becomes an AI task; the player gets sparks
+  const comment = (await fan('POST', `/api/projects/${post.id}/comments`, { text: 'Вылетает на втором уровне' })).body.comment;
+  const tasked = (await author('POST', `/api/projects/${post.id}/comments/${comment}/task`, { mode: 'edit' })).body;
+  assert.match(tasked.task.prompt, /^Игрок @ecofan пишет в комментариях к «Маяк»/);
+  assert.equal(tasked.workspaceId, device.workspaceId);
+  assert.equal(tasked.project.comments.find(item => item.id === comment).tasked, true);
+  await author('POST', `/api/projects/${post.id}/comments/${comment}/accept`);
+  await author('POST', `/api/projects/${post.id}/comments/${comment}/accept`);
+  await author('POST', `/api/projects/${post.id}/comments/${comment}/accept`);
+  await author('POST', `/api/projects/${post.id}/comments/${comment}/pin`);
+  const fanBoot = (await fan('GET', '/api/bootstrap')).body;
+  assert.equal(fanBoot.account.sparks, 40, '10 for the task, 20 for the accepted report once, 10 for the pin');
+  assert.deepEqual(fanBoot.account.sparkLog.map(entry => entry.amount), [10, 20, 10]);
+  assert.deepEqual((await fan('GET', '/api/notifications')).body.items.slice(0, 3).map(item => item.type), ['pin', 'accepted', 'tasked']);
+  assert.equal((await fan('POST', '/api/plus/sparks')).status, 403, 'not enough sparks for a week of Plus');
+  assert.equal((await fan('POST', `/api/projects/${post.id}/comments/${comment}/task`, {})).status, 403);
+
+  // the discussion as a task, the repository check, texts for Steam
+  assert.equal((await author('POST', `/api/projects/${post.id}/digest-task`, {})).body.task.mode, 'read');
+  const checked = (await author('POST', `/api/projects/${post.id}/repo-check`)).body.project;
+  assert.deepEqual([checked.repo.readme, checked.repo.license, checked.repo.buildFiles, checked.repo.screens], [true, true, true, false]);
+  const texts = (await author('POST', `/api/projects/${post.id}/steam-texts`)).body;
+  assert.equal(texts.source, 'post');
+  assert.equal(texts.readme, true);
+  assert.equal(texts.short, 'Маяк — коротко');
+
+  // a finished task goes out as an update
+  await device.agent('/api/agent/events', { taskId: tasked.task.id, status: 'done', events: [{ kind: 'done', ok: true, text: 'Исправил' }] });
+  const updated = (await author('POST', `/api/projects/${post.id}/updates`, { title: 'Вылет исправлен', taskId: tasked.task.id })).body.project;
+  assert.equal(updated.updates[0].title, 'Вылет исправлен');
+
+  // the application is tied to the project, then the release
+  const application = (await author('POST', '/api/applications', { title: 'Маяк', description: 'Нужна помощь с релизом', contact: '@author', projectId: post.id })).body.application;
+  assert.equal(application.projectId, post.id);
+  let mine = (await author('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id);
+  assert.equal(mine.steam.status, 'applied');
+  assert.equal(mine.applicationId, application.id);
+  await fan('POST', `/api/projects/${post.id}/watch`);
+  await author('POST', `/api/projects/${post.id}/steam`, { status: 'coming', checklist: { build: true, cheat: true } });
+  assert.equal((await fan('GET', '/api/notifications')).body.items[0].text, '«Маяк»: скоро в Steam — добавь в желаемое');
+  const released = (await author('POST', `/api/projects/${post.id}/steam`, { status: 'released' })).body;
+  assert.equal(released.releaseBoost, true);
+  assert.deepEqual(released.project.steam, { status: 'released', releaseAt: 0, checklist: { build: true } });
+  assert.ok((await stranger('GET', '/api/bootstrap')).body.ads.some(ad => ad.projectId === post.id), 'the release day comes with a free promotion');
+  assert.deepEqual((await stranger('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id).steam, { status: 'released', releaseAt: 0 }, 'others see the status, not the checklist');
+  device.close();
+});
+
+test('Plus across the parts: a free day of promotion a month, more computers, priority in Steam', async () => {
+  const member = await person('plusmember');
+  const post = await project(member, 'Плюсовый');
+  assert.equal((await member('POST', '/api/promotions', { projectId: post.id, plan: 'day', pay: 'plus' })).status, 403, 'the free day is part of Plus');
+  const { payment } = (await member('POST', '/api/plus')).body;
+  await member('POST', `/api/payments/${payment.id}/test`);
+  assert.equal((await member('GET', '/api/bootstrap')).body.account.plusCredit, true);
+  const gift = (await member('POST', '/api/promotions', { projectId: post.id, plan: 'day', pay: 'plus' })).body;
+  assert.equal(gift.promotion.status, 'active');
+  assert.equal(gift.payment, null);
+  assert.equal((await member('GET', '/api/bootstrap')).body.account.plusCredit, false, 'once a month');
+  const application = (await member('POST', '/api/applications', { title: 'Игра', description: 'Описание', contact: '@m' })).body.application;
+  assert.deepEqual([application.priority, application.documentReview], [true, true]);
+  assert.equal((await member('GET', '/api/bootstrap')).body.account.limits.devices, 6);
+  const free = await person('freemember');
+  for (let index = 0; index < 2; index += 1) {
+    const { code } = (await free('POST', '/api/devices/pair-code')).body;
+    await fetch(`${base}/api/agent/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: `PC ${index}` }) });
+  }
+  const third = await free('POST', '/api/devices/pair-code');
+  assert.equal(third.status, 403);
+  assert.match(third.body.error, /С Плюсом — до 6/);
+});
+
+test('a publisher notices a game people hold on to', async () => {
+  const dev = await person('noticedev');
+  const post = await project(dev, 'Тихий берег');
+  for (const name of ['noticeone', 'noticetwo', 'noticethree']) await (await person(name))('POST', `/api/projects/${post.id}/save`);
+  const events = Array.from({ length: 32 }, () => ({ id: post.id, type: 'view', dwell: 9000, expected: 4000 }));
+  await fetch(`${base}/api/feed/events`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '10.7.7.7' }, body: JSON.stringify({ events }) });
+  const notice = (await dev('GET', '/api/notifications')).body.items.find(item => item.type === 'publisher');
+  assert.equal(notice?.text, 'Издатель заметил «Тихий берег»: людям интересно. Подай заявку в Steam — её посмотрят первой');
+  assert.ok((await dev('GET', '/api/bootstrap')).body.projects.find(item => item.id === post.id).publisherNoticed > 0);
+});

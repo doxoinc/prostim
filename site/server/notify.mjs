@@ -7,10 +7,10 @@ import { pushEndpointAllowed, sendPush } from './push.mjs';
 
 export const noticeGroups = {
   messages: { label: 'Сообщения', hint: 'Новые сообщения в чатах', types: ['message'] },
-  comments: { label: 'Комментарии', hint: 'Комментарии, ответы, лайки и закрепы', types: ['comment', 'reply', 'comment-like', 'pin'] },
+  comments: { label: 'Комментарии', hint: 'Комментарии, ответы, лайки и закрепы', types: ['comment', 'reply', 'comment-like', 'pin', 'accepted', 'tasked'] },
   likes: { label: 'Поддержка и репосты', hint: 'Кто поддержал и поделился', types: ['like', 'repost'] },
   follows: { label: 'Подписчики', hint: 'Новые подписчики', types: ['follow'] },
-  updates: { label: 'Обновления проектов', hint: 'Новые проекты и обновления тех, за кем следишь', types: ['update', 'post'] }
+  updates: { label: 'Обновления проектов', hint: 'Новые проекты и обновления тех, за кем следишь', types: ['update', 'post', 'publisher', 'steam'] }
 };
 const groupOf = type => Object.keys(noticeGroups).find(key => noticeGroups[key].types.includes(type)) || 'updates';
 const LIST_LIMIT = 150;
@@ -56,6 +56,10 @@ export function noticeText(item, nameOf, projectTitle) {
     case 'update': return `Новое в «${title}»${quote}`;
     case 'post': return `${who} публикует новый проект «${title}»`;
     case 'message': return `${who}${quote || ': новое сообщение'}`;
+    case 'accepted': return `Автор «${title}» принял твой отчёт — +20 искр${quote}`;
+    case 'tasked': return `Автор «${title}» взял твой отзыв в работу ИИ — +10 искр${quote}`;
+    case 'publisher': return `Издатель заметил «${title}»: людям интересно. Подай заявку в Steam — её посмотрят первой`;
+    case 'steam': return item.snippet ? `«${title}»: ${item.snippet}` : `«${title}» в Steam`;
     default: return item.snippet || 'Новое событие';
   }
 }

@@ -4,7 +4,8 @@ import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterPr
 import { trustLevels, levelTier, levelTiers } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
 import { AD_EVERY, boostPlans, boostPrice, plusPlan, placeAds } from './ads.js';
-import { renderRun, runMeta, isActive, modeNames, modeHints, unifiedDiffHtml } from './timeline.js';
+import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
+import { steamStatuses, steamReadiness, taskFromComment, updateFromTask, sparkRules, sparkPrices } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
 import { cleanFeedPrefs, emptyFeedPrefs, withFeedPref, searchProjects, reportReasons, sortComments, commentSorts } from './social.js';
 import { postStages, postPlatforms, postPricing, postSeeking, pageFonts, pageSizes, pageWeights, pageBackgrounds, pageColors, pageBlockTypes, PAGE_BLOCK_LIMIT, POST_LINK_LIMIT, linkKind, normalizeUrl, cleanDemoUrl, imageRatios, focusStyle, cleanTheme, cleanPostFields, themeVars, themeClass, fontFamiliesFor, blockClass, blockStyle, pageHtml } from './page.js';
@@ -1016,7 +1017,7 @@ function mediaInner(project, reason = '') {
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}${steamBadgeHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${trustBadge(author, true)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
 }
 
 // The post's own call to action, right on the card: «Играть» for a demo that runs in the browser,
@@ -1028,7 +1029,8 @@ function postButton(project) {
     return { url: link.url, icon: link.icon, label: block.label || linkCta[link.kind] || link.label };
   }
   const first = (project.links?.length ? project.links : [project.url]).map(linkKind).find(Boolean);
-  return first ? { url: first.url, icon: first.icon, label: linkCta[first.kind] || 'Открыть сайт' } : null;
+  const wish = first?.kind === 'steam' && project.steam?.status === 'coming';
+  return first ? { url: first.url, icon: first.icon, label: wish ? 'В желаемое Steam' : linkCta[first.kind] || 'Открыть сайт' } : null;
 }
 
 function cardCtaHtml(project) {
@@ -1538,7 +1540,7 @@ function renderProfile(handle, tab) {
   } else if (activeTab === 'applications') {
     const applications = online ? remote.applications : state.applications;
     content = applications.length
-      ? applications.map((application, index) => `<div class="app-row"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || application.stage || 'Черновик')}${application.createdAt ? ` · ${timeAgo(application.createdAt)}` : ''}</small></span><button class="icon-btn" data-action="download-application" data-index="${index}" aria-label="Скачать заявку">${icon('download')}</button></div>`).join('')
+      ? applications.map((application, index) => `<div class="app-row"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || application.stage || 'Черновик')}${application.createdAt ? ` · ${timeAgo(application.createdAt)}` : ''}${application.priority ? ' · приоритет Плюса' : ''}</small></span><button class="icon-btn" data-action="download-application" data-index="${index}" aria-label="Скачать заявку">${icon('download')}</button></div>`).join('')
       : emptyState('gamepad', 'Заявок пока нет', `<button class="btn btn-primary" data-action="application">${icon('send')} Подать заявку</button>`);
   } else if (activeTab === 'reposts') {
     const shared = projects().filter(project => (project.reposters || []).includes(handle) && visibleInFeed(project));
@@ -1758,7 +1760,7 @@ function renderSteam(page) {
   }
   const applications = myApplications();
   const mine = applications.length ? `<section class="block my-apps"><h2 class="block-title">Мои заявки</h2>${applications.slice(0, 3).map(application => `<a class="app-row" href="#/me/applications"><span class="doc-icon small">${icon('gamepad')}</span><span><b>${escapeHtml(application.title)}</b><small>${escapeHtml(application.status || 'Черновик')} · ${escapeHtml(application.stage || '')}</small></span>${icon('chevronRight')}</a>`).join('')}</section>` : '';
-  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art chrome-art">${liquidHtml()}${wavesSvg('hero-waves')}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span class="chroma" data-text="в Steam">в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary hero-main" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml('btn btn-glass', 'Мы в Steam')}<a class="btn btn-glass" href="#/steam/studio">${icon('users')} Кто мы</a></div></div></section>${moneySplitHtml()}${perksHtml()}${gamesHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
+  return `<div class="page">${navigation}<section class="steam-hero"><div class="hero-art chrome-art">${liquidHtml()}${wavesSvg('hero-waves')}</div><span class="hero-fee" aria-hidden="true"><b>${feePercent}</b><small>наша доля</small></span><div class="hero-copy"><span class="hero-kicker">${icon('gamepad')} ${escapeHtml(studio.name)} · паблишинг</span><h1>Выпускаем твою игру <span class="chroma" data-text="в Steam">в Steam</span></h1><p class="hero-lead">Берём всего <b class="accent-text">${feePercent}</b> с выплаты Steam. Договор, страница, билд, запуск и выплаты — через издателя в Молдове.</p><div class="hero-actions"><button class="btn btn-primary hero-main" data-action="application">${icon('send')} Подать заявку</button>${steamLinkHtml('btn btn-glass', 'Мы в Steam')}<a class="btn btn-glass" href="#/steam/studio">${icon('users')} Кто мы</a></div></div></section>${moneySplitHtml()}${perksHtml()}${gamesHtml()}${mine}<section class="block"><h2 class="block-title">Путь игры</h2>${stepsHtml()}</section>${servicesHtml()}${payoutHtml()}<div class="blocks-2">${calculatorHtml()}${mySteamProjectsHtml() || readinessHtml()}</div>${studioCardHtml()}${roadmapHtml()}${faqHtml()}</div>`;
 }
 
 /* AI world */
@@ -2027,7 +2029,9 @@ function runsHtml(detail) {
     const suggestions = ['Объясни структуру проекта', 'Найди возможные ошибки', 'Напиши README для проекта', 'Что изменилось в последних коммитах?'];
     return `<div class="runs-empty"><span class="ai-orb">${icon('sparkle')}</span><h2>Что сделаем?</h2><p>Агент выполнит задачу на компьютере «${escapeHtml(detail.device?.name || '')}», а шаги появятся здесь.</p><div class="suggestions">${suggestions.map(text => `<button class="suggestion" data-action="prompt-chip" data-text="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join('')}</div></div>`;
   }
-  return tasks.map(task => `<div class="turn"><div class="turn-prompt"><p>${escapeHtml(task.prompt)}</p>${attachmentsHtml(task.attachments)}<small>${task.handle && !isMine(task.handle) ? `@${escapeHtml(task.handle)} · ` : ''}${escapeHtml(modeNames[task.mode] || '')} · ${clockTime(task.createdAt)}</small></div>${renderRun(task, { canCancel: detail.role === 'owner' || isMine(task.handle) })}</div>`).join('');
+  const linked = projects().find(project => project.workspaceId === detail.id && isMine(project.handle));
+  const publish = task => linked && task.status === 'done' ? `<button class="btn btn-ghost btn-sm turn-publish" data-action="task-to-update" data-id="${escapeHtml(task.id)}" data-project="${escapeHtml(linked.id)}">${icon('send')} Опубликовать как обновление «${escapeHtml(linked.title)}»</button>` : '';
+  return tasks.map(task => `<div class="turn"><div class="turn-prompt"><p>${escapeHtml(task.prompt)}</p>${attachmentsHtml(task.attachments)}<small>${task.handle && !isMine(task.handle) ? `@${escapeHtml(task.handle)} · ` : ''}${escapeHtml(modeNames[task.mode] || '')} · ${clockTime(task.createdAt)}</small></div>${renderRun(task, { canCancel: detail.role === 'owner' || isMine(task.handle) })}${publish(task)}</div>`).join('');
 }
 
 function renderWorkspace(id, tab = '') {
@@ -2051,6 +2055,11 @@ function renderWorkspace(id, tab = '') {
 }
 
 function workspaceHeadInner(detail) {
+  const linked = projects().find(project => project.workspaceId === detail.id && isMine(project.handle));
+  return rawWorkspaceHeadInner(detail) + (linked ? `<button class="ws-project" data-action="hub-open" data-id="${escapeHtml(linked.id)}" data-tab="code">${icon('grid')}<span>${escapeHtml(linked.title)}</span></button>` : '');
+}
+
+function rawWorkspaceHeadInner(detail) {
   return `<a class="icon-btn" href="#/ai" aria-label="К проектам">${icon('chevronLeft')}</a><span class="ws-head-icon">${icon('folder')}<i class="presence ${detail.device?.online ? 'on' : ''}"></i></span><span class="ws-head-text"><b>${escapeHtml(detail.name)}</b><small>${escapeHtml(detail.device?.name || '')} · ${lastSeenText(detail.device)}${detail.branch ? ` · ${escapeHtml(detail.branch)}` : ''}${detail.role !== 'owner' ? ` · от @${escapeHtml(detail.ownerHandle)}` : ''}</small></span>`;
 }
 
@@ -2328,8 +2337,9 @@ function storeLinksHtml(project) {
   const links = (project.links?.length ? project.links : [project.url]).map(linkKind).filter(Boolean);
   const [first, ...rest] = links;
   const play = project.demo ? `<button class="btn btn-grad store-cta" data-action="play-demo" data-id="${escapeHtml(project.id)}">${icon('play')} Играть в браузере</button>` : '';
-  const primary = play ? play + (first ? externalLink(first.url, 'link-pill', `${icon(first.icon)}${escapeHtml(linkCta[first.kind] || first.label)}`) : '') : first
-    ? externalLink(first.url, 'btn btn-primary store-cta', `${icon(first.icon)} ${escapeHtml(linkCta[first.kind] || 'Открыть сайт')}`)
+  const tracked = html => html.replace('<a ', `<a data-action="post-link" data-id="${escapeHtml(project.id)}" `);
+  const primary = play ? play + (first ? tracked(externalLink(first.url, 'link-pill', `${icon(first.icon)}${escapeHtml(linkCta[first.kind] || first.label)}`)) : '') : first
+    ? tracked(externalLink(first.url, 'btn btn-primary store-cta', `${icon(first.icon)} ${escapeHtml(first.kind === 'steam' && project.steam?.status === 'coming' ? 'В желаемое Steam' : linkCta[first.kind] || 'Открыть сайт')}`))
     : project.id === 'contour' ? `<button class="btn btn-primary store-cta" data-action="open-demo">${icon('play')} Попробовать</button>` : '';
   const trailer = safeUrl(project.video) ? externalLink(safeUrl(project.video), 'link-pill', `${icon('play')}Трейлер`) : '';
   const pills = rest.map(link => externalLink(link.url, 'link-pill', `${icon(link.icon)}${escapeHtml(link.label)}`)).join('');
@@ -2363,7 +2373,7 @@ function openProject(id) {
   const page = project.page?.length ? pageHtml(project.page) : project.description && project.description !== project.summary ? `<p class="pb pb-text">${escapeHtml(project.description)}</p>` : '';
   const follow = mine ? '' : followPill(project.handle, 'small');
   document.querySelectorAll?.('video[data-feed-video]').forEach(video => video.pause?.());
-  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
+  showDialog(`<article class="store ${themeClass(theme)}" style="${themeVars(theme)}"><div class="store-top">${storeGalleryHtml(project)}<div class="store-head"><div class="sheet-author"><button class="author-link" data-action="profile" data-handle="${escapeHtml(project.handle)}">${ringAvatar(project, '', userByHandle(project.handle), true)}<span><b>${escapeHtml(project.author)} ${trustBadge(userByHandle(project.handle), true)}</b><small>${escapeHtml(categoryNames[project.category])}${project.createdAt ? ` · ${timeAgo(project.createdAt)}` : ''}</small></span></button>${follow}</div><h2 id="modal-title" class="store-title">${escapeHtml(project.title)}</h2><p class="store-summary">${escapeHtml(project.summary)}</p>${storeLinksHtml(project)}${storeFactsHtml(project)}${visibleTags(project).length ? `<div class="chips">${visibleTags(project).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}</div></div>${page ? `<div class="store-page">${page}</div>` : ''}${updatesHtml(project)}<div class="store-foot">${projectHubHtml(project) || promotion}${interestHtml(project)}<div class="sheet-actions">${edit}${write}${watchButton(project)}<button class="btn btn-ghost btn-square" data-action="vote" data-id="${projectId}" aria-pressed="${state.votes.includes(project.id)}" aria-label="Поддержать">${icon('up')}</button><button class="btn btn-ghost btn-square" data-action="share" data-id="${projectId}" aria-label="Поделиться">${icon('share')}</button>${mine ? '' : `<button class="btn btn-ghost btn-square" data-action="post-menu" data-id="${projectId}" aria-label="Ещё" title="Ещё">${icon('more')}</button>`}${remove}</div><h3 class="sheet-sub">Комментарии <span>${commentCount(project)}</span></h3>${commentsHtml(project)}</div></article>`, { kind: 'project', id });
   const gallery = modal.querySelector?.('.store-gallery');
   if (gallery) loopTrack(gallery, 0, index => syncGalleryDots(gallery, index));
 }
@@ -2399,7 +2409,7 @@ function openBoost(projectId) {
   const plans = boostPlans.map(plan => `<label class="plan"><input type="radio" name="plan" value="${plan.id}" data-price="${boostPrice(plan, plus)}" ${plan.best ? 'checked' : ''}><span class="plan-card">${plan.best ? '<i class="plan-best">Выгодно</i>' : ''}<b>${plan.title}</b><em>до ${plan.impressions.toLocaleString('ru-RU')} показов</em><strong>${rub(boostPrice(plan, plus))}</strong>${plus ? `<s>${rub(plan.price)}</s>` : ''}</span></label>`).join('');
   const chosen = boostPlans.find(plan => plan.best) || boostPlans[0];
   const mode = remote?.config?.payments;
-  showDialog(`<div class="sheet-body boost"><span class="boost-mark">${icon('megaphone')}</span><h2 id="modal-title">Продвинуть «${escapeHtml(project.title)}»</h2><p class="lead">Пост будет появляться в ленте у других людей после каждых ${AD_EVERY} постов, с пометкой «Реклама». Перед ним край ленты подсвечивается и рекламу можно пропустить — смотрят те, кому интересно.</p><form id="boost-form" class="form" data-id="${escapeHtml(project.id)}"><div class="plan-grid">${plans}</div><p class="fine">Показ засчитывается один раз на человека за полчаса. Подписчики Плюс рекламу не видят.${plus ? ' Твоя скидка Плюс уже учтена.' : ''}</p>${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit" ${mode ? '' : 'disabled'}>${mode ? `Оплатить <span data-boost-price>${rub(boostPrice(chosen, plus))}</span>` : 'Оплата скоро появится'}</button></form></div>`, { kind: 'boost', id: projectId });
+  showDialog(`<div class="sheet-body boost"><span class="boost-mark">${icon('megaphone')}</span><h2 id="modal-title">Продвинуть «${escapeHtml(project.title)}»</h2>${boostGiftsHtml(project)}<p class="lead">Пост будет появляться в ленте у других людей после каждых ${AD_EVERY} постов, с пометкой «Реклама». Перед ним край ленты подсвечивается и рекламу можно пропустить — смотрят те, кому интересно.</p><form id="boost-form" class="form" data-id="${escapeHtml(project.id)}"><div class="plan-grid">${plans}</div><p class="fine">Показ засчитывается один раз на человека за полчаса. Подписчики Плюс рекламу не видят.${plus ? ' Твоя скидка Плюс уже учтена.' : ''}</p>${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<p class="form-error" role="alert"></p><button class="btn btn-grad btn-block" type="submit" ${mode ? '' : 'disabled'}>${mode ? `Оплатить <span data-boost-price>${rub(boostPrice(chosen, plus))}</span>` : 'Оплата скоро появится'}</button></form></div>`, { kind: 'boost', id: projectId });
 }
 
 // A quiet row in the profile settings; the loud offer only ever appears as an ad slot in the feed.
@@ -2412,7 +2422,7 @@ function openPlus() {
   if (needLogin('Чтобы оформить Плюс, войди в аккаунт')) return;
   const mode = remote?.config?.payments;
   const until = hasPlusNow() ? `<p class="fine">Сейчас Плюс действует до ${shortDate(remote.account.plusUntil)} — новый месяц добавится сверху.</p>` : '';
-  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Оформить за ${rub(plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
+  showDialog(`<div class="sheet-body plus-sheet"><span class="plus-mark big">${icon('crown')}</span><h2 id="modal-title">${plusPlan.title}</h2><p class="plus-price"><b>${rub(plusPlan.price)}</b> в месяц</p><ul class="plus-perks">${plusPlan.perks.map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('')}</ul>${until}${sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя Плюса за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''}${mode === 'test' ? `<p class="test-note">${icon('lock')} Тестовый режим: оплата ещё не подключена, деньги не списываются.</p>` : ''}<button class="btn btn-grad btn-block" data-action="plus-pay" ${mode ? '' : 'disabled'}>${mode ? `Оформить за ${rub(plusPlan.price)}` : 'Оплата скоро появится'}</button></div>`, { kind: 'plus' });
 }
 
 // Real payments leave for the bank page; in test mode a stand-in step confirms without money.
@@ -3050,9 +3060,15 @@ function draftPage() {
   return (postDraft?.blocks || []).filter(block => !block.uploading && !block.error && (!['image', 'video'].includes(block.type) || block.url)).map(({ uploading, preview, progress, error, ...block }) => block);
 }
 
-function openApplication() {
+function openApplication(projectId = '') {
   if (needLogin('Чтобы подать заявку издателю, войди в аккаунт')) return;
-  showDialog(`<div class="sheet-body"><span class="hero-icon steam">${icon('gamepad')}</span><h2 id="modal-title">Заявка в Steam</h2><form id="application-form" class="form"><input name="title" required maxlength="100" placeholder="Название игры" aria-label="Название игры">${chipRadio('stage', [['Прототип', 'Прототип'], ['Демо', 'Демо'], ['Готова к релизу', 'Релиз']], 'Демо')}<input name="url" type="url" placeholder="Ссылка на демо или трейлер" aria-label="Ссылка на демонстрацию"><textarea name="description" required rows="3" maxlength="2400" placeholder="Какая помощь нужна?" aria-label="Какая помощь нужна"></textarea><input name="contact" required placeholder="Email или Telegram" maxlength="120" aria-label="Контакт"><button class="btn btn-primary btn-block" type="submit">${icon(online ? 'send' : 'check')} ${online ? 'Отправить заявку' : 'Сохранить черновик'}</button></form></div>`);
+  const project = projectId ? projectById(projectId) : null;
+  const own = project && isMine(project.handle) ? project : null;
+  const link = own ? (own.demo || own.links?.[0] || own.video || '') : '';
+  const about = own ? [own.summary, own.description].filter(Boolean).join('\n\n').slice(0, 2400) : '';
+  const stage = own?.stage === 'release' ? 'Готова к релизу' : own?.stage === 'prototype' || own?.stage === 'idea' ? 'Прототип' : 'Демо';
+  const proof = own ? (() => { const readiness = projectReadiness(own); return `<p class="hub-hint">${icon('flame')} Издатель увидит пост и отклик в ленте: готовность ${readiness.percent}%, следят ${own.watchers || 0}${hasPlusNow() ? ' · с Плюсом заявку посмотрят первой' : ''}.</p>`; })() : '';
+  showDialog(`<div class="sheet-body"><span class="hero-icon steam">${icon('gamepad')}</span><h2 id="modal-title">Заявка в Steam</h2>${proof}<form id="application-form" class="form">${own ? `<input type="hidden" name="projectId" value="${escapeHtml(own.id)}">` : ''}<input name="title" required maxlength="100" placeholder="Название игры" aria-label="Название игры" value="${escapeHtml(own?.title || '')}">${chipRadio('stage', [['Прототип', 'Прототип'], ['Демо', 'Демо'], ['Готова к релизу', 'Релиз']], stage)}<input name="url" type="url" placeholder="Ссылка на демо или трейлер" aria-label="Ссылка на демонстрацию" value="${escapeHtml(link)}"><textarea name="description" required rows="3" maxlength="2400" placeholder="Какая помощь нужна?" aria-label="Какая помощь нужна">${escapeHtml(about)}</textarea><input name="contact" required placeholder="Email или Telegram" maxlength="120" aria-label="Контакт"><button class="btn btn-primary btn-block" type="submit">${icon(online ? 'send' : 'check')} ${online ? 'Отправить заявку' : 'Сохранить черновик'}</button></form></div>`);
 }
 
 function openTopic(id) {
@@ -3266,7 +3282,7 @@ document.addEventListener('click', async event => {
   } else if (action === 'publish') openPublish();
   else if (action === 'profile') go(isMine(target.dataset.handle) ? '#/me' : `#/u/${encodeURIComponent(target.dataset.handle)}`);
   else if (action === 'open-project') navigateToProject(id);
-  else if (action === 'post-link') trackSignal(projectById(id), 'open');
+  else if (action === 'post-link') trackSignal(projectById(id), /steampowered\.com|s\.team/.test(target.href || '') ? 'wishlist' : 'open');
   else if (action === 'media') {
     const now = Date.now();
     clearTimeout(tapTimer);
@@ -3282,6 +3298,25 @@ document.addEventListener('click', async event => {
   } else if (action === 'comments') openComments(id);
   else if (action === 'share') openShare(id);
   else if (action === 'feed-mode') setFeedMode(target.dataset.mode);
+  else if (action === 'hub-tab') { hubTab = target.dataset.tab || 'feed'; rerenderHub(id); }
+  else if (action === 'hub-open') { hubTab = target.dataset.tab || 'steam'; navigateToProject(id); }
+  else if (action === 'hub-link') hubCall(id, 'link', { workspaceId: target.dataset.workspace || '' }, target.dataset.workspace ? 'Пост связан с папкой в ИИ-мире' : 'Связь убрана');
+  else if (action === 'hub-digest-task') hubDigestTask(id);
+  else if (action === 'hub-repo-check') { target.disabled = true; hubCall(id, 'repo-check', {}, 'Репозиторий проверен'); }
+  else if (action === 'hub-steam') hubCall(id, 'steam', { status: target.dataset.status }).then(result => { if (result?.releaseBoost) toast('Поздравляем с релизом! Пост сутки продвигается бесплатно'); });
+  else if (action === 'hub-check') {
+    const project = projectById(id);
+    const checklist = { ...(project?.steam?.checklist || {}) };
+    checklist[target.dataset.item] = !checklist[target.dataset.item];
+    hubCall(id, 'steam', { checklist });
+  }
+  else if (action === 'hub-steam-texts') hubSteamTexts(id, target);
+  else if (action === 'comment-accept') commentAction('POST', target.dataset.project, id, 'accept');
+  else if (action === 'comment-task') openCommentTask(target.dataset.project, id);
+  else if (action === 'task-to-update') taskToUpdate(id, target.dataset.project, target);
+  else if (action === 'boost-gift') boostGift(id, target.dataset.pay, target);
+  else if (action === 'plus-sparks') plusForSparks(target);
+  else if (action === 'sparks-sheet') openSparks();
   else if (action === 'feed-modes') { event.preventDefault(); toggleModeMenu(); }
   else if (action === 'comment-sort') {
     commentSort = target.dataset.sort || 'best';
@@ -3373,7 +3408,7 @@ document.addEventListener('click', async event => {
     if (label) label.textContent = `${pct}%`;
     document.querySelector('.ready-cta')?.classList.toggle('show', pct === 100);
     if (pct === 100 && on) toast('Можно подавать заявку 🎉');
-  } else if (action === 'application') openApplication();
+  } else if (action === 'application') openApplication(id || '');
   else if (action === 'document') {
     const document = steamDocuments.find(item => item.id === id);
     showDialog(`<div class="sheet-body doc-reader"><span class="hero-icon steam">${icon(document.icon)}</span><h2 id="modal-title">${document.title}</h2><p class="lead">${document.subtitle}</p><p class="body-text">${document.content}</p><button class="btn btn-ghost" data-action="download-document" data-id="${id}">${icon('download')} Скачать .md</button></div>`);
@@ -3765,7 +3800,7 @@ document.addEventListener('submit', async event => {
     if (!value('title')) { formError(form, 'Напиши, что нового'); return; }
     if (submit) submit.disabled = true;
     try {
-      const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(form.dataset.id)}/updates`, { title: value('title'), version: value('version'), text: value('text'), image: form.dataset.image || '' });
+      const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(form.dataset.id)}/updates`, { title: value('title'), version: value('version'), text: value('text'), image: form.dataset.image || '', taskId: form.dataset.task || '' });
       replaceProject(project);
       openProject(project.id);
       toast(project.watchers ? `Обновление ушло ${project.watchers} подписчикам проекта` : 'Обновление опубликовано');
@@ -3970,6 +4005,7 @@ document.addEventListener('change', async event => {
   const changed = event.target;
   if (changed?.dataset?.notify) { saveNotifyPref(changed.dataset.notify, changed.checked); return; }
   if (changed?.dataset?.setting) { toggleSetting(changed.dataset.setting, changed.checked); return; }
+  if (changed?.dataset?.steamDate) { hubCall(changed.dataset.steamDate, 'steam', { releaseAt: changed.value ? new Date(`${changed.value}T12:00:00`).getTime() : 0 }, 'Дата выхода сохранена'); return; }
   if (changed?.dataset?.demoInput !== undefined) { checkDemoField(changed); return; }
   if (changed?.dataset?.updateImage !== undefined) { attachUpdateImage(changed); return; }
   const target = event.target;
@@ -4368,6 +4404,223 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+/* One project across the feed, ИИ-мир and Steam: the author's hub on the post page */
+
+let hubTab = 'feed';
+const steamTexts = new Map();
+const steamLabels = Object.fromEntries(steamStatuses);
+
+function hubStat(iconName, value, label) {
+  return `<span class="hub-stat">${icon(iconName)}<b>${value}</b><small>${label}</small></span>`;
+}
+
+function hubFeedHtml(project) {
+  const stats = cleanStats(statsFor(project));
+  const pid = escapeHtml(project.id);
+  return `<div class="hub-stats">${hubStat('bell', project.watchers || 0, 'следят')}${hubStat('repost', project.reposts || 0, 'репостов')}${hubStat('play', stats.plays, 'сыграли')}${hubStat('gamepad', stats.wishlists, 'в Steam')}${hubStat('comment', commentCount(project), 'комментариев')}</div><div class="hub-actions"><button class="btn btn-ghost btn-sm" data-action="new-update" data-id="${pid}">${icon('plus')} Обновление</button><button class="btn btn-ghost btn-sm" data-action="share" data-id="${pid}">${icon('share')} Поделиться</button></div>${promotionHtml(project)}`;
+}
+
+function ownedWorkspaces() {
+  return (ai.workspaces || []).filter(workspace => workspace.role === 'owner' && workspace.present !== false);
+}
+
+function linkedWorkspaceFor(project) {
+  return project.workspaceId ? (ai.workspaces || []).find(workspace => workspace.id === project.workspaceId) || null : null;
+}
+
+function hubCodeHtml(project) {
+  const pid = escapeHtml(project.id);
+  const linked = linkedWorkspaceFor(project);
+  if (!linked) {
+    const owned = ownedWorkspaces();
+    if (!owned.length) return `<p class="hub-hint">Подключи компьютер в ИИ-мире и свяжи пост с папкой проекта: отзывы игроков станут задачами для Claude Code или Codex, а готовые задачи — обновлениями в ленте.</p><a class="btn btn-ghost btn-sm" href="#/ai/connect/folder">${icon('monitor')} Подключить компьютер</a>`;
+    return `<p class="hub-hint">С какой папкой связан этот пост? Отзывы станут задачами ИИ, а готовые задачи — обновлениями.</p><div class="hub-list">${owned.map(workspace => `<button class="set-row" data-action="hub-link" data-id="${pid}" data-workspace="${escapeHtml(workspace.id)}"><span class="row-mark">${icon('folder')}</span><span><b>${escapeHtml(workspace.name)}</b><small>${escapeHtml(workspace.device?.name || '')} · ${workspace.device?.online ? 'в сети' : 'не в сети'}</small></span>${icon('link')}</button>`).join('')}</div>`;
+  }
+  const task = linked.lastTask;
+  const last = task ? `<div class="hub-task"><span class="hub-task-state ${escapeHtml(task.status)}"></span><span><b>${escapeHtml(task.prompt.split('\n')[0].slice(0, 90))}</b><small>${escapeHtml(statusNames[task.status] || task.status)} · ${timeAgo(task.createdAt) || ''}</small></span></div>` : '<p class="hub-hint">Задач пока не было.</p>';
+  return `<a class="hub-ws" href="#/ai/w/${encodeURIComponent(linked.id)}"><span class="ws-head-icon">${icon('folder')}<i class="presence ${linked.device?.online ? 'on' : ''}"></i></span><span><b>${escapeHtml(linked.name)}</b><small>${escapeHtml(linked.device?.name || '')} · ${linked.device?.online ? 'в сети' : 'не в сети'} · задач: ${linked.taskCount || 0}</small></span>${icon('chevronRight')}</a>${last}<div class="hub-actions">${commentCount(project) ? `<button class="btn btn-ghost btn-sm" data-action="hub-digest-task" data-id="${pid}">${icon('sparkle')} Разобрать отзывы в ИИ</button>` : ''}<button class="btn btn-ghost btn-sm" data-action="hub-link" data-id="${pid}" data-workspace="">${icon('close')} Отвязать</button></div><p class="hub-hint">У комментариев игроков появилась кнопка «В задачу ИИ». Готовую задачу можно опубликовать как обновление прямо из ИИ-мира.</p>`;
+}
+
+function projectReadiness(project) {
+  const stats = cleanStats(statsFor(project));
+  const quality = projectQuality({ ...project, votes: voteCount(project), saves: savesCount(project) }, stats);
+  return steamReadiness(project, { watchers: project.watchers || 0, stats, retention: quality.impressions >= 20 ? quality.retention : 0, repo: project.repo });
+}
+
+function hubSteamHtml(project) {
+  const pid = escapeHtml(project.id);
+  const steam = project.steam || { status: 'none' };
+  const readiness = projectReadiness(project);
+  const group = (kind, title, extra = '') => {
+    const items = readiness.items.filter(item => item.kind === kind);
+    if (!items.length) return extra;
+    const rows = items.map(item => kind === 'manual'
+      ? `<button class="ready-row ${item.done ? 'on' : ''}" data-action="hub-check" data-id="${pid}" data-item="${item.id}" aria-pressed="${item.done}">${icon(item.icon)}<span>${item.title}</span><i class="ready-tick">${icon('check')}</i></button>`
+      : `<div class="ready-row ${item.done ? 'on' : ''}">${icon(item.icon)}<span>${item.title}${kind === 'feed' ? `<small>${item.value}${item.unit || ''} из ${item.goal}${item.unit || ''}</small><i class="ready-bar"><i style="width:${Math.round(item.share * 100)}%"></i></i>` : ''}</span><i class="ready-tick">${icon(item.done ? 'check' : 'minus')}</i></div>`).join('');
+    return `<div class="ready-group"><h4>${title}</h4>${rows}${extra}</div>`;
+  };
+  const repoNote = project.repo ? `<small class="ready-note">Проверено ${timeAgo(project.repo.at) || 'только что'} · файлов: ${project.repo.files}</small>` : '';
+  const repoButton = project.workspaceId ? `<button class="btn btn-ghost btn-sm" data-action="hub-repo-check" data-id="${pid}">${icon('refresh')} ${project.repo ? 'Проверить снова' : 'Проверить репозиторий'}</button>${repoNote}` : '<p class="hub-hint">Свяжи пост с папкой во вкладке «Код и ИИ» — и репозиторий проверится сам.</p>';
+  const texts = steamTexts.get(project.id);
+  const textBlock = texts ? `<div class="steam-texts"><div class="steam-text"><b>Короткое описание</b><p>${escapeHtml(texts.short)}</p><button class="text-link inline" data-action="copy" data-copy="${escapeHtml(texts.short)}">${icon('doc')} Скопировать</button></div><div class="steam-text"><b>Об игре</b>${texts.about.map(paragraph => `<p>${escapeHtml(paragraph)}</p>`).join('')}${texts.features.length ? `<ul>${texts.features.map(feature => `<li>${escapeHtml(feature)}</li>`).join('')}</ul>` : ''}<button class="text-link inline" data-action="copy" data-copy="${escapeHtml([...texts.about, ...texts.features.map(feature => `• ${feature}`)].join('\n\n'))}">${icon('doc')} Скопировать</button></div>${texts.tags.length ? `<div class="steam-text"><b>Теги</b><p>${texts.tags.map(escapeHtml).join(', ')}</p></div>` : ''}<small class="ready-note">${texts.source === 'ai' ? 'Написал Claude по посту' : 'Собрано из поста'}${texts.readme ? ' и README' : ''}</small></div>` : '';
+  const date = steam.status === 'coming' ? `<label class="steam-date">${icon('clock')}<span>Дата выхода</span><input type="date" data-steam-date="${pid}" value="${steam.releaseAt ? new Date(steam.releaseAt).toISOString().slice(0, 10) : ''}"></label>` : '';
+  const noticed = project.publisherNoticed ? `<div class="hub-notice">${icon('sparkle')}<span><b>Издатель заметил проект</b><small>Интерес в ленте высокий — подай заявку, её посмотрят первой</small></span></div>` : '';
+  const apply = project.applicationId
+    ? `<div class="hub-notice done">${icon('check')}<span><b>Заявка у издателя</b><small>Ответ придёт в чат от про.стим${hasPlusNow() ? ' · с Плюсом смотрят первой' : ''}</small></span></div>`
+    : `<button class="btn btn-grad btn-block" data-action="application" data-id="${pid}">${icon('send')} Подать заявку издателю</button>${hasPlusNow() ? '<p class="hub-hint">С Плюсом заявку смотрят первой и бесплатно проверяют документы.</p>' : `<p class="hub-hint">С <button class="text-link inline" data-action="plus">Плюсом</button> заявку смотрят первой и бесплатно проверяют документы.</p>`}`;
+  return `${noticed}<div class="seg steam-seg" role="radiogroup">${steamStatuses.map(([key, label]) => `<button role="radio" aria-checked="${steam.status === key}" class="${steam.status === key ? 'on' : ''}" data-action="hub-steam" data-id="${pid}" data-status="${key}">${label.replace('Готовлюсь к Steam', 'Готовлюсь').replace('Заявка у издателя', 'Заявка').replace('Скоро в Steam', 'Скоро').replace('Вышла в Steam', 'Вышла')}</button>`).join('')}</div>${date}<div class="ready-head"><span class="ready-ring" style="--p:${readiness.percent}"><b>${readiness.percent}%</b></span><span><b>Готовность к Steam</b><small>${readiness.done} из ${readiness.total}: чек-лист, отклик в ленте и репозиторий</small></span></div>${group('manual', 'Чек-лист')}${group('feed', 'Что показывает лента')}${group('repo', 'Репозиторий', '', '')}<div class="ready-group">${project.repo ? '' : '<h4>Репозиторий</h4>'}${repoButton}</div><div class="ready-group"><h4>Страница в Steam</h4><button class="btn btn-ghost btn-sm" data-action="hub-steam-texts" data-id="${pid}">${icon('wand')} ${texts ? 'Написать заново' : 'Тексты для страницы Steam'}</button>${textBlock}</div>${apply}`;
+}
+
+function projectHubHtml(project) {
+  if (!online || !me || !isMine(project.handle)) return '';
+  const tabs = [['feed', 'flame', 'В ленте'], ['code', 'code', 'Код и ИИ'], ['steam', 'gamepad', 'Путь в Steam']];
+  const body = hubTab === 'code' ? hubCodeHtml(project) : hubTab === 'steam' ? hubSteamHtml(project) : hubFeedHtml(project);
+  return `<section class="hub" data-hub="${escapeHtml(project.id)}"><div class="hub-tabs" role="tablist" aria-label="Проект">${tabs.map(([key, iconName, label]) => `<button role="tab" aria-selected="${hubTab === key}" class="${hubTab === key ? 'on' : ''}" data-action="hub-tab" data-id="${escapeHtml(project.id)}" data-tab="${key}">${icon(iconName)}<span>${label}</span></button>`).join('')}</div><div class="hub-body">${body}</div></section>`;
+}
+
+function rerenderHub(id) {
+  const project = projectById(id);
+  const hub = modal.querySelector?.(`.hub[data-hub="${id}"]`);
+  if (project && hub) hub.outerHTML = projectHubHtml(project);
+}
+
+async function hubCall(id, path, body, done = '') {
+  try {
+    const result = await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/${path}`, body);
+    if (result.project) replaceProject(result.project);
+    rerenderHub(id);
+    if (done) toast(done);
+    return result;
+  } catch (error) {
+    toast(error.message);
+    return null;
+  }
+}
+
+async function hubSteamTexts(id, button) {
+  button.disabled = true;
+  button.innerHTML = `${icon('refresh')} Пишем тексты…`;
+  try {
+    steamTexts.set(id, await apiCall('POST', `/api/projects/${encodeURIComponent(id)}/steam-texts`));
+  } catch (error) {
+    toast(error.message);
+  }
+  rerenderHub(id);
+}
+
+async function hubDigestTask(id) {
+  const result = await hubCall(id, 'digest-task', { mode: 'read' });
+  if (result?.task) toast('Отзывы ушли в ИИ-мир: агент составит план правок');
+}
+
+/* A comment becomes an AI task; a finished task becomes an update */
+
+function openCommentTask(projectId, commentId) {
+  const project = projectById(projectId);
+  const comment = project?.comments?.find(item => item.id === commentId);
+  if (!project || !comment) return;
+  const workspace = linkedWorkspaceFor(project);
+  const dialog = openLayer(`<div class="crop comment-task"><div class="crop-head"><button class="icon-btn" data-action="layer-close" aria-label="Отмена">${icon('close')}</button><b id="layer-title">Задача для ИИ</b><span></span></div><p class="hub-hint">Уйдёт в папку «${escapeHtml(workspace?.name || 'проекта')}» на компьютере «${escapeHtml(workspace?.device?.name || '')}»${workspace?.device?.online ? '' : ' — он сейчас не в сети, задача подождёт'}.</p><textarea class="field" rows="7" maxlength="8000" aria-label="Текст задачи">${escapeHtml(taskFromComment(project, comment))}</textarea><div class="seg" role="radiogroup"><button role="radio" aria-checked="false" data-mode="read">Только разобраться</button><button role="radio" aria-checked="true" class="on" data-mode="edit">Разобраться и исправить</button></div><button class="btn btn-grad btn-block task-send">${icon('send')} Отправить в ИИ-мир</button></div>`, 'comment-task');
+  let mode = 'edit';
+  dialog.querySelectorAll('.seg button').forEach(button => button.addEventListener('click', () => {
+    mode = button.dataset.mode;
+    dialog.querySelectorAll('.seg button').forEach(item => { item.classList.toggle('on', item === button); item.setAttribute('aria-checked', String(item === button)); });
+  }));
+  dialog.querySelector('.task-send').addEventListener('click', async event => {
+    event.currentTarget.disabled = true;
+    try {
+      const result = await apiCall('POST', `/api/projects/${encodeURIComponent(projectId)}/comments/${encodeURIComponent(commentId)}/task`, { prompt: dialog.querySelector('textarea').value, mode });
+      replaceProject(result.project);
+      closeLayer();
+      rerenderComments(projectId);
+      toast('Задача ушла в ИИ-мир, автору комментария — 10 искр');
+    } catch (error) {
+      event.currentTarget.disabled = false;
+      toast(error.message);
+    }
+  });
+}
+
+async function taskToUpdate(taskId, projectId, button) {
+  const project = projectById(projectId);
+  const detail = [...(ai.details?.values?.() || [])].find(item => item?.tasks?.some(task => task.id === taskId));
+  const task = detail?.tasks?.find(item => item.id === taskId);
+  if (!project || !task) return;
+  if (button) button.disabled = true;
+  let commits = [];
+  try { commits = (await apiCall('GET', `/api/workspaces/${encodeURIComponent(detail.id)}/git`))?.log || []; } catch {}
+  if (button) button.disabled = false;
+  openUpdateForm(projectId, { ...updateFromTask(task, commits), taskId });
+}
+
+function steamBadgeHtml(project) {
+  const status = project.steam?.status;
+  if (status === 'coming') return `<span class="steam-badge coming">${icon('gamepad')}Скоро в Steam${project.steam.releaseAt ? ` · ${shortDate(project.steam.releaseAt)}` : ''}</span>`;
+  if (status === 'released') return `<span class="steam-badge">${icon('gamepad')}Вышла в Steam</span>`;
+  return '';
+}
+
+/* Sparks and Plus across the three parts */
+
+function sparksBalance() {
+  return online && me ? Number(remote?.account?.sparks) || 0 : 0;
+}
+
+function boostGiftsHtml(project) {
+  if (!online || !me) return '';
+  const pid = escapeHtml(project.id);
+  const gifts = [
+    remote?.account?.plusCredit ? `<button class="gift-row" data-action="boost-gift" data-pay="plus" data-id="${pid}"><span class="plus-mark small">${icon('crown')}</span><span><b>Бесплатный день по Плюсу</b><small>Раз в месяц · до 300 показов</small></span>${icon('chevronRight')}</button>` : '',
+    sparksBalance() >= sparkPrices.boostDay ? `<button class="gift-row" data-action="boost-gift" data-pay="sparks" data-id="${pid}"><span class="row-mark">${icon('sparkle')}</span><span><b>День за ${sparkPrices.boostDay} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : ''
+  ].join('');
+  return gifts ? `<div class="gifts">${gifts}</div>` : '';
+}
+
+async function boostGift(projectId, pay, button) {
+  button.disabled = true;
+  try {
+    await apiCall('POST', '/api/promotions', { projectId, plan: 'day', pay });
+    await reloadAll({ rerender: false });
+    openProject(projectId);
+    toast('Пост продвигается сутки');
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message);
+  }
+}
+
+function openSparks() {
+  if (!me) return;
+  const log = (remote?.account?.sparkLog || []).map(entry => `<div class="spark-row"><span>${escapeHtml(entry.label)}<small>${timeAgo(entry.at) || ''}</small></span><b class="${entry.amount < 0 ? 'minus' : ''}">${entry.amount > 0 ? '+' : ''}${entry.amount}</b></div>`).join('');
+  const rules = Object.values(sparkRules).map(rule => `<li><b>+${rule.amount}</b>${escapeHtml(rule.label)}</li>`).join('');
+  const balance = sparksBalance();
+  showDialog(`<div class="sheet-body sparks"><span class="spark-mark">${icon('sparkle')}</span><h2 id="modal-title">${balance} ${plural(balance, 'искра', 'искры', 'искр')}</h2><p class="hub-hint">Искры дают авторы за помощь: принятые отчёты о багах, полезные отзывы и закреплённые комментарии.</p><h3 class="set-title">Как получить</h3><ul class="spark-rules">${rules}</ul><h3 class="set-title">На что потратить</h3><button class="gift-row" data-action="plus-sparks" ${balance >= sparkPrices.plusWeek ? '' : 'disabled'}><span class="plus-mark small">${icon('crown')}</span><span><b>Неделя Плюса</b><small>${sparkPrices.plusWeek} искр</small></span>${icon('chevronRight')}</button><div class="gift-row muted"><span class="row-mark">${icon('megaphone')}</span><span><b>День продвижения поста</b><small>${sparkPrices.boostDay} искр · кнопка «Продвинуть» на странице своего поста</small></span></div>${log ? `<h3 class="set-title">История</h3><div class="spark-log">${log}</div>` : ''}</div>`, { kind: 'sparks' });
+}
+
+async function plusForSparks(button) {
+  button.disabled = true;
+  try {
+    await apiCall('POST', '/api/plus/sparks');
+    await reloadAll({ rerender: false });
+    closeDialog();
+    render();
+    toast('Плюс на неделю включён');
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message);
+  }
+}
+
+function mySteamProjectsHtml() {
+  if (!online || !me) return '';
+  const mine = projects().filter(project => isMine(project.handle) && project.category === 'games');
+  if (!mine.length) return '';
+  return `<section class="block my-steam"><h2 class="block-title">Мои игры на пути в Steam</h2>${mine.map(project => {
+    const readiness = projectReadiness(project);
+    return `<button class="set-row" data-action="hub-open" data-id="${escapeHtml(project.id)}"><span class="ready-ring small" style="--p:${readiness.percent}"><b>${readiness.percent}</b></span><span><b>${escapeHtml(project.title)}</b><small>${escapeHtml(steamLabels[project.steam?.status || 'none'])}${project.publisherNoticed ? ' · издатель заметил' : ''}</small></span>${icon('chevronRight')}</button>`;
+  }).join('')}</section>`;
+}
+
 /* Feed modes: recommendations, following, discovery */
 
 const FEED_MODE_KEY = 'prostim-feed-mode';
@@ -4583,7 +4836,8 @@ function renderSettings() {
   const privacy = remote?.account?.privacy || { messages: 'all', comments: 'all', reposts: true };
   const account = online ? [
     settingsRow('data-action="account-sheet"', 'send', 'Вход и почта', remote?.account?.email || 'Почта, Google, Яндекс ID, GitHub'),
-    plusRowHtml()
+    plusRowHtml(),
+    settingsRow('data-action="sparks-sheet"', 'sparkle', 'Искры', `${sparksBalance()} ${plural(sparksBalance(), 'искра', 'искры', 'искр')} · награды за помощь авторам`)
   ].join('') : '';
   const blocked = blockedList();
   const privacyHtml = online ? `<div class="set-field"><b>Кто может писать мне</b>${settingsSeg('messages', [['all', 'Все'], ['following', 'Мои подписки'], ['nobody', 'Никто']], privacy.messages)}<small>Тот, кто уже написал тебе первым, сможет ответить</small></div><div class="set-field"><b>Кто комментирует мои проекты</b>${settingsSeg('comments', [['all', 'Все'], ['following', 'Мои подписки']], privacy.comments)}</div>${settingsToggle('reposts', 'repost', 'Показывать мои репосты', 'Вкладка «Репосты» в профиле и пометка в ленте у подписчиков', privacy.reposts !== false)}${settingsRow('data-action="blocked-sheet"', 'ban', 'Заблокированные', blocked.length ? `${blocked.length} ${plural(blocked.length, 'человек', 'человека', 'человек')}` : 'Никого')}` : '';
@@ -5129,10 +5383,10 @@ async function toggleWatch(id, button) {
   }
 }
 
-function openUpdateForm(id) {
+function openUpdateForm(id, draft = null) {
   const project = projectById(id);
   if (!project) return;
-  showDialog(`<div class="sheet-body"><h2 id="modal-title">Обновление «${escapeHtml(project.title)}»</h2><form id="update-form" class="form" data-id="${escapeHtml(id)}"><div class="update-fields"><input class="field" name="version" maxlength="24" placeholder="Версия" aria-label="Версия"><input class="field" name="title" maxlength="100" placeholder="Что нового — коротко" aria-label="Что нового" required></div><textarea class="field" name="text" rows="5" maxlength="2000" placeholder="Подробнее: новые уровни, исправления, планы" aria-label="Подробнее"></textarea><label class="update-image">${icon('image')}<span>Картинка · необязательно</span><input class="file-cover" type="file" accept="image/*" data-update-image></label><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('send')} Опубликовать обновление</button><p class="fine">Уведомление получат все, кто следит за проектом${project.watchers ? ` — сейчас их ${project.watchers}` : ''}.</p></form></div>`, { kind: 'update', id });
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Обновление «${escapeHtml(project.title)}»</h2>${draft?.taskId ? `<p class="hub-hint">${icon('sparkle')} Черновик из задачи ИИ: проверь и поправь перед публикацией.</p>` : ''}<form id="update-form" class="form" data-id="${escapeHtml(id)}" data-task="${escapeHtml(draft?.taskId || '')}"><div class="update-fields"><input class="field" name="version" maxlength="24" placeholder="Версия" aria-label="Версия"><input class="field" name="title" maxlength="100" placeholder="Что нового — коротко" aria-label="Что нового" required value="${escapeHtml(draft?.title || '')}"></div><textarea class="field" name="text" rows="7" maxlength="2000" placeholder="Подробнее: новые уровни, исправления, планы" aria-label="Подробнее">${escapeHtml(draft?.text || '')}</textarea><label class="update-image">${icon('image')}<span>Картинка · необязательно</span><input class="file-cover" type="file" accept="image/*" data-update-image></label><p class="form-error" role="alert"></p><button class="btn btn-primary btn-block" type="submit">${icon('send')} Опубликовать обновление</button><p class="fine">Уведомление получат все, кто следит за проектом${project.watchers ? ` — сейчас их ${project.watchers}` : ''}.</p></form></div>`, { kind: 'update', id });
 }
 
 async function attachUpdateImage(input) {
@@ -5404,7 +5658,7 @@ function openPlayer(id) {
     ? `<div class="player-blocked">${icon('gamepad')}<b>Сайт демо не разрешает встраивать себя</b><p>Открой его в отдельной вкладке — там всё работает.</p><a class="btn btn-grad" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${icon('external')} Открыть демо</a></div>`
     : `<iframe src="${escapeHtml(url)}" title="Демо: ${escapeHtml(project.title)}" allow="autoplay; fullscreen; gamepad; pointer-lock; accelerometer; gyroscope" allowfullscreen sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-orientation-lock" referrerpolicy="no-referrer"></iframe>`;
   const extra = [
-    steam ? `<a class="btn btn-ghost btn-sm" href="${escapeHtml(steam.url)}" target="_blank" rel="noopener noreferrer">${icon('gamepad')} В желаемое Steam</a>` : '',
+    steam ? `<a class="btn btn-ghost btn-sm" href="${escapeHtml(steam.url)}" target="_blank" rel="noopener noreferrer" data-action="post-link" data-id="${escapeHtml(id)}">${icon('gamepad')} В желаемое Steam</a>` : '',
     online && !isMine(project.handle) ? `<button class="btn btn-ghost btn-sm" data-action="watch" data-id="${escapeHtml(id)}">${icon('bell')} ${watchingList().includes(id) ? 'Следишь' : 'Следить'}</button>` : '',
     `<button class="btn btn-ghost btn-sm" data-action="vote" data-id="${escapeHtml(id)}" aria-pressed="${state.votes.includes(id)}">${icon('up')} Поддержать</button>`
   ].join('');
@@ -5503,10 +5757,12 @@ function commentHtml(project, comment, reply = false) {
     me ? `<button data-action="reply-comment" data-id="${id}" data-project="${pid}" data-name="${escapeHtml(comment.name)}">Ответить</button>` : '',
     ownProject && !reply ? `<button data-action="pin-comment" data-id="${id}" data-project="${pid}">${comment.pinned ? 'Открепить' : 'Закрепить'}</button>` : '',
     comment.mine || ownProject ? `<button data-action="delete-comment" data-id="${id}" data-project="${pid}">Удалить</button>` : '',
+    ownProject && !comment.mine && me ? `<button data-action="comment-accept" data-id="${id}" data-project="${pid}">${comment.accepted ? 'Снять «принято»' : 'Принять'}</button>` : '',
+    ownProject && !comment.mine && me && project.workspaceId ? `<button data-action="comment-task" data-id="${id}" data-project="${pid}">${comment.tasked ? 'Ещё задачу ИИ' : 'В задачу ИИ'}</button>` : '',
     me && !comment.mine && !ownProject ? `<button data-action="report" data-kind="comment" data-id="${id}" data-project="${pid}">Пожаловаться</button>` : ''
   ].join('') : '';
   const like = live ? `<button class="comment-like ${comment.liked ? 'on' : ''}" data-action="like-comment" data-id="${id}" data-project="${pid}" aria-pressed="${Boolean(comment.liked)}" aria-label="Нравится">${icon('heart')}${comment.likes ? `<b>${comment.likes}</b>` : ''}</button>` : '';
-  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${actions ? `<div class="comment-actions">${actions}</div>` : ''}</div>${like}</div>`;
+  return `<div class="comment ${reply ? 'reply' : ''} ${comment.pinned ? 'pinned' : ''}" data-comment="${id}">${face}<div class="comment-body">${comment.pinned ? `<span class="pin-mark">${icon('pin')} Закреплено автором</span>` : ''}<b>${name}</b>${comment.byAuthor ? '<span class="author-badge">Автор</span>' : ''}${comment.accepted ? `<span class="comment-flag ok">${icon('check')}Принято</span>` : ''}${comment.tasked ? `<span class="comment-flag ai">${icon('sparkle')}В работе у ИИ</span>` : ''}<small>${escapeHtml(comment.time || timeAgo(comment.createdAt) || 'сейчас')}</small>${comment.text || comment.mention ? `<p>${comment.mention ? `<button class="mention" data-action="profile" data-handle="${escapeHtml(comment.mention)}">@${escapeHtml(comment.mention)}</button> ` : ''}${escapeHtml(comment.text || '')}</p>` : ''}${comment.voice ? voiceHtml(comment.voice, comment.duration) : ''}${actions ? `<div class="comment-actions">${actions}</div>` : ''}</div>${like}</div>`;
 }
 
 function commentsInner(project) {
@@ -5571,7 +5827,9 @@ async function showDigest(id, button) {
   host.classList.add('loading');
   try {
     const digest = await apiCall('GET', `/api/projects/${encodeURIComponent(id)}/comments/summary`);
-    host.innerHTML = `<div class="digest-card">${icon('sparkle')}<div><b>О чём пишут${digest.source === 'ai' ? ' <i class="ai-tag">ИИ</i>' : ''}</b><p>${escapeHtml(digest.summary)}</p>${digest.points?.length ? `<ul>${digest.points.map(point => `<li>${escapeHtml(point)}</li>`).join('')}</ul>` : ''}</div></div>`;
+    const project = projectById(id);
+    const toAi = project && isMine(project.handle) && project.workspaceId ? `<button class="btn btn-ghost btn-sm" data-action="hub-digest-task" data-id="${escapeHtml(id)}">${icon('sparkle')} Разобрать в ИИ-мире</button>` : '';
+    host.innerHTML = `<div class="digest-card">${icon('sparkle')}<div><b>О чём пишут${digest.source === 'ai' ? ' <i class="ai-tag">ИИ</i>' : ''}</b><p>${escapeHtml(digest.summary)}</p>${digest.points?.length ? `<ul>${digest.points.map(point => `<li>${escapeHtml(point)}</li>`).join('')}</ul>` : ''}${toAi}</div></div>`;
   } catch (error) {
     button.disabled = false;
     toast(error.message);

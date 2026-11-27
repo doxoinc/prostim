@@ -5,8 +5,8 @@
 
 export const TASTE_HALF_LIFE_DAYS = 10;
 export const QUICK_SKIP_MS = 1200;
-export const tasteSignals = { vote: 2, unvote: -1.5, save: 2.5, unsave: -2, comment: 2.2, share: 2.5, repost: 3, play: 2.5, open: 1, slide: 0.3, rewatch: 0.6, follow: 3, unfollow: -3, hide: -4 };
-export const statSignals = ['view', 'open', 'share', 'rewatch', 'hide', 'play'];
+export const tasteSignals = { vote: 2, unvote: -1.5, save: 2.5, unsave: -2, comment: 2.2, share: 2.5, repost: 3, play: 2.5, wishlist: 2, open: 1, slide: 0.3, rewatch: 0.6, follow: 3, unfollow: -3, hide: -4 };
+export const statSignals = ['view', 'open', 'share', 'rewatch', 'hide', 'play', 'wishlist'];
 
 const tasteFeatureShare = { cat: 0.6, tag: 0.5, author: 0.8, media: 0.25 };
 const tasteLimits = { features: 160, seen: 400, min: -6, max: 12 };
@@ -17,7 +17,7 @@ export function emptyTaste() {
 }
 
 export function emptyStats() {
-  return { impressions: 0, views: 0, completes: 0, skips: 0, dwellMs: 0, opens: 0, shares: 0, rewatches: 0, hides: 0, plays: 0 };
+  return { impressions: 0, views: 0, completes: 0, skips: 0, dwellMs: 0, opens: 0, shares: 0, rewatches: 0, hides: 0, plays: 0, wishlists: 0 };
 }
 
 const finite = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
@@ -138,6 +138,7 @@ export function recordStat(stats, signal) {
   else if (signal.type === 'rewatch') stats.rewatches += 1;
   else if (signal.type === 'hide') stats.hides += 1;
   else if (signal.type === 'play') stats.plays += 1;
+  else if (signal.type === 'wishlist') stats.wishlists += 1;
   return stats;
 }
 
