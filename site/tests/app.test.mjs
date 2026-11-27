@@ -137,7 +137,9 @@ test('feed modes: following shows followed authors first, discovery leads with t
   runInContext('state.follows = ["danm"]; setFeedMode("following")', app.context);
   const following = runInContext('feedOrder.entries.filter(entry => entry.id || entry.sep).map(entry => entry.sep || entry.id).join()', app.context);
   assert.match(following, /^pulse,following-end,/);
-  assert.match(app.elements.get('main').innerHTML, /class="feed-modes"/);
+  assert.match(app.elements.get('#topbar').innerHTML, /class="mode-toggle custom"/, 'a non-default mode is marked on the switch');
+  assert.match(app.elements.get('#topbar').innerHTML, /role="menuitemradio" aria-checked="true" class="on" data-action="feed-mode" data-mode="following"/);
+  assert.doesNotMatch(app.elements.get('main').innerHTML, /feed-modes/, 'no second row over the feed');
   runInContext('setFeedMode("discover")', app.context);
   assert.equal(runInContext('feedOrder.key', app.context), 'discover:all');
   runInContext('setFeedMode("foryou")', app.context);
@@ -228,4 +230,31 @@ test('ads go in after every five posts, rotate, and never sit next to the same p
   assert.deepEqual(result.nextTo, ['p0', 'p1', 'p2', 'p3', 'p4', 'a1', 'p5', 'p6', 'p7', 'p8', 'p9', 'a1', 'p10', 'p11'], 'the ad for p10 is not put right before p10');
   assert.deepEqual(result.more, ['q0', 'q1', 'q2', 'a1'], 'the count carries over when the feed grows');
   assert.equal(result.none, 12);
+});
+
+test('the tab bar hides only for a real keyboard, not for a collapsing browser bar or a zoom', () => {
+  const app = createApp();
+  const seen = { kb: '', keyboard: null };
+  Object.assign(app.context, { innerHeight: 812 });
+  app.context.window.visualViewport = { height: 600, offsetTop: 0, scale: 1 };
+  app.context.document.documentElement = { style: { setProperty: (name, value) => { seen.kb = value; } } };
+  app.context.document.body.classList = { toggle: (name, on) => { if (name === 'keyboard') seen.keyboard = on; } };
+  const sync = () => runInContext('syncKeyboard()', app.context);
+  app.context.document.activeElement = null;
+  sync();
+  assert.deepEqual(seen, { kb: '0px', keyboard: false }, 'a shorter screen without a focused field is the browser bar');
+  app.context.document.activeElement = { tagName: 'INPUT', type: 'text', closest: () => null };
+  sync();
+  assert.deepEqual(seen, { kb: '212px', keyboard: true });
+  app.context.window.visualViewport.scale = 2;
+  sync();
+  assert.equal(seen.keyboard, false, 'pinch zoom is not a keyboard');
+  app.context.window.visualViewport.scale = 1;
+  app.context.document.activeElement = { tagName: 'INPUT', type: 'checkbox', closest: () => null };
+  sync();
+  assert.equal(seen.keyboard, false, 'a checkbox does not open a keyboard');
+  app.context.window.visualViewport.height = 760;
+  app.context.document.activeElement = { tagName: 'TEXTAREA', closest: () => null };
+  sync();
+  assert.equal(seen.keyboard, false, 'a small change is a toolbar, not a keyboard');
 });

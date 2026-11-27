@@ -453,7 +453,7 @@ function markRead(id) {
 function renderChrome(view, current) {
   const isService = services.some(([id]) => id === view);
   if (isService) {
-    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>${bellHtml()}`;
+    topbar.innerHTML = `<nav class="services" aria-label="Сервисы">${view === 'feed' ? feedModeToggleHtml() : ''}${services.map(([id, label]) => `<a href="#/${id}" class="${id === view ? 'active' : ''}" ${id === view ? 'aria-current="page"' : ''} ${id === 'feed' && view === 'feed' ? 'data-action="home"' : ''}>${label}</a>`).join('')}<i class="services-bar" aria-hidden="true"></i></nav>${view === 'feed' ? feedModeMenuHtml() : ''}${bellHtml()}`;
     placeServicesBar();
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
@@ -871,7 +871,7 @@ function renderFeed() {
   if (!feedOrder || feedOrder.key !== feedKey()) buildFeedOrder();
   const items = feedOrder.entries.map(feedEntryHtml).join('') || `<section class="feed-item">${emptyState('search', 'Здесь пока пусто', `<button class="btn btn-primary" data-action="publish">${icon('plus')} Опубликовать первым</button>`)}</section>`;
   const chip = feedCategory === 'all' ? '' : `<a class="filter-chip" href="#/feed" aria-label="Сбросить фильтр «${categoryNames[feedCategory]}»">${icon(categoryIcons[feedCategory])}${categoryNames[feedCategory]}${icon('close')}</a>`;
-  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span><i class="ptr-mark">${logoMark}</i>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${feedModesHtml()}${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
+  return `<h1 class="sr-only">Лента проектов</h1><div class="ptr" aria-hidden="true"><span><i class="ptr-mark">${logoMark}</i>${icon('refresh')}</span></div><div class="feed" id="feed">${items}</div>${chip}<div class="feed-nav"><button data-action="feed-step" data-direction="-1" aria-label="Предыдущий проект">${icon('chevronUp')}</button><button data-action="feed-refresh" aria-label="Обновить ленту">${icon('refresh')}</button><button data-action="feed-step" data-direction="1" aria-label="Следующий проект">${icon('chevronDown')}</button></div>`;
 }
 
 function feedItem(project, reason = '', ad = '') {
@@ -3221,6 +3221,7 @@ document.addEventListener('click', async event => {
   } else if (action === 'comments') openComments(id);
   else if (action === 'share') openShare(id);
   else if (action === 'feed-mode') setFeedMode(target.dataset.mode);
+  else if (action === 'feed-modes') toggleModeMenu();
   else if (action === 'comment-sort') {
     commentSort = target.dataset.sort || 'best';
     try { storage.setItem(COMMENT_SORT_KEY, commentSort); } catch {}
@@ -4001,19 +4002,45 @@ window.addEventListener('resize', () => sizeFeed());
 
 // iPhone keyboard: the visual viewport shrinks, the layout one does not. Pinned composers follow the keyboard
 // and the bottom bar steps aside while typing.
+// The on-screen keyboard is open when a text field has focus and the visible screen got shorter.
+// A browser bar that collapses or a pinch zoom also shrink the visible screen, so alone they do not count:
+// before, they hid the tab bar at random.
+const typingTypes = ['text', 'search', 'email', 'url', 'tel', 'password', 'number'];
+function typingField() {
+  const element = document.activeElement;
+  if (!element || element === document.body) return null;
+  if (element.isContentEditable || element.tagName === 'TEXTAREA') return element;
+  return element.tagName === 'INPUT' && typingTypes.includes(element.type || 'text') ? element : null;
+}
+
+let keyboardOpen = false;
 function syncKeyboard() {
   const viewport = window.visualViewport;
-  if (!viewport) return;
-  const keyboard = Math.max(0, Math.round(innerHeight - viewport.height - viewport.offsetTop));
-  document.documentElement.style.setProperty('--kb', `${keyboard}px`);
-  document.body.classList.toggle('keyboard', keyboard > 80);
+  if (!viewport || !document.body?.classList) return;
+  const field = typingField();
+  const shrink = viewport.scale > 1.01 ? 0 : Math.max(0, Math.round(innerHeight - viewport.height - viewport.offsetTop));
+  const open = Boolean(field) && shrink > 120;
+  document.documentElement.style.setProperty('--kb', `${open ? shrink : 0}px`);
+  document.body.classList.toggle('keyboard', open);
+  // A field in a sheet stays above the keyboard: the sheet is lifted by CSS, this brings the field into view.
+  if (open && !keyboardOpen && field.closest?.('dialog')) setTimeout(() => field.scrollIntoView?.({ block: 'nearest' }), 60);
+  keyboardOpen = open;
 }
 window.visualViewport?.addEventListener('resize', syncKeyboard);
 window.visualViewport?.addEventListener('scroll', syncKeyboard);
+for (const name of ['focusin', 'focusout']) {
+  document.addEventListener(name, () => { setTimeout(syncKeyboard, 50); setTimeout(syncKeyboard, 400); });
+}
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
+
+// The feed mode menu closes on any tap outside it, and on Escape.
+document.addEventListener('click', event => {
+  if (!event.target?.closest?.('.mode-menu, .mode-toggle')) toggleModeMenu(false);
+});
 
 document.addEventListener('keydown', event => {
   const target = event.target;
+  if (event.key === 'Escape') toggleModeMenu(false);
   if (target?.name === 'importUrl' && event.key === 'Enter' && !event.isComposing) {
     event.preventDefault();
     const button = modal.querySelector?.('[data-action="import-link"]');
@@ -4287,8 +4314,25 @@ const feedModes = [['following', 'Подписки'], ['foryou', 'Для теб�
 let feedMode = (() => { try { const saved = storage.getItem(FEED_MODE_KEY); return feedModes.some(([key]) => key === saved) ? saved : 'foryou'; } catch { return 'foryou'; } })();
 const feedKey = () => `${feedMode}:${feedCategory}`;
 
-function feedModesHtml() {
-  return `<nav class="feed-modes" aria-label="Что показывать в ленте">${feedModes.map(([key, label]) => `<button class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}" aria-pressed="${key === feedMode}">${label}</button>`).join('')}</nav>`;
+const feedModeHints = { following: ['users', 'Авторы и проекты, за которыми следишь'], foryou: ['sparkle', 'Рекомендации под твои интересы'], discover: ['search', 'Темы, которых ты ещё не видел'] };
+const feedModeLabel = () => feedModes.find(([key]) => key === feedMode)?.[1] || 'Для тебя';
+
+function feedModeToggleHtml() {
+  return `<button class="mode-toggle ${feedMode === 'foryou' ? '' : 'custom'}" data-action="feed-modes" aria-haspopup="menu" aria-expanded="false" aria-label="Что показывать в ленте: ${feedModeLabel()}">${icon('chevronDown')}</button>`;
+}
+
+function feedModeMenuHtml() {
+  return `<div class="mode-menu" role="menu" hidden>${feedModes.map(([key, label]) => `<button role="menuitemradio" aria-checked="${key === feedMode}" class="${key === feedMode ? 'on' : ''}" data-action="feed-mode" data-mode="${key}">${icon(feedModeHints[key][0])}<span><b>${label}</b><small>${feedModeHints[key][1]}</small></span>${key === feedMode ? icon('check') : ''}</button>`).join('')}</div>`;
+}
+
+function toggleModeMenu(open) {
+  const menu = topbar.querySelector?.('.mode-menu');
+  const toggle = topbar.querySelector?.('.mode-toggle');
+  if (!menu || !toggle) return;
+  const show = open ?? menu.hidden;
+  menu.hidden = !show;
+  toggle.setAttribute('aria-expanded', String(show));
+  toggle.classList.toggle('open', show);
 }
 
 const feedEntry = item => ({ id: item.project.id, reason: item.reason === 'repost' && item.by ? `repost:${item.by}` : item.reason });
@@ -4310,6 +4354,7 @@ function followingEntries(list) {
 
 function setFeedMode(mode) {
   if (!feedModes.some(([key]) => key === mode)) return;
+  toggleModeMenu(false);
   if (mode === feedMode && feedOrder) { refreshFeed(); return; }
   feedMode = mode;
   try { storage.setItem(FEED_MODE_KEY, mode); } catch {}
@@ -4318,6 +4363,7 @@ function setFeedMode(mode) {
   feedScrollTop = 0;
   render();
   document.querySelector('#feed')?.scrollTo?.({ top: 0 });
+  toast(`Лента: ${feedModeLabel()}`);
 }
 
 /* First run after sign-up: what the person is into */
