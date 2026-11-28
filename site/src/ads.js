@@ -14,7 +14,7 @@ export const PLUS_DISCOUNT = 0.2;
 
 export const plusPlan = {
   id: 'plus', title: 'про.стим Плюс', price: 299, firstPrice: 149, trialHours: 24, days: 30,
-  perks: ['Лента без рекламы', `Скидка ${PLUS_DISCOUNT * 100}% на продвижение и день продвижения бесплатно каждый месяц`, 'ИИ-мир: до 6 компьютеров, файлы до 100 МБ, история задач длиннее', 'Тест-задания: до 50 тестеров и место выше в списке заданий', 'Steam: заявку смотрят первой, проверка документов бесплатно', 'Промпт из комментария: ИИ разбирает отзыв в контексте проекта и сразу отдаёт агенту', 'Значок Плюс и новые функции первым']
+  perks: ['Лента без рекламы', `Скидка ${PLUS_DISCOUNT * 100}% на продвижение и день продвижения бесплатно каждый месяц`, 'ИИ-мир: до 6 компьютеров, файлы до 100 МБ, история задач длиннее', 'Тест-задания: до 50 тестеров и место выше в списке заданий', 'Steam: заявку смотрят первой, проверка документов бесплатно', 'Промпт из комментария: ИИ разбирает отзыв в контексте проекта и сразу отдаёт агенту', 'Оформление профиля: 18 живых тем, украшения аватарки, эффекты имени и статус', 'Значок Плюс и новые функции первым']
 };
 
 // Without Plus and with it, side by side: everything that works for free stays free.
@@ -28,7 +28,7 @@ export const plusCompare = [
   ['ИИ-мир: файлы к задаче', 'до 25 МБ', 'до 100 МБ'],
   ['Промпт с ИИ из комментария', '—', 'есть'],
   ['Голосовые комментарии', '—', 'есть'],
-  ['Оформление профиля', '—', 'фон, GIF, свой цвет'],
+  ['Оформление профиля', 'за искры', '18 тем, украшения, эффекты имени'],
   ['Заявка в Steam', 'в очереди', 'первой']
 ];
 
@@ -65,21 +65,4 @@ export function placeAds(entries, ads, state = { since: 0, next: 0 }) {
     }
   });
   return placed;
-}
-
-/* Plus: how a profile can look. Banners are animated gradients drawn by CSS, so they cost nothing to load. */
-
-export const profileBanners = [['aurora', 'Сияние'], ['sunset', 'Закат'], ['ocean', 'Океан'], ['neon', 'Неон'], ['cosmos', 'Космос'], ['ember', 'Угли']];
-export const profileAccents = [['rose', '#ff2e63'], ['amber', '#ffb03b'], ['mint', '#3ddc84'], ['sky', '#6cb8ff'], ['lilac', '#b78cff'], ['pink', '#ff6fb5'], ['cyan', '#67e8f9']];
-export const MOTION_VIDEO_LIMIT = 12 * 1024 * 1024;
-
-export function cleanLookChoice(value, list) {
-  return list.some(([key]) => key === value) ? value : '';
-}
-
-// What other people see: the look only while Plus is on.
-export function lookView(look) {
-  if (!look) return null;
-  const accent = profileAccents.find(([key]) => key === look.accent)?.[1] || '';
-  return { banner: cleanLookChoice(look.banner, profileBanners), bannerImage: look.bannerImage || '', accent, accentKey: accent ? look.accent : '', motion: look.motion?.url ? { url: look.motion.url, type: look.motion.type === 'video' ? 'video' : 'image' } : null };
 }

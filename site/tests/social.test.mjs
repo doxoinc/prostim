@@ -595,6 +595,39 @@ test('Plus: a free day once for people who never had it, the first paid month at
   assert.deepEqual((await other('GET', '/api/users/trialfresh/people?list=following')).body.people, [], 'blocked people are left out');
 });
 
+test('the spark shop: looks bought for sparks stay without Plus, Plus looks still need Plus', async () => {
+  const author = await person('shopauthor');
+  const buyer = await person('shopbuyer');
+  const viewer = await person('shopviewer');
+  const post = await project(author, 'Лавка');
+  for (let index = 0; index < 7; index += 1) {
+    const comment = (await buyer('POST', `/api/projects/${post.id}/comments`, { text: `Отзыв ${index + 1}: на третьем уровне неясно, куда идти` })).body.comment;
+    await author('POST', `/api/projects/${post.id}/comments/${comment}/accept`);
+    await author('POST', `/api/projects/${post.id}/comments/${comment}/pin`);
+  }
+  assert.equal((await buyer('GET', '/api/bootstrap')).body.account.sparks, 210);
+  assert.equal((await buyer('POST', '/api/me/look', { name: 'gold' })).status, 403, 'a spark look has to be bought first');
+  assert.equal((await buyer('POST', '/api/shop/buy', { item: 'banner:galaxy' })).status, 403, 'not enough sparks');
+  assert.equal((await buyer('POST', '/api/shop/buy', { item: 'banner:aurora' })).status, 404, 'Plus looks are not sold');
+  const bought = (await buyer('POST', '/api/shop/buy', { item: 'name:gold' })).body;
+  assert.equal(bought.sparks, 10);
+  assert.deepEqual(bought.owned, ['name:gold']);
+  assert.equal(bought.sparkLog[0].amount, -200);
+  assert.equal((await buyer('POST', '/api/shop/buy', { item: 'name:gold' })).status, 409, 'bought once');
+  const worn = (await buyer('POST', '/api/me/look', { name: 'gold' })).body.me;
+  assert.equal(worn.plus, false);
+  assert.equal(worn.look.name, 'gold');
+  assert.equal((await buyer('POST', '/api/me/look', { banner: 'synthwave' })).status, 402, 'Plus themes need Plus');
+  assert.equal((await buyer('POST', '/api/me/look', { status: '🎮' })).status, 402);
+  assert.equal((await buyer('POST', '/api/me/look', { accent: 'mint' })).status, 402);
+  const seen = (await viewer('GET', '/api/bootstrap')).body.users.find(item => item.handle === 'shopbuyer');
+  assert.equal(seen.look.name, 'gold', 'a bought look shows without Plus');
+  assert.equal(seen.owned, undefined, 'what someone owns stays private');
+  assert.equal(seen.sparks, undefined, 'so do their sparks');
+  assert.deepEqual((await buyer('GET', '/api/bootstrap')).body.account.owned, ['name:gold']);
+  assert.equal((await buyer('POST', '/api/me/look', { name: '' })).body.me.look, null, 'taking it off is always allowed');
+});
+
 test('Plus profile look: a banner, a colour and a live avatar, shown only while Plus is on', async () => {
   const styled = await person('lookstyled');
   const viewer = await person('lookviewer');
@@ -604,7 +637,11 @@ test('Plus profile look: a banner, a colour and a live avatar, shown only while 
   assert.match(upload.url, /\.gif$/);
   await styled('POST', '/api/plus/trial');
   const me = (await styled('POST', '/api/me/look', { banner: 'aurora', accent: 'mint', motion: upload.url, bannerImage: '' })).body.me;
-  assert.deepEqual(me.look, { banner: 'aurora', bannerImage: '', accent: '#3ddc84', accentKey: 'mint', motion: { url: upload.url, type: 'image' } });
+  assert.deepEqual(me.look, { banner: 'aurora', bannerImage: '', accent: '#3ddc84', accentKey: 'mint', motion: { url: upload.url, type: 'image' }, deco: '', name: '', status: '' });
+  const dressed = (await styled('POST', '/api/me/look', { deco: 'halo', name: 'neon', status: '🎮' })).body.me.look;
+  assert.deepEqual([dressed.deco, dressed.name, dressed.status], ['halo', 'neon', '🎮']);
+  assert.equal((await styled('POST', '/api/me/look', { accent: '' })).body.me.look.accent, '#3ddc84', 'without a chosen colour the theme brings its own');
+  await styled('POST', '/api/me/look', { accent: 'mint' });
   assert.equal(me.plus, true);
   const seen = (await viewer('GET', '/api/bootstrap')).body.users.find(item => item.handle === 'lookstyled');
   assert.equal(seen.look.banner, 'aurora');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createContext, runInContext } from 'node:vm';
 
-const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'chat.js', 'ads.js', 'social.js', 'ecosystem.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
+const source = (await Promise.all(['data.js', 'icons.js', 'state.js', 'page.js', 'chat.js', 'ads.js', 'looks.js', 'social.js', 'ecosystem.js', 'trust.js', 'timeline.js', 'recommend.js', 'app.js'].map(name => readFile(new URL(`../src/${name}`, import.meta.url), 'utf8'))))
   .map(content => content.replace(/^import .*;\n/gm, '').replace(/^export /gm, ''))
   .join('\n');
 

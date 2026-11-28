@@ -13,7 +13,8 @@ import { chatReactions, reactionSummary, stickerById } from '../src/chat.js';
 import { codeLetter, createMailer } from './mail.mjs';
 import { appleName, authorizeUrl, oauthLabel, oauthProfile, oauthProviders } from './oauth.mjs';
 import { createYookassaPayment, paymentsMode, yookassaStatus } from './payments.mjs';
-import { aiLimits, boostPlan, boostPrice, cleanLookChoice, lookView, MOTION_VIDEO_LIMIT, plusPlan, profileAccents, profileBanners } from '../src/ads.js';
+import { aiLimits, boostPlan, boostPrice, plusPlan } from '../src/ads.js';
+import { canWear, cleanLookChoice, cleanStatus, lookItem, lookView, MOTION_VIDEO_LIMIT, profileAccents, sparkItem } from '../src/looks.js';
 import { cleanPlaytest, playtestSlots, cleanSteam, cleanTestResults, demoTaskPrompt, demoUrlFromText, promptFromComment, publisherShouldNotice, repoChecks, sparkPrices, sparkRules, taskFromComment, taskFromDigest, taskFromFeedback, testReportText, testTally } from '../src/ecosystem.js';
 import { cleanFeedPrefs, cleanLabel, cleanReview, commentDigest, commentKind, demoRating, reportReasons } from '../src/social.js';
 import { cleanNotifyPrefs, createNotifier, notifyPrefs } from './notify.mjs';
@@ -166,7 +167,7 @@ function publicUser(user, stats = userStats()) {
   const entry = stats.get(user.id) || { projects: 0, votesReceived: 0, followers: 0, following: 0, comments: 0, scores: [], help: emptyHelp() };
   return {
     id: user.id, handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '', bio: user.bio || '',
-    createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official), plus: hasPlus(user), look: hasPlus(user) ? lookView(user.look) : null,
+    createdAt: user.createdAt, demo: Boolean(user.demo), official: Boolean(user.official), plus: hasPlus(user), look: lookView(user.look, { plus: hasPlus(user), owned: user.owned || [] }),
     projects: entry.projects, followers: entry.followers, following: entry.following, votesReceived: entry.votesReceived,
     ...trustSummary(entry),
     help: helpSummary(entry.help)
@@ -881,16 +882,41 @@ on('PATCH', '/api/me', async ({ user, body }) => {
   return { me: publicUser(user) };
 });
 
+// The profile look. Plus items need Plus, spark items need to be bought first; clearing is always allowed.
 on('POST', '/api/me/look', async ({ user, body }) => {
   needUser(user);
-  if (!hasPlus(user)) fail(402, 'Оформление профиля — в Плюсе');
+  const plus = hasPlus(user);
+  const access = { plus, owned: user.owned || [] };
+  const needPlus = () => fail(402, 'Оформление профиля — в Плюсе');
   const look = { ...(user.look || {}) };
-  if (body.banner !== undefined) look.banner = cleanLookChoice(body.banner, profileBanners);
-  if (body.accent !== undefined) look.accent = cleanLookChoice(body.accent, profileAccents);
-  if (body.bannerImage !== undefined) look.bannerImage = body.bannerImage ? ownedUpload(body.bannerImage, user, 'image').url : '';
+  for (const slot of ['banner', 'deco', 'name']) {
+    if (body[slot] === undefined) continue;
+    const item = lookItem(slot, body[slot]);
+    if (!item) { look[slot] = ''; continue; }
+    if (!canWear(slot, item.id, access)) {
+      if (item.price) fail(403, `«${item.title}» продаётся за искры: ${item.price}`);
+      needPlus();
+    }
+    look[slot] = item.id;
+  }
+  if (body.accent !== undefined) {
+    const accent = cleanLookChoice(body.accent, profileAccents);
+    if (accent && !plus) needPlus();
+    look.accent = accent;
+  }
+  if (body.status !== undefined) {
+    const status = cleanStatus(body.status);
+    if (status && !plus) needPlus();
+    look.status = status;
+  }
+  if (body.bannerImage !== undefined) {
+    if (body.bannerImage && !plus) needPlus();
+    look.bannerImage = body.bannerImage ? ownedUpload(body.bannerImage, user, 'image').url : '';
+  }
   if (body.motion !== undefined) {
     if (!body.motion) look.motion = null;
     else {
+      if (!plus) needPlus();
       const file = ownedUpload(body.motion, user);
       if (file.type !== 'image' && file.type !== 'video') fail(400, 'Нужна GIF-картинка или короткое видео');
       if (file.type === 'video' && (D.uploads[file.url.slice(9)]?.size || 0) > MOTION_VIDEO_LIMIT) fail(413, 'Видео для аватарки — до 12 МБ');
@@ -900,6 +926,19 @@ on('POST', '/api/me/look', async ({ user, body }) => {
   user.look = look;
   db.save();
   return { me: publicUser(user) };
+});
+
+// The spark shop: a theme, a decoration or a name effect, bought once and kept for good.
+on('POST', '/api/shop/buy', async ({ user, body }) => {
+  needUser(user);
+  const item = sparkItem(String(body.item || ''));
+  if (!item) fail(404, 'Такого в магазине нет');
+  if ((user.owned || []).includes(item.key)) fail(409, 'Это уже твоё');
+  if ((user.sparks || 0) < item.price) fail(403, `Нужно ${item.price} искр, у тебя ${user.sparks || 0}`);
+  spendSparks(user, item.price, `«${item.title}» за искры`);
+  user.owned = [...(user.owned || []), item.key];
+  db.save();
+  return { me: publicUser(user), sparks: user.sparks, owned: user.owned, sparkLog: user.sparkLog };
 });
 
 on('GET', '/api/bootstrap', async ({ request, user }) => {
@@ -918,7 +957,7 @@ on('GET', '/api/bootstrap', async ({ request, user }) => {
     taste: meId ? D.tastes[meId] || null : null,
     myRatings: meId ? Object.fromEntries(D.ratings.filter(rating => rating.raterId === meId).map(rating => [D.users[rating.targetId]?.handle, { score: rating.score, text: rating.text }])) : {},
     workspaces: meId ? Object.values(D.workspaces).filter(workspace => roleFor(workspace, meId)).map(workspace => workspaceView(workspace, meId)) : [],
-    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), passwordReset: Boolean(user.passwordHash && freshSignIn(request)), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'], plusTrial: plusTrialOpen(user), plusPrice: plusPriceFor(user), plusTrialNow: Boolean(hasPlus(user) && user.plus?.trial) } : null,
+    account: user ? { email: user.email || '', providers: Object.keys(user.oauth || {}), hasPassword: Boolean(user.passwordHash), passwordReset: Boolean(user.passwordHash && freshSignIn(request)), plusUntil: hasPlus(user) ? user.plus.until : 0, notify: notifyPrefs(user), pushDevices: notifier.devices(user.id), privacy: privacyOf(user), onboarding: user.onboarding === true, sparks: user.sparks || 0, sparkLog: user.sparkLog || [], owned: user.owned || [], plusCredit: plusCreditLeft(user), limits: aiLimits[hasPlus(user) ? 'plus' : 'free'], plusTrial: plusTrialOpen(user), plusPrice: plusPriceFor(user), plusTrialNow: Boolean(hasPlus(user) && user.plus?.trial) } : null,
     activity: meId ? { unread: notifier.unread(meId) } : { unread: 0 },
     watching: meId ? D.projects.filter(project => (project.watchers || []).includes(meId)).map(project => project.id) : [],
     reposted: meId ? D.projects.filter(project => (project.reposts || []).includes(meId)).map(project => project.id) : [],

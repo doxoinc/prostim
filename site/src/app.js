@@ -3,7 +3,8 @@ import { icon, logoMark } from './icons.js';
 import { STORAGE_KEY, escapeHtml, safeUrl, toggleMembership, loadState, filterProjects } from './state.js';
 import { trustLevels, levelTier, levelTiers, helpLevels, helpPoints, helpAreas, commentHelp } from './trust.js';
 import { chatReactions, chatEmoji, chatStickers, stickerById } from './chat.js';
-import { AD_EVERY, boostPlans, boostPrice, plusPlan, plusCompare, placeAds, PLUS_DISCOUNT, profileBanners, profileAccents, MOTION_VIDEO_LIMIT } from './ads.js';
+import { AD_EVERY, boostPlans, boostPrice, plusPlan, plusCompare, placeAds, PLUS_DISCOUNT } from './ads.js';
+import { lookThemes, themeGroups, lookDecos, lookNames, lookStatuses, profileAccents, accentColor, lookItem, itemKey, sparkItems, sparkItem, canWear, MOTION_VIDEO_LIMIT } from './looks.js';
 import { renderRun, runMeta, isActive, modeNames, modeHints, statusNames, unifiedDiffHtml } from './timeline.js';
 import { steamStatuses, steamReadiness, taskFromComment, taskFromFeedback, updateFromTask, sparkRules, sparkPrices, playtestAccess, playtestDraft, playtestSlots, playtestBounties, PLAYTEST_STEPS } from './ecosystem.js';
 import { emptyTaste, emptyStats, cleanTaste, cleanStats, recordSignal, recordStat, rankFeed, projectQuality, expectedDwell, topInterests, tasteConfidence, statSignals, hiddenByPrefs } from './recommend.js';
@@ -87,7 +88,6 @@ let tasteSaveTimer;
 let feedRefreshing = false;
 let pullState = null;
 let wheelPull = { amount: 0, armed: false, last: 0, timer: null };
-const reasonLabels = { update: ['bell', 'Обновление'], new: ['sparkle', 'Новое'], taste: ['flame', 'Для тебя'], follow: ['users', 'Подписки'], popular: ['up', 'Популярное'], again: ['refresh', 'Снова'], discover: ['search', 'Открытие'], mine: ['user', 'Твой проект'], ad: ['megaphone', 'Реклама'] };
 try {
   const savedTaste = JSON.parse(storage.getItem(TASTE_KEY) || '{}');
   localTaste = cleanTaste(savedTaste.taste);
@@ -102,7 +102,7 @@ const photos = {
 const categoryNames = { games: 'Игры', apps: 'Приложения', tools: 'Инструменты' };
 const categoryIcons = { games: 'gamepad', apps: 'grid', tools: 'code' };
 const services = [['feed', 'Лента'], ['steam', 'Steam'], ['ai', 'ИИ-мир']];
-const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', activity: 'Уведомления', me: 'Профиль', settings: 'Настройки', u: 'Автор' };
+const sectionTitles = { feed: 'Лента', steam: 'Steam', ai: 'ИИ-мир', search: 'Обзор', inbox: 'Входящие', activity: 'Уведомления', me: 'Профиль', settings: 'Настройки', u: 'Автор', sparks: 'Искры' };
 const localMe = { handle: 'me', name: 'Вы', author: 'Вы', initials: 'Я', color: '#e5e1d8' };
 const number = new Intl.NumberFormat('ru-RU');
 const money = value => `$${number.format(Math.round(value))}`;
@@ -453,6 +453,7 @@ function render(force = true) {
     else if (view === 'inbox') main.innerHTML = renderInbox(current.page);
     else if (view === 'activity') main.innerHTML = renderActivity();
     else if (view === 'settings') main.innerHTML = renderSettings();
+    else if (view === 'sparks') main.innerHTML = renderSparksPage();
     else if (view === 'me') main.innerHTML = online && !me ? renderAuthPage() : renderProfile(myHandle(), current.page);
     else if (view === 'u') main.innerHTML = isMine(current.page) ? renderProfile(myHandle(), current.extra) : renderProfile(current.page, current.extra);
     else main.innerHTML = renderFeed();
@@ -485,7 +486,7 @@ function renderChrome(view, current) {
   } else {
     const thread = view === 'inbox' && current.page ? threadById(current.page) : null;
     const title = thread ? thread.name : view === 'u' ? `@${current.page}` : view === 'me' && online && !me ? 'Вход' : sectionTitles[view];
-    const back = thread || view === 'u' || view === 'settings';
+    const back = thread || view === 'u' || view === 'settings' || view === 'sparks';
     const gear = `<a class="top-bell" href="#/settings" aria-label="Настройки">${icon('gear')}</a>`;
     const end = view === 'activity' ? (online && me ? `<button class="top-bell" data-action="notify-settings" aria-label="Настройки уведомлений">${icon('gear')}</button>` : '')
       : view === 'me' && (!online || me) ? `<span class="top-actions">${bellHtml()}${gear}</span>` : view === 'settings' ? '' : bellHtml();
@@ -799,7 +800,7 @@ function feedAds() {
 
 function plusFeedItem() {
   const perks = plusPlan.perks.slice(0, 3).map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('');
-  return `<section class="feed-item is-ad plus-ad" data-ad="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button><div class="card-media plus-promo"><div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info"><span class="reason-chip ad">${icon('megaphone')}Реклама про.стим</span><h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">${remote?.account?.plusTrial ? `Попробовать бесплатно · ${plusPlan.trialHours} часа` : `Первый месяц · ${remote?.account?.plusPrice || plusPlan.price} ₽`}</button></div></div></article></section>`;
+  return `<section class="feed-item is-ad plus-ad" data-ad="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button><div class="card-media plus-promo"><div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info">${adLabelHtml(null)}<h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">${remote?.account?.plusTrial ? `Попробовать бесплатно · ${plusPlan.trialHours} часа` : `Первый месяц · ${remote?.account?.plusPrice || plusPlan.price} ₽`}</button></div></div></article></section>`;
 }
 
 // The card before an ad gets a pearly wave along its bottom edge and a «skip» pill, so the ad never
@@ -846,6 +847,14 @@ function skipAd(from) {
   if (ad && !ad.nextElementSibling) extendFeedNear(ad);
   const next = ad?.classList?.contains('is-ad') ? ad.nextElementSibling : item.nextElementSibling;
   if (next) feed.scrollTo?.({ top: next.offsetTop, behavior: 'smooth' });
+}
+
+// What an ad is and who pays for it, from the «Реклама» label on the card.
+function openAdInfo(id) {
+  const project = id && id !== 'plus' ? projectById(id) : null;
+  const who = project ? `<button class="set-row" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(userByHandle(project.handle) || project, 'lg')}<span><b>${escapeHtml(project.author || `@${project.handle}`)}</b><small>@${escapeHtml(project.handle)} · рекламодатель</small></span>${icon('chevronRight')}</button>` : `<div class="set-row"><span class="row-mark">${icon('crown')}</span><span><b>про.стим</b><small>Реклама собственной подписки</small></span></div>`;
+  const noAds = hasPlusNow() ? '' : `<button class="gift-row" data-action="plus"><span class="plus-mark small">${icon('crown')}</span><span><b>Лента без рекламы</b><small>С ${plusPlan.title}</small></span>${icon('chevronRight')}</button>`;
+  showDialog(`<div class="sheet-body ad-info"><span class="ad-info-mark">${icon('megaphone')}</span><h2 id="modal-title">Рекламный пост</h2><p class="hub-hint">${project ? 'Автор оплатил показы этого поста через продвижение про.стим.' : 'про.стим рассказывает о своей подписке.'} Реклама стоит после каждых ${AD_EVERY} постов и всегда подписана.</p>${who}${noAds}</div>`, { kind: 'ad-info' });
 }
 
 // The feed never ends: after the new posts a card says so, and then round after round of what is there,
@@ -907,10 +916,11 @@ function feedItem(project, reason = '', ad = '') {
   return `<section class="feed-item${ad ? ' is-ad' : ''}" data-project="${id}"${ad ? ` data-ad="${escapeHtml(ad)}"` : ''} aria-label="${ad ? 'Реклама: ' : ''}${escapeHtml(project.title)}"><article class="card">${skip}<div class="card-media" data-action="media" data-id="${id}" data-reason="${escapeHtml(reason)}">${mediaInner(project, reason)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
 }
 
-function reasonChip(reason) {
-  if (String(reason).startsWith('repost:')) return `<span class="reason-chip repost">${icon('repost')}Репост @${escapeHtml(reason.slice(7))}</span>`;
-  const label = reasonLabels[reason];
-  return label ? `<span class="reason-chip ${reason}">${icon(label[0])}${label[1]}</span>` : '';
+// Posts carry no «new», «for you» or «again» labels: the feed just shows them. Only an ad is marked,
+// as the law on advertising requires: «Реклама» and who pays for it, with a tap for the details.
+function adLabelHtml(project) {
+  const handle = project ? escapeHtml(project.handle) : '';
+  return `<button class="ad-label" data-action="ad-info" data-id="${project ? escapeHtml(project.id) : 'plus'}" aria-label="Рекламный пост${project ? ` от @${handle}` : ' про.стим'}. Подробнее">${icon('megaphone')}<b>Реклама</b><span>${project ? `@${handle}` : 'про.стим'}</span><i aria-hidden="true">i</i></button>`;
 }
 
 /* Attention: how long each post holds the screen, and what people do with it */
@@ -1029,7 +1039,7 @@ function mediaInner(project, reason = '') {
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reasonChip(reason)}${steamBadgeHtml(project)}${playtestChipHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reason === 'ad' ? adLabelHtml(project) : ''}${steamBadgeHtml(project)}${playtestChipHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
 }
 
 // The post's own call to action, right on the card: «Играть» for a demo that runs in the browser,
@@ -1502,7 +1512,7 @@ function profileAvatarHtml(person, handle) {
   const tier = levelTier(level);
   const rated = Number(person.ratingCount) > 0;
   const label = `Уровень ${level}${rated ? `, оценка ${ratingText(person.ratingAverage)}` : ', оценок пока нет'}. Подробнее`;
-  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="${label}">${avatar(person, 'xxl')}${gaugeSvg(person, tier, 16)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}<span class="lvl-badge">${rated ? `★ ${ratingText(person.ratingAverage)}` : '—'}</span></button>`;
+  return `<button class="${ringClass(tier, 'lvl-profile')}" style="--ring:${tier.color}" data-action="trust-info" data-handle="${escapeHtml(handle)}" aria-label="${label}">${avatar(person, 'xxl')}${decoHtml(person.look)}${gaugeSvg(person, tier, 16)}${tier.strong ? '<i class="lvl-orbit" aria-hidden="true"></i>' : ''}<span class="lvl-badge">${rated ? `★ ${ratingText(person.ratingAverage)}` : '—'}</span></button>`;
 }
 
 function reviewsHtml(handle) {
@@ -1540,11 +1550,13 @@ function renderProfile(handle, tab) {
     ? `<button class="btn btn-primary btn-sm" data-action="publish">${icon('plus')} Проект</button><button class="btn btn-ghost btn-sm" data-action="application">${icon('gamepad')} Заявка в Steam</button>${online ? `<button class="btn btn-ghost btn-sm btn-square look-btn" data-action="look" aria-label="Оформление профиля">${icon('palette')}${hasPlusNow() ? '' : `<i class="lock-crown">${icon('crown')}</i>`}</button><button class="btn btn-ghost btn-sm btn-square" data-action="edit-profile" aria-label="Изменить профиль">${icon('pen')}</button>` : ''}`
     : `${followPill(handle, 'btn-sm')}${person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(handle)}">${icon('inbox')} Написать</a>`}${online && !person.official ? `<button class="btn btn-ghost btn-sm" data-action="rate" data-handle="${escapeHtml(handle)}">${myRating ? `★ ${myRating.score} · Изменить` : '★ Оценить'}</button><button class="btn btn-ghost btn-sm btn-square" data-action="user-menu" data-handle="${escapeHtml(handle)}" aria-label="Ещё">${icon('more')}</button>` : ''}`;
   const tabs = mine
-    ? [['', 'grid', 'Проекты'], ['saved', 'bookmark', 'Сохранённое'], ...(online ? [['reposts', 'repost', 'Репосты']] : []), ['follows', 'users', 'Подписки'], ['applications', 'doc', 'Заявки'], ...(online ? [['reviews', 'comment', 'Отзывы']] : [])]
+    ? [['', 'grid', 'Проекты'], ...(online && owned.length ? [['desk', 'rocket', 'Пульт']] : []), ['saved', 'bookmark', 'Сохранённое'], ...(online ? [['reposts', 'repost', 'Репосты']] : []), ['follows', 'users', 'Подписки'], ['applications', 'doc', 'Заявки'], ...(online ? [['reviews', 'comment', 'Отзывы']] : [])]
     : online ? [['', 'grid', 'Проекты'], ['reposts', 'repost', 'Репосты'], ['reviews', 'comment', 'Отзывы']] : [];
   const activeTab = tabs.some(([id]) => id === tab) ? tab : '';
   let content;
-  if (activeTab === 'saved') {
+  if (activeTab === 'desk') {
+    content = deskHtml(owned);
+  } else if (activeTab === 'saved') {
     const saved = projects().filter(project => state.saved.includes(project.id));
     content = saved.length ? thumbsHtml(saved) : emptyState('bookmark', 'Сохраняй проекты из ленты', '<a class="btn btn-ghost" href="#/feed">В ленту</a>');
   } else if (activeTab === 'follows') {
@@ -1573,7 +1585,7 @@ function renderProfile(handle, tab) {
   const tabBar = tabs.length ? `<nav class="ptabs" aria-label="Разделы профиля">${tabs.map(([id, iconName, label]) => `<a href="${base}${id ? `/${id}` : ''}" class="${id === activeTab ? 'active' : ''}" aria-label="${label}" title="${label}" ${id === activeTab ? 'aria-current="page"' : ''}>${icon(iconName)}</a>`).join('')}</nav>` : '<div class="ptabs-line"></div>';
   const badges = `${person.official ? trustBadge(person) : ''}${person.demo ? '<span class="tag">демо-аккаунт</span>' : ''}`;
   const footer = mine && online ? `<div class="profile-foot"><button class="text-link" data-action="logout">Выйти из аккаунта</button></div>` : '';
-  return `<div class="page narrow profile"><div class="profile-head ${person.look ? 'has-look' : ''}" ${person.look?.accent ? `style="--look:${person.look.accent}"` : ''}>${lookBannerHtml(person.look, 'profile-banner')}${profileAvatarHtml(person, handle)}<h1>${escapeHtml(person.name || person.author)}${plusBadge(person, true)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label, action, list]) => action && online ? `<button class="stat-btn" data-action="${action}" data-handle="${escapeHtml(handle)}" ${list ? `data-list="${list}"` : ''}><b>${value}</b>${escapeHtml(label)}</button>` : `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
+  return `<div class="page narrow profile"><div class="profile-head ${person.look ? 'has-look' : ''}" ${person.look?.accent ? `style="--look:${person.look.accent}"` : ''}>${lookBannerHtml(person.look, 'profile-banner')}${profileAvatarHtml(person, handle)}<h1>${nameHtml(person.name || person.author, person)}${statusHtml(person)}${plusBadge(person, true)}</h1><p class="handle">@${escapeHtml(handle === 'me' ? 'вы' : handle)}${mine && online && me ? sparkPillHtml() : ''}</p>${badges ? `<div class="profile-badges">${badges}</div>` : ''}${person.bio ? `<p class="bio">${escapeHtml(person.bio)}</p>` : ''}<div class="stats">${stats.map(([value, label, action, list]) => action && online ? `<button class="stat-btn" data-action="${action}" data-handle="${escapeHtml(handle)}" ${list ? `data-list="${list}"` : ''}><b>${value}</b>${escapeHtml(label)}</button>` : `<span><b>${value}</b>${label}</span>`).join('')}</div><div class="profile-actions">${actions}</div></div>${tabBar}<div class="ptab-panel">${content}</div>${footer}</div>`;
 }
 
 function openRate(handle) {
@@ -1587,41 +1599,129 @@ function openRate(handle) {
 
 /* Plus: how a profile looks */
 
+// A theme is drawn by CSS (`.lt-<id>`); a picture of your own goes on a plain backdrop.
 function lookBannerHtml(look, className) {
   if (!look || (!look.banner && !look.bannerImage && !look.accent)) return '';
   const image = uploadUrl(look.bannerImage);
-  return `<div class="${className} ${look.banner ? `look-${escapeHtml(look.banner)}` : 'look-plain'}" aria-hidden="true">${image ? `<img src="${image}" alt="" loading="lazy">` : ''}</div>`;
+  const theme = image ? 'lt-image' : look.banner ? `lt lt-${escapeHtml(look.banner)}` : 'lt-plain';
+  return `<div class="${className} ${theme}" aria-hidden="true">${image ? `<img src="${image}" alt="" loading="lazy">` : ''}</div>`;
+}
+
+// A decoration around a big avatar: a halo, an orbit, flames, ears… Drawn by CSS from a few empty tags.
+function decoHtml(look) {
+  const id = look?.deco;
+  return id && lookItem('deco', id) ? `<i class="deco deco-${escapeHtml(id)}" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></i>` : '';
+}
+
+// A name with its effect and status: in the profile, the card and comments.
+function nameHtml(text, person) {
+  const fx = person?.look?.name && lookItem('name', person.look.name) ? person.look.name : '';
+  const safe = escapeHtml(text || '');
+  return fx ? `<span class="name-fx fx-${escapeHtml(fx)}" data-text="${safe}">${safe}</span>` : safe;
+}
+
+function statusHtml(person) {
+  return person?.look?.status ? `<span class="look-status" title="Статус">${escapeHtml(person.look.status)}</span>` : '';
 }
 
 let lookDraft = null;
+let lookTab = 'theme';
+
+function myOwned() {
+  return online && me ? remote?.account?.owned || [] : [];
+}
+
+function lookAccess() {
+  return { plus: hasPlusNow(), owned: myOwned() };
+}
+
+// The draft as other people would see it, worn or not, so the preview shows everything being tried on.
+function lookDraftView() {
+  const theme = lookItem('banner', lookDraft.banner);
+  return { banner: lookDraft.banner, bannerImage: lookDraft.bannerImage, accent: accentColor(lookDraft.accent || theme?.accent || ''), accentKey: lookDraft.accent, motion: lookDraft.motion, deco: lookDraft.deco, name: lookDraft.name, status: lookDraft.status };
+}
 
 function lookPreviewHtml() {
-  const person = { ...me, look: { banner: lookDraft.banner, bannerImage: lookDraft.bannerImage, accent: profileAccents.find(([key]) => key === lookDraft.accent)?.[1] || '', motion: lookDraft.motion }, plus: true };
-  return profileCardHtml(person, true);
+  return profileCardHtml({ ...me, look: lookDraftView(), plus: true }, true);
+}
+
+// What the draft needs before it can be saved: Plus for Plus items, sparks for items not bought yet.
+function lookNeeds() {
+  const access = lookAccess();
+  const toBuy = ['banner', 'deco', 'name'].map(slot => lookDraft[slot] && lookItem(slot, lookDraft[slot])?.price && !canWear(slot, lookDraft[slot], access) ? sparkItem(itemKey(slot, lookDraft[slot])) : null).filter(Boolean);
+  const plusOnly = ['banner', 'deco', 'name'].some(slot => lookDraft[slot] && !lookItem(slot, lookDraft[slot])?.price) || lookDraft.accent || lookDraft.status || lookDraft.bannerImage || lookDraft.motion;
+  return { toBuy, cost: toBuy.reduce((sum, item) => sum + item.price, 0), plus: Boolean(plusOnly) && !access.plus };
+}
+
+function lockHtml(slot, item) {
+  if (item.price) return myOwned().includes(itemKey(slot, item.id)) ? '' : `<i class="lt-lock spark">${icon('sparkle')}${item.price}</i>`;
+  return hasPlusNow() ? '' : `<i class="lt-lock">${icon('crown')}</i>`;
+}
+
+function lookTabHtml() {
+  const on = (value, current) => (value === current ? 'on' : '');
+  if (lookTab === 'avatar') {
+    const decos = lookDecos.map(item => `<button type="button" class="deco-tile ${on(item.id, lookDraft.deco)}" data-look="deco" data-value="${item.id}"><span class="deco-stage">${avatar(me, 'lg')}${decoHtml({ deco: item.id })}</span><small>${item.title}</small>${lockHtml('deco', item)}</button>`).join('');
+    const motion = lookDraft.motion ? (lookDraft.motion.type === 'video' ? 'Видео на аватарке' : 'GIF на аватарке') : 'Обычная аватарка';
+    return `<h4 class="look-h">Украшение</h4><div class="deco-grid"><button type="button" class="deco-tile ${on('', lookDraft.deco)}" data-look="deco" data-value=""><span class="deco-stage">${avatar(me, 'lg')}</span><small>Без украшения</small></button>${decos}</div><h4 class="look-h">Живая аватарка</h4><div class="look-motion"><label class="btn btn-ghost btn-sm">${icon('upload')} GIF или видео до 10 с<input type="file" accept="image/gif,video/mp4,video/webm,video/quicktime" hidden data-look-file="motion"></label><small>${motion}</small>${lookDraft.motion ? '<button type="button" class="text-link inline" data-look-clear="motion">Убрать</button>' : ''}</div>`;
+  }
+  if (lookTab === 'name') {
+    const sample = escapeHtml(me?.name || 'Имя');
+    const names = lookNames.map(item => `<button type="button" class="fx-tile ${on(item.id, lookDraft.name)}" data-look="name" data-value="${item.id}" style="--look:${accentColor(lookDraft.accent || lookItem('banner', lookDraft.banner)?.accent || 'pink')}"><span class="name-fx fx-${item.id}" data-text="${sample}">${sample}</span><small>${item.title}</small>${lockHtml('name', item)}</button>`).join('');
+    const statuses = lookStatuses.map(value => `<button type="button" class="status-dot ${on(value, lookDraft.status)}" data-look="status" data-value="${value}" aria-label="Статус ${value}">${value}</button>`).join('');
+    return `<h4 class="look-h">Эффект имени</h4><div class="fx-grid"><button type="button" class="fx-tile ${on('', lookDraft.name)}" data-look="name" data-value=""><span>${sample}</span><small>Обычное</small></button>${names}</div><h4 class="look-h">Статус у имени ${hasPlusNow() ? '' : `<i class="lt-lock inline">${icon('crown')}</i>`}</h4><div class="status-grid"><button type="button" class="status-dot none ${on('', lookDraft.status)}" data-look="status" data-value="" aria-label="Без статуса">${icon('close')}</button>${statuses}</div>`;
+  }
+  if (lookTab === 'color') {
+    const dots = profileAccents.map(([key, color]) => `<button type="button" class="look-dot ${on(key, lookDraft.accent)}" data-look="accent" data-value="${key}" style="--dot:${color}" aria-label="${key}"></button>`).join('');
+    return `<h4 class="look-h">Цвет профиля ${hasPlusNow() ? '' : `<i class="lt-lock inline">${icon('crown')}</i>`}</h4><p class="hub-hint">Подсветка аватарки, рамка карточки и эффект имени. Без своего цвета берётся цвет темы.</p><div class="look-accents"><button type="button" class="look-dot none ${on('', lookDraft.accent)}" data-look="accent" data-value="" aria-label="Цвет темы">${icon('close')}</button>${dots}</div>`;
+  }
+  const groups = themeGroups.map(([group, title]) => {
+    const tiles = lookThemes.filter(item => item.group === group).map(item => `<button type="button" class="lt-tile ${on(item.id, lookDraft.bannerImage ? '' : lookDraft.banner)}" data-look="banner" data-value="${item.id}"><span class="look-swatch lt lt-${item.id}"></span><small>${item.title}</small>${lockHtml('banner', item)}</button>`).join('');
+    return `<h4 class="look-h">${title}</h4><div class="lt-grid">${tiles}</div>`;
+  }).join('');
+  return `<div class="lt-grid top"><button type="button" class="lt-tile ${on('', lookDraft.bannerImage ? 'x' : lookDraft.banner)}" data-look="banner" data-value=""><span class="look-swatch lt-plain"></span><small>Без темы</small></button><label class="lt-tile ${lookDraft.bannerImage ? 'on' : ''}"><span class="look-swatch lt-own">${icon('image')}</span><small>Своя картинка</small>${hasPlusNow() ? '' : `<i class="lt-lock">${icon('crown')}</i>`}<input type="file" accept="image/*" hidden data-look-file="banner"></label></div>${groups}`;
+}
+
+function lookSaveLabel() {
+  const needs = lookNeeds();
+  if (needs.plus) return `${icon('crown')} Сохранить с Плюсом`;
+  if (needs.cost) return `${icon('sparkle')} Купить за ${needs.cost} ${plural(needs.cost, 'искру', 'искры', 'искр')} и сохранить`;
+  return `${icon('check')} Сохранить`;
 }
 
 function openLookEditor() {
   if (!me) return;
   const current = me.look || {};
-  lookDraft = { banner: current.banner || '', bannerImage: current.bannerImage || '', accent: current.accentKey || '', motion: current.motion || null };
+  lookDraft = { banner: current.banner || '', bannerImage: current.bannerImage || '', accent: current.accentKey || '', motion: current.motion || null, deco: current.deco || '', name: current.name || '', status: current.status || '' };
+  const tabs = [['theme', 'Тема'], ['avatar', 'Аватарка'], ['name', 'Имя'], ['color', 'Цвет']];
   const draw = () => {
     const sheet = modal.querySelector('.look-sheet');
     if (!sheet) return;
     sheet.querySelector('.look-preview').innerHTML = lookPreviewHtml();
-    sheet.querySelectorAll('[data-banner]').forEach(button => button.classList.toggle('on', button.dataset.banner === lookDraft.banner && !lookDraft.bannerImage));
-    sheet.querySelectorAll('[data-accent]').forEach(button => button.classList.toggle('on', button.dataset.accent === lookDraft.accent));
-    sheet.querySelector('.look-own').classList.toggle('on', Boolean(lookDraft.bannerImage));
-    sheet.querySelector('.look-motion-state').textContent = lookDraft.motion ? (lookDraft.motion.type === 'video' ? 'Видео на аватарке' : 'GIF на аватарке') : 'Обычная аватарка';
-    sheet.querySelector('[data-look-clear="motion"]').hidden = !lookDraft.motion;
+    sheet.querySelectorAll('[data-look-tab]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.lookTab === lookTab)));
+    const scroller = sheet.querySelector('.look-pane');
+    scroller.innerHTML = lookTabHtml();
+    const needs = lookNeeds();
+    const save = sheet.querySelector('.look-save');
+    save.innerHTML = lookSaveLabel();
+    save.disabled = !needs.plus && needs.cost > sparksBalance();
+    sheet.querySelector('.look-need').textContent = !needs.plus && needs.cost > sparksBalance() ? `Нужно ${needs.cost} искр, у тебя ${sparksBalance()}. Искры дают за помощь авторам.` : needs.plus ? 'Выбранное — из Плюса: попробуй бесплатно или оформи подписку.' : '';
   };
-  showDialog(`<div class="sheet-body look-sheet"><h2 id="modal-title">Оформление профиля</h2><p class="hub-hint">Видно в профиле и в карточке, которая открывается по нажатию на имя. Пока действует Плюс.</p><div class="look-preview"></div><h4 class="look-h">Фон</h4><div class="look-banners"><button type="button" data-banner="" class="look-swatch look-none">${icon('close')}</button>${profileBanners.map(([key, label]) => `<button type="button" data-banner="${key}" class="look-swatch look-${key}" aria-label="${label}" title="${label}"></button>`).join('')}<label class="look-swatch look-own" title="Своя картинка или GIF">${icon('image')}<input type="file" accept="image/*" hidden data-look-file="banner"></label></div><h4 class="look-h">Цвет профиля</h4><div class="look-accents"><button type="button" data-accent="" class="look-dot none" aria-label="Без цвета">${icon('close')}</button>${profileAccents.map(([key, color]) => `<button type="button" data-accent="${key}" class="look-dot" style="--dot:${color}" aria-label="${key}"></button>`).join('')}</div><h4 class="look-h">Живая аватарка</h4><div class="look-motion"><label class="btn btn-ghost btn-sm">${icon('upload')} GIF или видео до 10 с<input type="file" accept="image/gif,video/mp4,video/webm,video/quicktime" hidden data-look-file="motion"></label><small class="look-motion-state"></small><button type="button" class="text-link inline" data-look-clear="motion" hidden>Убрать</button></div><small class="look-progress" aria-live="polite"></small><button class="btn btn-grad btn-block look-save">${icon('check')} Сохранить</button></div>`, { kind: 'look' });
+  const intro = hasPlusNow() ? 'Видно в профиле, в карточке по нажатию на имя и в комментариях.' : 'Темы, украшения и эффекты — в Плюсе. То, что с искрой, можно купить за искры навсегда.';
+  showDialog(`<div class="sheet-body look-sheet"><h2 id="modal-title">Оформление профиля</h2><p class="hub-hint">${intro}</p><div class="look-top"><div class="look-preview"></div><div class="look-tabs" role="tablist">${tabs.map(([key, label]) => `<button type="button" role="tab" data-look-tab="${key}">${label}</button>`).join('')}</div></div><div class="look-pane"></div><small class="look-progress" aria-live="polite"></small><small class="look-need" aria-live="polite"></small><button class="btn btn-grad btn-block look-save"></button></div>`, { kind: 'look' });
   const sheet = modal.querySelector('.look-sheet');
   draw();
   sheet.addEventListener('click', event => {
-    const banner = event.target.closest('[data-banner]');
-    const accent = event.target.closest('[data-accent]');
-    if (banner) { lookDraft.banner = banner.dataset.banner; lookDraft.bannerImage = ''; draw(); }
-    if (accent) { lookDraft.accent = accent.dataset.accent; draw(); }
+    const tab = event.target.closest('[data-look-tab]');
+    const pick = event.target.closest('[data-look]');
+    if (tab) { lookTab = tab.dataset.lookTab; haptic('tap'); draw(); return; }
+    if (pick) {
+      const slot = pick.dataset.look;
+      lookDraft[slot] = pick.dataset.value;
+      if (slot === 'banner') lookDraft.bannerImage = '';
+      haptic('tap');
+      draw();
+    }
     if (event.target.closest('[data-look-clear="motion"]')) { lookDraft.motion = null; draw(); }
   });
   sheet.addEventListener('change', async event => {
@@ -1639,7 +1739,7 @@ function openLookEditor() {
     try {
       progress.textContent = 'Загружаем…';
       const url = await uploadBlob(file, isVideo ? 'video' : 'image', share => { progress.textContent = `Загружаем… ${Math.round(share * 100)}%`; });
-      if (input.dataset.lookFile === 'banner') { lookDraft.bannerImage = url; lookDraft.banner = lookDraft.banner || ''; }
+      if (input.dataset.lookFile === 'banner') lookDraft.bannerImage = url;
       else lookDraft.motion = { url, type: isVideo ? 'video' : 'image' };
       progress.textContent = '';
       draw();
@@ -1649,20 +1749,38 @@ function openLookEditor() {
     }
     input.value = '';
   });
-  sheet.querySelector('.look-save').addEventListener('click', async event => {
-    const button = event.currentTarget;
-    button.disabled = true;
+  const save = async () => {
+    const button = modal.querySelector('.look-save');
+    if (button) button.disabled = true;
     try {
-      const result = await apiCall('POST', '/api/me/look', { banner: lookDraft.banner, bannerImage: lookDraft.bannerImage, accent: lookDraft.accent, motion: lookDraft.motion?.url || '' });
+      for (const item of lookNeeds().toBuy) applyShopResult(await apiCall('POST', '/api/shop/buy', { item: item.key }));
+      const result = await apiCall('POST', '/api/me/look', { banner: lookDraft.banner, bannerImage: lookDraft.bannerImage, accent: lookDraft.accent, motion: lookDraft.motion?.url || '', deco: lookDraft.deco, name: lookDraft.name, status: lookDraft.status });
       updateUser(result.me);
       closeDialog();
       render();
+      haptic('success');
       toast('Профиль оформлен');
     } catch (error) {
-      button.disabled = false;
+      if (button) button.disabled = false;
       toast(error.message);
     }
+  };
+  sheet.querySelector('.look-save').addEventListener('click', () => {
+    if (lookNeeds().plus) {
+      const draft = { ...lookDraft };
+      openPaywall('look', () => { openLookEditor(); lookDraft = draft; modal.querySelector('.look-save')?.click(); });
+      return;
+    }
+    save();
   });
+}
+
+function applyShopResult(result) {
+  if (!result || !remote?.account) return;
+  if (result.me) updateUser(result.me);
+  remote.account.sparks = result.sparks;
+  remote.account.owned = result.owned;
+  if (result.sparkLog) remote.account.sparkLog = result.sparkLog;
 }
 
 function videoLength(file) {
@@ -1687,7 +1805,7 @@ function profileCardHtml(person, preview = false) {
   ].join('');
   const mine = isMine(person.handle);
   const actions = preview ? '' : `<div class="pcard-actions">${mine ? '' : followPill(person.handle, 'small', true)}${mine || person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(person.handle)}">${icon('inbox')}</a>`}<button class="btn btn-ghost btn-sm" data-action="profile" data-handle="${handle}">Профиль ${icon('chevronRight')}</button></div>`;
-  return `<div class="pcard ${person.look ? 'has-look' : ''}" ${person.look?.accent ? `style="--look:${person.look.accent}"` : ''}>${lookBannerHtml(person.look, 'pcard-banner') || '<div class="pcard-banner look-plain" aria-hidden="true"></div>'}<div class="pcard-body"><span class="pcard-face">${ringAvatar(person, 'pcard-ava', person)}</span><b class="pcard-name">${escapeHtml(person.name || '')}${plusBadge(person)}</b><small class="pcard-handle">@${handle}</small>${chips ? `<div class="pcard-chips">${chips}</div>` : ''}${person.bio ? `<p class="pcard-bio">${escapeHtml(person.bio)}</p>` : ''}<div class="pcard-stats"><span><b>${person.projects ?? 0}</b>проектов</span><span><b>${person.followers ?? 0}</b>подписчиков</span><span><b>${person.help?.points ?? 0}</b>помощь</span></div>${actions}</div></div>`;
+  return `<div class="pcard ${person.look ? 'has-look' : ''}" ${person.look?.accent ? `style="--look:${person.look.accent}"` : ''}>${lookBannerHtml(person.look, 'pcard-banner') || '<div class="pcard-banner lt-plain" aria-hidden="true"></div>'}<div class="pcard-body"><span class="pcard-face">${ringAvatar(person, 'pcard-ava', person)}${decoHtml(person.look)}</span><b class="pcard-name">${nameHtml(person.name || '', person)}${statusHtml(person)}${plusBadge(person)}</b><small class="pcard-handle">@${handle}</small>${chips ? `<div class="pcard-chips">${chips}</div>` : ''}${person.bio ? `<p class="pcard-bio">${escapeHtml(person.bio)}</p>` : ''}<div class="pcard-stats"><span><b>${person.projects ?? 0}</b>проектов</span><span><b>${person.followers ?? 0}</b>подписчиков</span><span><b>${person.help?.points ?? 0}</b>помощь</span></div>${actions}</div></div>`;
 }
 
 let cardHost = null;
@@ -2615,7 +2733,7 @@ const paywallReasons = {
   prompt: ['sparkle', 'Промпт с ИИ — часть Плюса', 'ИИ прочитает README, файлы и обсуждение и превратит короткий отзыв в точную задачу для агента'],
   plus: ['crown', 'Больше возможностей во всех разделах', 'Лента без рекламы, ИИ-мир без тесных лимитов и заявки в Steam без очереди'],
   voice: ['mic', 'Голосовые комментарии — в Плюсе', 'Наговори отзыв до двух минут: автору проще понять, где ты застрял'],
-  look: ['palette', 'Оформи профиль по-своему', 'Анимированный фон, GIF или видео на аватарке и свой цвет профиля']
+  look: ['palette', 'Оформи профиль по-своему', '18 живых тем, украшения аватарки, эффекты имени, статус и свой цвет']
 };
 let paywallAfter = null;
 
@@ -2628,7 +2746,7 @@ function openPaywall(reason = 'plus', after = null) {
   const price = account.plusPrice || plusPlan.price;
   const discount = price < plusPlan.price ? Math.round((1 - price / plusPlan.price) * 100) : 0;
   const mode = remote?.config?.payments;
-  const perks = [['crown', 'Значок Плюса у имени'], ['palette', 'Анимированный профиль: фон, GIF или видео на аватарке, свой цвет'], ['mic', 'Голосовые комментарии'], ['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['users', `До ${playtestSlots.plus} тестеров в тест-задании и место выше в списке`], ['monitor', 'ИИ-мир и Steam: больше компьютеров, заявка без очереди']];
+  const perks = [['crown', 'Значок Плюса у имени'], ['palette', '18 живых тем профиля, украшения аватарки, эффекты имени, статус, GIF или видео на аватарке'], ['mic', 'Голосовые комментарии'], ['sparkle', 'Промпт с ИИ из любого комментария'], ['eyeOff', 'Лента без рекламы'], ['megaphone', `−${Math.round(PLUS_DISCOUNT * 100)}% на продвижение и день в подарок каждый месяц`], ['users', `До ${playtestSlots.plus} тестеров в тест-задании и место выше в списке`], ['monitor', 'ИИ-мир и Steam: больше компьютеров, заявка без очереди']];
   const trial = account.plusTrial ? `<button class="btn btn-grad btn-block pw-trial" data-action="plus-trial">${icon('sparkle')} Попробовать бесплатно · ${plusPlan.trialHours} часа</button><small class="pw-fine">Без карты. Через сутки Плюс просто выключится — ничего не спишется.</small>` : '';
   const buy = mode ? `<button class="pw-buy ${trial ? '' : 'main'}" data-action="plus-pay"><span><b>${discount ? 'Первый месяц' : 'Месяц'} за ${rub(price)}</b><small>${discount ? `<s>${rub(plusPlan.price)}</s> дальше ${rub(plusPlan.price)} в месяц` : `${plusPlan.days} дней, без автопродления`}</small></span>${discount ? `<em>−${discount}%</em>` : icon('chevronRight')}</button>` : '<p class="pw-fine">Оплата скоро появится</p>';
   const sparks = sparksBalance() >= sparkPrices.plusWeek ? `<button class="gift-row" data-action="plus-sparks"><span class="row-mark">${icon('sparkle')}</span><span><b>Неделя за ${sparkPrices.plusWeek} искр</b><small>У тебя ${sparksBalance()} искр</small></span>${icon('chevronRight')}</button>` : '';
@@ -3479,6 +3597,7 @@ document.addEventListener('click', async event => {
   if (adItem) reportAd(adItem.dataset.ad, 'click');
   if (action === 'close-modal') closeAnimated();
   else if (action === 'ad-skip') skipAd(target);
+  else if (action === 'ad-info') openAdInfo(target.dataset.id);
   else if (action === 'boost') openBoost(id);
   else if (action === 'plus') openPlus();
   else if (action === 'pay-test') payTest(id, target);
@@ -3584,6 +3703,9 @@ document.addEventListener('click', async event => {
   else if (action === 'boost-gift') boostGift(id, target.dataset.pay, target);
   else if (action === 'plus-sparks') plusForSparks(target);
   else if (action === 'sparks-sheet') openSparks();
+  else if (action === 'shop-buy') shopBuy(target);
+  else if (action === 'shop-wear') shopWear(target);
+  else if (action === 'shop-boost') openShopBoost();
   else if (action === 'feed-modes') { event.preventDefault(); toggleModeMenu(); }
   else if (action === 'comment-sort') {
     commentSort = target.dataset.sort || 'best';
@@ -3635,7 +3757,7 @@ document.addEventListener('click', async event => {
   else if (action === 'digest') showDigest(id, target);
   else if (action === 'voice-rec') { if (hasPlusNow()) startVoice(id); else openPaywall('voice', () => { rerenderComments(id); startVoice(id); }); }
   else if (action === 'profile-card') { const rect = target.getBoundingClientRect?.(); openProfileCard(target.dataset.handle, rect ? { x: rect.left, y: rect.bottom + 6 } : null); }
-  else if (action === 'look') { if (hasPlusNow()) openLookEditor(); else openPaywall('look', openLookEditor); }
+  else if (action === 'look') openLookEditor();
   else if (action === 'voice-stop') stopVoice(true);
   else if (action === 'voice-cancel') stopVoice(false);
   else if (action === 'play-voice') playVoice(target);
@@ -5227,12 +5349,98 @@ async function boostGift(projectId, pay, button) {
   }
 }
 
+// Sparks are private: only you see your balance, as a small mark next to your handle.
+function sparkPillHtml() {
+  const balance = sparksBalance();
+  return `<button class="spark-pill" data-action="sparks-sheet" aria-label="${balance} ${plural(balance, 'искра', 'искры', 'искр')} — что это и на что потратить">${icon('sparkle')}<b>${balance}</b></button>`;
+}
+
+function sparkLogHtml() {
+  return (remote?.account?.sparkLog || []).map(entry => `<div class="spark-row"><span>${escapeHtml(entry.label)}<small>${timeAgo(entry.at) || ''}</small></span><b class="${entry.amount < 0 ? 'minus' : ''}">${entry.amount > 0 ? '+' : ''}${entry.amount}</b></div>`).join('');
+}
+
+function sparkRulesHtml() {
+  return `<ul class="spark-rules">${Object.values(sparkRules).map(rule => `<li><b>+${rule.amount}</b><span>${escapeHtml(rule.label)}${rule.hint ? `<small>${escapeHtml(rule.hint)}</small>` : ''}</span></li>`).join('')}</ul><button class="gift-row" data-action="playtests"><span class="row-mark">${icon('users')}</span><span><b>Тест-задания</b><small>Проверь игру по шагам — за принятый отчёт +${sparkRules.accepted.amount}</small></span>${icon('chevronRight')}</button>`;
+}
+
+// What sparks are: the balance, how to earn them, and the way to the shop.
 function openSparks() {
   if (!me) return;
-  const log = (remote?.account?.sparkLog || []).map(entry => `<div class="spark-row"><span>${escapeHtml(entry.label)}<small>${timeAgo(entry.at) || ''}</small></span><b class="${entry.amount < 0 ? 'minus' : ''}">${entry.amount > 0 ? '+' : ''}${entry.amount}</b></div>`).join('');
-  const rules = Object.values(sparkRules).map(rule => `<li><b>+${rule.amount}</b><span>${escapeHtml(rule.label)}${rule.hint ? `<small>${escapeHtml(rule.hint)}</small>` : ''}</span></li>`).join('');
   const balance = sparksBalance();
-  showDialog(`<div class="sheet-body sparks"><span class="spark-mark">${icon('sparkle')}</span><h2 id="modal-title">${balance} ${plural(balance, 'искра', 'искры', 'искр')}</h2><p class="hub-hint">Искры дают авторы за помощь: принятые отчёты о багах, полезные отзывы и закреплённые комментарии.</p><h3 class="set-title">Как получить</h3><ul class="spark-rules">${rules}</ul><button class="gift-row" data-action="playtests"><span class="row-mark">${icon('users')}</span><span><b>Тест-задания</b><small>Проверь игру по шагам — за принятый отчёт +${sparkRules.accepted.amount}</small></span>${icon('chevronRight')}</button><h3 class="set-title">На что потратить</h3><button class="gift-row" data-action="plus-sparks" ${balance >= sparkPrices.plusWeek ? '' : 'disabled'}><span class="plus-mark small">${icon('crown')}</span><span><b>Неделя Плюса</b><small>${sparkPrices.plusWeek} искр</small></span>${icon('chevronRight')}</button><div class="gift-row muted"><span class="row-mark">${icon('megaphone')}</span><span><b>День продвижения поста</b><small>${sparkPrices.boostDay} искр · кнопка «Продвинуть» на странице своего поста</small></span></div>${log ? `<h3 class="set-title">История</h3><div class="spark-log">${log}</div>` : ''}</div>`, { kind: 'sparks' });
+  const log = sparkLogHtml();
+  const cheapest = Math.min(sparkPrices.boostDay, ...sparkItems.map(item => item.price));
+  const shopHint = balance >= cheapest ? 'Хватает на покупку — загляни' : `Самое доступное — от ${cheapest} искр`;
+  showDialog(`<div class="sheet-body sparks"><span class="spark-mark">${icon('sparkle')}</span><h2 id="modal-title">${balance} ${plural(balance, 'искра', 'искры', 'искр')}</h2><p class="hub-hint">Искры дают авторы за помощь: принятые отчёты о багах, полезные отзывы и закреплённые комментарии. Баланс видишь только ты.</p><a class="btn btn-grad btn-block spark-shop-btn" href="#/sparks">${icon('box')} Магазин искр<small>${shopHint}</small></a><h3 class="set-title">Как получить</h3>${sparkRulesHtml()}${log ? `<h3 class="set-title">История</h3><div class="spark-log">${log}</div>` : ''}</div>`, { kind: 'sparks' });
+}
+
+/* The spark shop: Plus for a week, a day of promotion and looks that stay for good */
+
+function shopItemPreview(item) {
+  if (item.slot === 'banner') return `<span class="shop-art look-swatch lt lt-${item.id}"></span>`;
+  if (item.slot === 'deco') return `<span class="shop-art shop-stage"><span class="deco-stage">${avatar(me, 'lg')}${decoHtml({ deco: item.id })}</span></span>`;
+  return `<span class="shop-art shop-name"><span class="name-fx fx-${item.id}" data-text="${escapeHtml(me?.name || 'Имя')}">${escapeHtml(me?.name || 'Имя')}</span></span>`;
+}
+
+const shopSlotNames = { banner: 'Тема профиля', deco: 'Украшение аватарки', name: 'Эффект имени' };
+
+function renderSparksPage() {
+  if (!online || !me) return `<div class="page narrow">${emptyState('sparkle', 'Искры — для тех, кто помогает авторам', '<a class="btn btn-primary" href="#/me">Войти</a>', 'Войди, чтобы видеть свои искры и магазин')}</div>`;
+  const balance = sparksBalance();
+  const owned = myOwned();
+  const afford = price => balance >= price;
+  const mine = projects().filter(project => isMine(project.handle));
+  const looks = sparkItems.map(item => {
+    const have = owned.includes(item.key);
+    const worn = me.look?.[item.slot] === item.id;
+    const action = have
+      ? `<button class="btn btn-ghost btn-sm" data-action="shop-wear" data-key="${item.key}">${worn ? `${icon('check')} Надето` : 'Надеть'}</button>`
+      : `<button class="btn ${afford(item.price) ? 'btn-grad' : 'btn-ghost'} btn-sm" data-action="shop-buy" data-key="${item.key}" ${afford(item.price) ? '' : 'disabled'}>${icon('sparkle')} ${item.price}</button>`;
+    return `<div class="shop-item ${have ? 'have' : ''}">${shopItemPreview(item)}<span class="shop-text"><b>${escapeHtml(item.title)}</b><small>${shopSlotNames[item.slot]}${have ? ' · твоё навсегда' : ' · навсегда, даже без Плюса'}</small></span>${action}</div>`;
+  }).join('');
+  const plusRow = `<div class="shop-item"><span class="shop-art shop-icon plus">${icon('crown')}</span><span class="shop-text"><b>Неделя Плюса</b><small>${hasPlusNow() ? 'Продлит твой Плюс на 7 дней' : 'Без рекламы, все темы и украшения'}</small></span><button class="btn ${afford(sparkPrices.plusWeek) ? 'btn-grad' : 'btn-ghost'} btn-sm" data-action="plus-sparks" ${afford(sparkPrices.plusWeek) ? '' : 'disabled'}>${icon('sparkle')} ${sparkPrices.plusWeek}</button></div>`;
+  const boostRow = `<div class="shop-item"><span class="shop-art shop-icon boost">${icon('megaphone')}</span><span class="shop-text"><b>День продвижения</b><small>${mine.length ? 'Твой пост в рекламе ленты сутки · до 300 показов' : 'Сначала опубликуй проект'}</small></span><button class="btn ${afford(sparkPrices.boostDay) && mine.length ? 'btn-grad' : 'btn-ghost'} btn-sm" data-action="shop-boost" ${afford(sparkPrices.boostDay) && mine.length ? '' : 'disabled'}>${icon('sparkle')} ${sparkPrices.boostDay}</button></div>`;
+  const log = sparkLogHtml();
+  return `<div class="page narrow sparks-page"><section class="spark-hero"><span class="spark-mark">${icon('sparkle')}</span><div><b>${balance}</b><span>${plural(balance, 'искра', 'искры', 'искр')} · видишь только ты</span></div></section><h2 class="block-title">Для поста и аккаунта</h2><div class="shop-list">${plusRow}${boostRow}</div><h2 class="block-title">Оформление навсегда</h2><p class="hub-hint">Покупается один раз и остаётся, даже если Плюса нет. Надеть — в оформлении профиля.</p><div class="shop-list">${looks}</div><h2 class="block-title">Как получить искры</h2>${sparkRulesHtml()}${log ? `<h2 class="block-title">История</h2><div class="spark-log">${log}</div>` : ''}</div>`;
+}
+
+async function shopBuy(button) {
+  const item = sparkItem(button.dataset.key);
+  if (!item || !me) return;
+  button.disabled = true;
+  try {
+    applyShopResult(await apiCall('POST', '/api/shop/buy', { item: item.key }));
+    haptic('success');
+    toast(`«${item.title}» теперь твоё`);
+    render();
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message);
+  }
+}
+
+async function shopWear(button) {
+  const item = sparkItem(button.dataset.key);
+  if (!item || !me) return;
+  button.disabled = true;
+  try {
+    const worn = me.look?.[item.slot] === item.id;
+    const result = await apiCall('POST', '/api/me/look', { [item.slot]: worn ? '' : item.id });
+    updateUser(result.me);
+    haptic('tap');
+    toast(worn ? 'Снято' : `«${item.title}» в профиле`);
+    render();
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message);
+  }
+}
+
+// A day of promotion for one of your posts: pick the post, then the same gift flow as on the post page.
+function openShopBoost() {
+  const mine = projects().filter(project => isMine(project.handle));
+  if (!mine.length) return;
+  const rows = mine.map(project => `<button class="gift-row" data-action="boost-gift" data-pay="sparks" data-id="${escapeHtml(project.id)}"><span class="row-mark">${icon(categoryIcons[project.category] || 'sparkle')}</span><span><b>${escapeHtml(project.title)}</b><small>${escapeHtml(categoryNames[project.category] || '')}</small></span>${icon('chevronRight')}</button>`).join('');
+  showDialog(`<div class="sheet-body"><h2 id="modal-title">Какой пост продвинуть?</h2><p class="hub-hint">Сутки в рекламе ленты, до 300 показов, за ${sparkPrices.boostDay} искр.</p><div class="gifts">${rows}</div></div>`, { kind: 'shop-boost' });
 }
 
 async function plusForSparks(button) {
@@ -5249,11 +5457,57 @@ async function plusForSparks(button) {
   }
 }
 
+/* The author's console: every own project across Лента, ИИ-мир and Steam on one screen, with what waits
+   for the author first. Each part opens the same place as in the project block on the post page. */
+
+function deskProject(project) {
+  const fresh = playerFeedback(project).filter(comment => !comment.resolved && !comment.tasked).length;
+  const reports = testReports(project).filter(comment => comment.test?.current && !comment.accepted && !comment.tasked && !comment.resolved).length;
+  const linked = linkedWorkspaceFor(project);
+  const task = linked?.lastTask;
+  const readiness = project.category === 'games' ? projectReadiness(project) : null;
+  // A finished task newer than the last update is ready to become one.
+  const taskDone = task?.status === 'done' && (task.createdAt || 0) > (project.lastUpdateAt || 0);
+  return { project, fresh, reports, linked, task, taskDone, readiness, waiting: fresh + reports + (taskDone ? 1 : 0) + (project.demoDraft?.url ? 1 : 0) };
+}
+
+function deskCardHtml(item) {
+  const { project, fresh, reports, linked, task, taskDone, readiness } = item;
+  const pid = escapeHtml(project.id);
+  const stats = cleanStats(statsFor(project));
+  const feedLine = fresh || reports
+    ? [fresh ? `${fresh} ${plural(fresh, 'новый отзыв', 'новых отзыва', 'новых отзывов')}` : '', reports ? `${reports} ${plural(reports, 'отчёт', 'отчёта', 'отчётов')} тестеров` : ''].filter(Boolean).join(' · ')
+    : `${commentCount(project)} ${plural(commentCount(project), 'комментарий', 'комментария', 'комментариев')} · ${project.watchers || 0} следят`;
+  const feed = `<button class="desk-part ${fresh || reports ? 'hot' : ''}" data-action="hub-open" data-id="${pid}" data-tab="${reports && !fresh ? 'testers' : fresh ? 'reviews' : 'feed'}"><span class="desk-ico">${icon('flame')}</span><span><b>Лента</b><small>${escapeHtml(feedLine)}</small></span></button>`;
+  const aiLine = linked
+    ? `${linked.device?.online ? 'в сети' : 'не в сети'}${task ? ` · ${statusNames[task.status] || task.status}` : ' · задач нет'}`
+    : 'Свяжи с папкой — отзывы станут задачами';
+  const aiPart = linked
+    ? `<a class="desk-part ${taskDone ? 'hot' : ''}" href="#/ai/w/${encodeURIComponent(linked.id)}"><span class="desk-ico ai">${icon('code')}<i class="presence ${linked.device?.online ? 'on' : ''}"></i></span><span><b>${escapeHtml(linked.name)}</b><small>${escapeHtml(aiLine)}</small></span></a>`
+    : `<button class="desk-part muted" data-action="hub-open" data-id="${pid}" data-tab="code"><span class="desk-ico ai">${icon('code')}</span><span><b>ИИ-мир</b><small>${escapeHtml(aiLine)}</small></span></button>`;
+  const steam = readiness
+    ? `<button class="desk-part" data-action="hub-open" data-id="${pid}" data-tab="steam"><span class="ready-ring small" style="--p:${readiness.percent}"><b>${readiness.percent}</b></span><span><b>Steam</b><small>${escapeHtml(steamLabels[project.steam?.status || 'none'])}${project.publisherNoticed ? ' · издатель заметил' : ''}</small></span></button>`
+    : '';
+  const extras = [
+    project.demoDraft?.url ? `<button class="desk-note" data-action="hub-open" data-id="${pid}" data-tab="code">${icon('play')} Веб-версия готова — поставить в пост</button>` : '',
+    taskDone && linked ? `<a class="desk-note" href="#/ai/w/${encodeURIComponent(linked.id)}">${icon('check')} ИИ закончил задачу — можно выпустить обновление</a>` : '',
+    project.playtest?.open ? `<button class="desk-note" data-action="hub-open" data-id="${pid}" data-tab="testers">${icon('users')} Тест-задание: ${project.playtest.taken || 0} из ${project.playtest.slots || 0} мест</button>` : ''
+  ].join('');
+  return `<article class="desk-card"><button class="desk-head" data-action="open-project" data-id="${pid}"><span><b>${escapeHtml(project.title)}</b><small>${escapeHtml(categoryNames[project.category] || '')} · ${stats.plays} ${plural(stats.plays, 'игрок', 'игрока', 'игроков')} в демо</small></span>${icon('chevronRight')}</button><div class="desk-parts">${feed}${aiPart}${steam}</div>${extras ? `<div class="desk-notes">${extras}</div>` : ''}</article>`;
+}
+
+function deskHtml(owned) {
+  const items = owned.map(deskProject).sort((a, b) => b.waiting - a.waiting || (b.project.createdAt || 0) - (a.project.createdAt || 0));
+  const waiting = items.reduce((sum, item) => sum + item.waiting, 0);
+  const head = `<div class="desk-sum">${icon(waiting ? 'bell' : 'check')}<span><b>${waiting ? `Ждут тебя: ${waiting}` : 'Всё разобрано'}</b><small>Отзывы и отчёты из ленты, задачи ИИ-мира и путь в Steam — по каждому проекту</small></span></div>`;
+  return `<div class="desk">${head}${items.map(deskCardHtml).join('')}</div>`;
+}
+
 function mySteamProjectsHtml() {
   if (!online || !me) return '';
   const mine = projects().filter(project => isMine(project.handle) && project.category === 'games');
   if (!mine.length) return '';
-  return `<section class="block my-steam"><h2 class="block-title">Мои игры на пути в Steam</h2>${mine.map(project => {
+  return `<section class="block my-steam"><h2 class="block-title desk-title">Мои игры на пути в Steam<a class="text-link inline" href="#/me/desk">Пульт ${icon('chevronRight')}</a></h2>${mine.map(project => {
     const readiness = projectReadiness(project);
     return `<button class="set-row" data-action="hub-open" data-id="${escapeHtml(project.id)}"><span class="ready-ring small" style="--p:${readiness.percent}"><b>${readiness.percent}</b></span><span><b>${escapeHtml(project.title)}</b><small>${escapeHtml(steamLabels[project.steam?.status || 'none'])}${project.publisherNoticed ? ' · издатель заметил' : ''}</small></span>${icon('chevronRight')}</button>`;
   }).join('')}</section>`;
@@ -6528,7 +6782,7 @@ async function importLink(button) {
 function commentHtml(project, comment, reply = false) {
   const ownProject = isMine(project.handle);
   const person = comment.handle ? userByHandle(comment.handle) : null;
-  const name = comment.handle ? `<button class="text-link inline" data-action="profile-card" data-handle="${escapeHtml(comment.handle)}">${escapeHtml(comment.name)}</button>${plusBadge(person)}` : escapeHtml(comment.name);
+  const name = comment.handle ? `<button class="text-link inline" data-action="profile-card" data-handle="${escapeHtml(comment.handle)}"${person?.look?.accent ? ` style="--look:${person.look.accent}"` : ''}>${nameHtml(comment.name, person)}</button>${statusHtml(person)}${plusBadge(person)}` : escapeHtml(comment.name);
   const rawFace = ringAvatar({ initials: comment.initials || comment.name.slice(0, 1), color: comment.color || (comment.name === 'Вы' ? '#e5e1d8' : '#cfd9c4'), avatar: comment.avatar }, '', person);
   const face = comment.handle && online ? `<button class="face-btn" data-action="profile-card" data-handle="${escapeHtml(comment.handle)}" aria-label="Карточка ${escapeHtml(comment.name)}">${rawFace}</button>` : rawFace;
   const id = escapeHtml(comment.id || '');
