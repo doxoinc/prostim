@@ -165,6 +165,18 @@ test('media uploads: owner-only reuse, type sniffing and byte ranges for video',
   assert.equal(partial.status, 206);
   assert.equal(partial.headers.get('content-range'), `bytes 0-9/${mp4.length}`);
   assert.equal((await partial.arrayBuffer()).byteLength, 10);
+  // A big video goes out in slices of up to 2 MB, so the server never reads it whole for one request.
+  const big = Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom'), Buffer.alloc(3 * 1024 * 1024, 9)]);
+  const bigUpload = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'video/mp4', Cookie: cookie }, body: big }).then(response => response.json());
+  const first = await fetch(`${base}${bigUpload.url}`, { headers: { Range: 'bytes=0-' } });
+  assert.equal(first.status, 206);
+  assert.equal(first.headers.get('content-range'), `bytes 0-${2 * 1024 * 1024 - 1}/${big.length}`);
+  assert.equal((await first.arrayBuffer()).byteLength, 2 * 1024 * 1024);
+  const rest = await fetch(`${base}${bigUpload.url}`, { headers: { Range: `bytes=${2 * 1024 * 1024}-` } });
+  assert.equal(rest.headers.get('content-range'), `bytes ${2 * 1024 * 1024}-${big.length - 1}/${big.length}`);
+  assert.deepEqual(Buffer.from(await rest.arrayBuffer()), big.subarray(2 * 1024 * 1024));
+  assert.equal((await fetch(`${base}${bigUpload.url}`, { headers: { Range: `bytes=${big.length}-` } })).status, 416);
+  assert.equal((await fetch(`${base}${bigUpload.url}`)).headers.get('content-length'), String(big.length));
   const stolen = await eve('POST', '/api/projects', { title: 'x', summary: 'y', media: [{ url: upload.url }] });
   assert.equal(stolen.status, 400, 'another user cannot attach someone else’s upload');
   const created = await fetch(`${base}/api/projects`, { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ title: 'Видео', summary: 'Трейлер', media: [{ url: upload.url }], video: 'https://www.youtube.com/watch?v=abc' }) }).then(response => response.json());

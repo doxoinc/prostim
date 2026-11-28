@@ -3040,6 +3040,17 @@ dialog.card-host:has(.pcard-wrap.desk)::backdrop { background: transparent; -web
 .ad-info .set-row { margin-top: 14px; }
 .ad-info .gift-row { margin-top: 10px; }
 
+/* Layout fixes: the media picker, sheet tops, FAQ on narrow screens */
+.pick-cover + .pick-strip { margin-top: 10px; }
+.pick-cover:has(.tile-state.error) :is(em, .pick-focus) { display: none; }
+.faq .more summary { display: flex; justify-content: space-between; gap: 12px; }
+.faq .more summary::after { flex: none; }
+.modal-close { z-index: 7; }
+@media (max-width: 760px) {
+  .grabber::after { content: ""; position: absolute; z-index: -1; top: 0; left: 0; right: 0; height: 60px; background: linear-gradient(var(--surface) 40%, transparent); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  dialog.scrolled .grabber::after { opacity: 1; }
+}
+
 /* The author's console (profile → Пульт) */
 .desk { display: grid; gap: 12px; padding-top: 4px; }
 .desk-sum { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 18px; background: var(--surface-2); }

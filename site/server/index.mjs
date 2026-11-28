@@ -997,6 +997,80 @@ function videoLink(value) {
   return ['youtube.com', 'youtu.be', 'vimeo.com', 'rutube.ru', 'vk.com', 'vkvideo.ru', 'store.steampowered.com', 'twitch.tv'].includes(host) ? url : '';
 }
 
+/* Storage for uploads. On Render they live in the free Postgres (1 GB for everything), so files nobody
+   points to any more are swept away, and a full disk gets a clear answer instead of «Ошибка сервера». */
+
+const STORAGE_LIMIT = (Number(process.env.STORAGE_LIMIT_MB) || 1024) * 1024 * 1024;
+const UPLOAD_GRACE = 48 * 3600 * 1000;
+const mb = bytes => `${Math.round(bytes / 1024 / 1024)} МБ`;
+
+// The free database restarts now and then; for a few seconds it cannot be reached.
+const databaseDown = error => ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', '57P01', '57P02', '57P03'].includes(error?.code) || /connection terminated|terminating connection|database system is (starting up|in recovery|shutting down)|timeout exceeded when trying to connect/i.test(error?.message || '');
+const storageFull = error => ['53100', '53200', '53400', '25006', 'ENOSPC'].includes(error?.code) || /no space left|could not extend|read-only transaction|disk full|quota/i.test(error?.message || '');
+
+// Replaced avatars, removed photos, posts that were never published: an upload that nothing in the state
+// mentions any more, older than `grace`. Rows the state has lost track of go too.
+async function sweepUploads({ grace = UPLOAD_GRACE } = {}) {
+  const now = Date.now();
+  const { uploads, ...rest } = D;
+  const used = JSON.stringify(rest);
+  const drop = Object.entries(uploads).filter(([name, meta]) => now - (meta.createdAt || 0) > grace && !used.includes(name)).map(([name]) => name);
+  for (const row of await db.uploadRows()) if (!uploads[row.name] && now - row.at > grace && !used.includes(row.name)) drop.push(row.name);
+  if (!drop.length) return 0;
+  await db.deleteUploads(drop);
+  for (const name of drop) delete D.uploads[name];
+  db.save();
+  await db.vacuum().catch(error => console.warn('vacuum failed:', error.message));
+  return drop.length;
+}
+
+async function storageReport(label) {
+  try {
+    const report = await db.storage();
+    const share = report.total / STORAGE_LIMIT;
+    console[share > 0.85 ? 'warn' : 'log'](`Хранилище (${label}): ${mb(report.total)} из ${mb(STORAGE_LIMIT)}, файлов ${report.files} на ${mb(report.uploads)}${share > 0.85 ? ' — почти заполнено' : ''}`);
+    return report;
+  } catch (error) {
+    console.warn('storage report failed:', error.message);
+    return null;
+  }
+}
+
+async function cleanStorage(label, options) {
+  try {
+    const removed = await sweepUploads(options);
+    if (removed) console.log(`Удалено файлов без ссылок: ${removed}`);
+  } catch (error) {
+    console.warn('upload sweep failed:', error.message);
+  }
+  return storageReport(label);
+}
+
+// Saves a file. If the database is restarting, waits and tries once more; if the disk is full, frees
+// what is unused first. Either way the person gets a clear answer instead of «Ошибка сервера».
+async function storeUpload(name, bytes) {
+  try {
+    await db.putUpload(name, bytes);
+    return;
+  } catch (error) {
+    if (databaseDown(error)) {
+      console.error('upload failed, database unreachable:', error.message);
+      await new Promise(resolve => setTimeout(resolve, 4000));
+    } else if (storageFull(error)) {
+      console.error('upload failed, storage is full:', error.message);
+      await cleanStorage('после ошибки', { grace: 6 * 3600 * 1000 });
+    } else throw error;
+  }
+  try {
+    await db.putUpload(name, bytes);
+  } catch (again) {
+    if (databaseDown(again)) fail(503, 'Сервер с файлами перезапускается — попробуй ещё раз через минуту');
+    if (storageFull(again)) fail(507, 'Место для файлов на сервере закончилось. Мы уже чистим старые файлы — попробуй позже, а видео пока можно дать ссылкой на YouTube или VK');
+    throw again;
+  }
+}
+
+const RANGE_SLICE = 2 * 1024 * 1024;
 const uploadLimits = { image: 4 * 1024 * 1024, gif: 8 * 1024 * 1024, video: 40 * 1024 * 1024, audio: 3 * 1024 * 1024 };
 const uploadLimit = limiter(60, 60 * 60 * 1000);
 
@@ -1040,7 +1114,7 @@ on('POST', '/api/uploads', async ({ user, request }) => {
   if (!sniffed || sniffed[0] !== kind) fail(400, kind === 'video' ? 'Нужен MP4, MOV или WebM' : kind === 'audio' ? 'Голосовое не распознано' : 'Нужна картинка JPEG, PNG, WebP или GIF');
   if (sniffed[1] === 'gif' ? size > uploadLimits.gif : size > uploadLimits[kind]) fail(413, 'Файл слишком большой');
   const name = `${sniffed[0][0]}-${randomUUID().slice(0, 18)}.${sniffed[1]}`;
-  await db.putUpload(name, bytes);
+  await storeUpload(name, bytes);
   D.uploads[name] = { userId: user.id, type: sniffed[0], size: bytes.length, createdAt: Date.now() };
   db.save();
   return { url: `/uploads/${name}`, type: sniffed[0] };
@@ -1079,7 +1153,7 @@ on('POST', '/api/files', async ({ user, request }) => {
   const extension = (/\.([a-z0-9]{1,8})$/i.exec(filename)?.[1] || 'bin').toLowerCase();
   const name = `f-${randomUUID().slice(0, 18)}.${extension}`;
   const kind = fileKind(bytes, String(request.headers['content-type'] || ''), filename);
-  await db.putUpload(name, bytes);
+  await storeUpload(name, bytes);
   D.uploads[name] = { userId: user.id, type: 'file', kind, filename, size, createdAt: Date.now() };
   db.save();
   return { id: name, filename, size, kind };
@@ -1110,7 +1184,7 @@ on('POST', '/api/projects', async ({ user, request }) => {
   for (const [index, dataUrl] of (Array.isArray(body.images) ? body.images.slice(0, 4) : []).entries()) {
     const { bytes, extension } = decodeImage(dataUrl);
     const name = `${id}-${index}.${extension}`;
-    await db.putUpload(name, bytes);
+    await storeUpload(name, bytes);
     images.push(`/uploads/${name}`);
   }
   const media = [...images.map(url => ({ type: 'image', url })), ...postMedia(body.media, user)];
@@ -1931,7 +2005,7 @@ on('POST', '/api/uploads/remote', async ({ user, body }) => {
   if (!sniffed || sniffed[0] !== 'image') fail(415, 'По ссылке не картинка');
   if (sniffed[1] !== 'gif' && file.bytes.length > uploadLimits.image) fail(413, 'Картинка больше 4 МБ');
   const name = `i-${randomUUID().slice(0, 18)}.${sniffed[1]}`;
-  await db.putUpload(name, file.bytes);
+  await storeUpload(name, file.bytes);
   D.uploads[name] = { userId: user.id, type: 'image', size: file.bytes.length, createdAt: Date.now() };
   db.save();
   return { url: `/uploads/${name}`, type: 'image' };
@@ -2425,19 +2499,27 @@ const server = http.createServer(async (request, response) => {
   if (pathname === '/agent.mjs') return serveFile(response, agentFile);
   if (pathname.startsWith('/uploads/')) {
     const name = pathname.slice('/uploads/'.length);
-    const upload = /^[\w.-]+$/.test(name) && !name.startsWith('f-') ? await db.getUpload(name).catch(() => null) : null;
-    if (!upload) return sendJson(response, 404, { error: 'Файл не найден' });
-    const total = upload.bytes.length;
-    const headers = { 'Content-Type': upload.type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Accept-Ranges': 'bytes' };
+    if (!/^[\w.-]+$/.test(name) || name.startsWith('f-')) return sendJson(response, 404, { error: 'Файл не найден' });
     const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range || '');
+    const headers = { 'Cache-Control': 'public, max-age=31536000, immutable', 'Accept-Ranges': 'bytes' };
+    // Video comes in slices of up to 2 MB: the player asks for the rest itself, and the server never
+    // holds a whole 40 MB file in memory for one request.
     if (range && (range[1] || range[2])) {
+      const head = await db.getUploadRange(name, 0, 0).catch(() => null);
+      if (!head) return sendJson(response, 404, { error: 'Файл не найден' });
+      const total = head.size;
       const start = range[1] ? Number(range[1]) : Math.max(0, total - Number(range[2]));
-      const end = range[1] && range[2] ? Math.min(total - 1, Number(range[2])) : total - 1;
-      if (start >= total || start > end) { response.writeHead(416, { 'Content-Range': `bytes */${total}` }); return response.end(); }
-      response.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${total}`, 'Content-Length': end - start + 1 });
-      return response.end(upload.bytes.subarray(start, end + 1));
+      const asked = range[1] && range[2] ? Math.min(total - 1, Number(range[2])) : total - 1;
+      if (start >= total || start > asked) { response.writeHead(416, { 'Content-Range': `bytes */${total}` }); return response.end(); }
+      const end = Math.min(asked, start + RANGE_SLICE - 1);
+      const part = await db.getUploadRange(name, start, end - start + 1).catch(() => null);
+      if (!part) return sendJson(response, 404, { error: 'Файл не найден' });
+      response.writeHead(206, { ...headers, 'Content-Type': part.type, 'Content-Range': `bytes ${start}-${start + part.bytes.length - 1}/${total}`, 'Content-Length': part.bytes.length });
+      return response.end(part.bytes);
     }
-    response.writeHead(200, { ...headers, 'Content-Length': total });
+    const upload = await db.getUpload(name).catch(() => null);
+    if (!upload) return sendJson(response, 404, { error: 'Файл не найден' });
+    response.writeHead(200, { ...headers, 'Content-Type': upload.type, 'Content-Length': upload.bytes.length });
     return response.end(upload.bytes);
   }
   const file = inside(staticRoot, pathname === '/' ? '/index.html' : pathname);
@@ -2459,6 +2541,10 @@ on('GET', '/api/events', async ({ request, response, user }) => {
 });
 
 server.listen(PORT, HOST, () => {
+  // How full the storage is, right in the Render logs; unused files are swept a minute after start and every 6 hours.
+  storageReport('при старте');
+  setTimeout(() => cleanStorage('после чистки'), 60 * 1000).unref?.();
+  setInterval(() => cleanStorage('по расписанию'), 6 * 3600 * 1000).unref?.();
   console.log(`про.стим: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   // What the sign-in screen will offer: visible in the Render logs right after a deploy.
   console.log(`Почта: ${mailer.kind || 'не настроена'}${mailer.real ? ` (от ${mailer.from.email})` : ''} · вход через: ${oauthProviders().join(', ') || 'только ник и почта'}`);
