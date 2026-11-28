@@ -244,7 +244,7 @@ test('a post page keeps facts, links, theme and blocks; only the author edits it
   assert.deepEqual(edited.body.project.page.map(block => block.type), ['image', 'heading'], 'blocks keep the new order and existing files');
 });
 
-test('chat: stickers, pictures and one reaction per person', async () => {
+test('chat: stickers, pictures, voice messages and one reaction per person', async () => {
   const ann = client();
   const bob = client();
   await ann('POST', '/api/auth/register', { handle: 'chatann', name: 'Аня', password: 'secret12' }, { 'X-Forwarded-For': '10.9.0.1' });
@@ -267,6 +267,16 @@ test('chat: stickers, pictures and one reaction per person', async () => {
   await bob('POST', '/api/messages/chatann/react', { id, emoji: '❤️' });
   seen = (await ann('GET', '/api/bootstrap')).body.threads.find(thread => thread.handle === 'chatbob').messages[0].reactions;
   assert.deepEqual(seen.counts, {}, 'the same reaction again takes it back');
+  // Voice messages: recorded like voice comments, for everyone in chats.
+  const webm = Buffer.concat([Buffer.from('1a45dfa3', 'hex'), Buffer.alloc(400, 3)]);
+  const voice = await fetch(`${base}/api/uploads`, { method: 'POST', headers: { 'Content-Type': 'audio/webm', Cookie: cookie }, body: webm }).then(response => response.json());
+  assert.equal((await bob('POST', '/api/messages/chatann', { voice: voice.url, duration: 6 })).status, 400, 'cannot send someone else’s recording');
+  threads = (await ann('POST', '/api/messages/chatbob', { voice: voice.url, duration: 6 })).body.threads;
+  const said = threads.find(thread => thread.handle === 'chatbob').messages.at(-1);
+  assert.deepEqual([said.voice, said.duration, said.text], [voice.url, 6, '']);
+  await ann('POST', '/api/users/chatbob/follow');
+  const notice = (await bob('GET', '/api/notifications')).body.items.find(item => item.type === 'follow');
+  assert.deepEqual([notice.who.handle, notice.who.name], ['chatann', 'Аня'], 'a notice brings the face of who did it');
   const stranger = client();
   await stranger('POST', '/api/auth/register', { handle: 'chatcarl', name: 'Карл', password: 'secret12' }, { 'X-Forwarded-For': '10.9.0.4' });
   assert.equal((await stranger('POST', '/api/messages/chatann/react', { id, emoji: '👍' })).status, 404, 'outsiders cannot react to a private chat');

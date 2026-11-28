@@ -76,7 +76,7 @@ export function noticeText(item, nameOf, projectTitle) {
 const groupable = ['like', 'repost', 'comment-like', 'follow', 'review', 'tester'];
 
 export function createNotifier(options) {
-  const { D, save, live, env, keys, nameOf, projectTitle } = options;
+  const { D, save, live, env, keys, nameOf, projectTitle, cardOf } = options;
   const subject = () => options.subject;
   D.notifications ||= {};
   D.pushSubs ||= {};
@@ -88,7 +88,7 @@ export function createNotifier(options) {
   }
 
   function view(item) {
-    return { id: item.id, type: item.type, text: noticeText(item, nameOf, projectTitle), url: item.url || '', at: item.at, read: Boolean(item.read), actor: item.actors?.[0] || '', projectId: item.projectId || '', count: item.count || 1 };
+    return { id: item.id, type: item.type, text: noticeText(item, nameOf, projectTitle), url: item.url || '', at: item.at, read: Boolean(item.read), actor: item.actors?.[0] || '', who: (item.actors?.[0] && cardOf?.(item.actors[0])) || null, projectId: item.projectId || '', count: item.count || 1 };
   }
 
   function list(userId, limit = 60) {

@@ -62,6 +62,7 @@ const notifier = createNotifier({
   keys: () => vapidKeys(process.env, D.secrets),
   get subject() { return process.env.PUSH_SUBJECT || D.secrets.pushSubject || 'mailto:noreply@example.com'; },
   nameOf: userId => D.users[userId]?.name || 'Кто-то',
+  cardOf: userId => { const user = D.users[userId]; return user ? { handle: user.handle, name: user.name, initials: user.initials, color: user.color, avatar: user.avatar || '' } : null; },
   projectTitle: projectId => D.projects.find(project => project.id === projectId)?.title || 'проект'
 });
 
@@ -243,7 +244,7 @@ function threadsFor(meId) {
       unread: list.filter(message => message.to === meId && message.createdAt > (reads[other] || 0)).length,
       lastAt: list[list.length - 1].createdAt,
       blocked: blockedBy(meId, other), blockedMe: blockedBy(other, meId),
-      messages: list.map(message => ({ id: message.id, from: message.from === meId ? 'me' : 'them', text: message.text, image: message.image || '', sticker: message.sticker || '', project: message.project || '', reactions: reactionSummary(message.reactions, meId), createdAt: message.createdAt }))
+      messages: list.map(message => ({ id: message.id, from: message.from === meId ? 'me' : 'them', text: message.text, image: message.image || '', sticker: message.sticker || '', voice: message.voice || '', duration: message.duration || 0, project: message.project || '', reactions: reactionSummary(message.reactions, meId), createdAt: message.createdAt }))
     };
   }).sort((left, right) => right.lastAt - left.lastAt);
 }
@@ -2180,13 +2181,16 @@ on('POST', '/api/messages/:handle', async ({ user, params, body }) => {
   const text = cleanText(body.text, 2000);
   const sticker = stickerById(body.sticker)?.id || '';
   const image = body.image ? ownedUpload(body.image, user, 'image').url : '';
+  // Voice messages, recorded like voice comments (up to two minutes); in chats they are for everyone.
+  const voice = body.voice ? ownedUpload(body.voice, user, 'audio').url : '';
+  const duration = voice ? Math.max(1, Math.min(120, Math.round(Number(body.duration) || 0))) : 0;
   const shared = body.project ? D.projects.find(project => project.id === String(body.project) && visibleTo(project, user.id)) || fail(404, 'Проект не найден') : null;
-  if (!text && !sticker && !image && !shared) fail(400, 'Пустое сообщение');
-  D.messages.push({ id: randomUUID(), from: user.id, to: target.id, text, ...(image ? { image } : {}), ...(sticker ? { sticker } : {}), ...(shared ? { project: shared.id } : {}), createdAt: Date.now() });
+  if (!text && !sticker && !image && !shared && !voice) fail(400, 'Пустое сообщение');
+  D.messages.push({ id: randomUUID(), from: user.id, to: target.id, text, ...(image ? { image } : {}), ...(sticker ? { sticker } : {}), ...(voice ? { voice, duration } : {}), ...(shared ? { project: shared.id } : {}), createdAt: Date.now() });
   D.reads[user.id] = { ...(D.reads[user.id] || {}), [target.id]: Date.now() };
   db.save();
   pushTo([target.id], 'dm', { from: user.handle });
-  notifier.notify(target.id, { type: 'message', actorId: user.id, snippet: text || (sticker ? 'Стикер' : image ? 'Картинка' : `Проект «${shared.title}»`), url: `/#/inbox/${user.handle}` });
+  notifier.notify(target.id, { type: 'message', actorId: user.id, snippet: text || (voice ? 'Голосовое сообщение' : sticker ? 'Стикер' : image ? 'Картинка' : `Проект «${shared.title}»`), url: `/#/inbox/${user.handle}` });
   return { threads: threadsFor(user.id) };
 });
 

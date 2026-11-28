@@ -2033,10 +2033,12 @@ body.scrolling .boost-frame .frame-soft { animation-play-state: paused; }
 .notice-row.unread { background: rgba(255, 70, 80, .07); }
 .notice-face { position: relative; flex: none; }
 .notice-mark { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-3); font-size: 22px; }
-.notice-kind { position: absolute; right: -3px; bottom: -3px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-3); color: var(--text); font-size: 12px; box-shadow: 0 0 0 2.5px var(--bg); }
-.notice-kind.like, .notice-kind.comment-like, .notice-kind.repost { background: var(--grad); color: #fff; }
-.notice-kind.follow, .notice-kind.post { background: #7c6cff; color: #fff; }
-.notice-kind.update { background: var(--amber); color: #1b1206; }
+.notice-kind { position: absolute; right: -3px; bottom: -3px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-3); color: var(--text); font-size: 12px; font-style: normal; line-height: 1; box-shadow: 0 0 0 2.5px var(--bg); }
+/* The type icon is drawn at 12 px whatever the surrounding text size, and filled shapes stay crisp. */
+.notice-kind > .i { width: 12px; height: 12px; font-size: 12px; stroke-width: 2.4; }
+.notice-kind.kind-like, .notice-kind.kind-comment-like, .notice-kind.kind-repost { background: var(--grad); color: #fff; }
+.notice-kind.kind-follow, .notice-kind.kind-post { background: #7c6cff; color: #fff; }
+.notice-kind.kind-update { background: var(--amber); color: #1b1206; }
 .notice-text { flex: 1; min-width: 0; font-size: 14.5px; line-height: 1.4; overflow-wrap: anywhere; }
 .notice-text small { display: block; margin-top: 2px; color: var(--dim); font-size: 12px; }
 .notice-thumb { position: relative; flex: none; width: 46px; height: 58px; overflow: hidden; border-radius: 10px; background: var(--surface-2); }
@@ -2201,7 +2203,7 @@ dialog[data-kind="player"] { width: min(1180px, calc(100% - 32px)); height: calc
 /* Comments: replies, likes, pins, voice and a digest */
 .comment-body { flex: 1; min-width: 0; }
 .comments .comment { align-items: flex-start; }
-.notice-kind.comment, .notice-kind.reply { background: #5ec8ff; color: #06202e; }
+.notice-kind.kind-comment, .notice-kind.kind-reply { background: #5ec8ff; color: #06202e; }
 .comment.reply { margin-left: 48px; padding-top: 6px; }
 .comment.reply .avatar { width: 28px; height: 28px; font-size: 10px; }
 .comment.pinned { margin: 0 -10px; padding: 12px 10px; border-radius: 14px; background: rgba(255, 176, 59, .07); }
@@ -3387,3 +3389,45 @@ dialog.card-host:has(.pcard-wrap.desk)::backdrop { background: transparent; -web
 .shop-text small { color: var(--dim); font-size: 12px; }
 .shop-item .btn { flex: none; min-height: 36px; padding: 0 12px; font-size: 13.5px; }
 .shop-item .btn .i { font-size: 15px; }
+
+/* Profile buttons and the look editor on a phone */
+/* The crown on a Plus-only button: its icon is drawn at its own size, not at the 19 px of button icons. */
+.lock-crown > .i, .btn .lock-crown > .i { width: 10px; height: 10px; font-size: 10px; stroke-width: 2.2; }
+.look-btn .lock-crown { top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; box-shadow: 0 0 0 2.5px var(--bg); }
+.look-btn .lock-crown > .i { width: 11px; height: 11px; font-size: 11px; }
+.profile-actions .look-btn { overflow: visible; }
+.steam-apply .btn-label { margin-left: 2px; }
+@media (max-width: 760px) {
+  /* «Заявка в Steam» is one icon on a phone, like the palette and the pen next to it. */
+  .profile-actions .btn.steam-apply { flex: none; width: 48px; padding: 0; gap: 0; }
+  /* Stronger than the narrow-phone rule that hides icons in text buttons */
+  .profile-actions .btn.steam-apply:not(.btn-square):not(.btn-primary) .i { display: block; }
+  .steam-apply .btn-label { display: none; }
+}
+.look-tabs button { flex: 1 1 0; min-width: 0; padding: 0 4px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-save { z-index: 6; }
+
+
+/* Chat composer: the picture button's file input stays inside its own circle. A text-field rule gave it
+   46 px and padding, and where a browser widened it, it lay over the send button (painted above it,
+   being positioned) and a tap on «send» opened the photo picker. */
+.composer label.cbtn { overflow: hidden; }
+.composer input[type="file"] { flex: none; min-width: 0; min-height: 0; max-height: none; padding: 0; border: 0; border-radius: 0; font-size: 0; }
+.composer button[type="submit"] { position: relative; z-index: 1; }
+/* Recording a voice message in a chat */
+.chat-form.recording > input[name="text"], .chat-form.recording > .cbtn, .chat-form.recording > button[type="submit"] { display: none; }
+.chat-form .voice-rec span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.bubble .voice-note { min-width: 190px; }
+
+/* Holding a video in the feed pauses it */
+#feed .card-media { -webkit-touch-callout: none; }
+.hold-mark { position: absolute; z-index: 2; top: 50%; left: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; display: grid; place-items: center; border-radius: 50%; background: rgba(12, 12, 14, .45); color: #fff; font-size: 28px; pointer-events: none; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: hold-in .18s var(--ease) both; }
+.hold-mark .i { stroke-width: 2.6; }
+@keyframes hold-in { from { opacity: 0; transform: scale(.8); } }
+
+/* The recording bar's buttons are text buttons, not the round composer buttons around them */
+.chat-form .voice-rec .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; border-radius: 12px; }
+.chat-form .voice-rec .btn-grad { background: var(--grad); color: #fff; }
+.chat-form .voice-rec .btn-ghost { background: var(--surface-2); color: var(--text); }
+.chat-form .voice-rec .btn .i { font-size: 15px; }
+.chat-form .voice-rec { min-width: 0; }

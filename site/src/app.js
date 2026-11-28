@@ -73,7 +73,7 @@ let liveEvents = null;
 const reviewsCache = new Map();
 const calculator = { price: 15, copiesIndex: 5 };
 const copySteps = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
-let lastTap = { time: 0, id: '' };
+let lastTap = { time: 0, id: '', count: 0 };
 let tapTimer;
 let pointerStart = null;
 const TASTE_KEY = 'prostim-taste-v1';
@@ -1332,7 +1332,7 @@ function renderInbox(id) {
   const rows = list.map(thread => {
     const last = thread.all[thread.all.length - 1];
     const unread = threadUnread(thread);
-    return `<a class="thread-row ${unread ? 'unread' : ''}" href="#/inbox/${encodeURIComponent(thread.id)}">${avatar(thread, 'lg')}<span class="thread-text"><b>${escapeHtml(thread.name)}${thread.official ? ` <span class="verified">${icon('check')}</span>` : ''}</b><small>${last ? `${last.from === 'me' ? 'Вы: ' : ''}${escapeHtml(last.text)}` : 'Нет сообщений'}</small></span><span class="thread-meta"><small>${escapeHtml(last?.time || '')}</small>${unread ? '<i class="dot-badge" aria-label="Новое"></i>' : ''}</span></a>`;
+    return `<a class="thread-row ${unread ? 'unread' : ''}" href="#/inbox/${encodeURIComponent(thread.id)}">${avatar(thread, 'lg')}<span class="thread-text"><b>${escapeHtml(thread.name)}${thread.official ? ` <span class="verified">${icon('check')}</span>` : ''}</b><small>${last ? `${last.from === 'me' ? 'Вы: ' : ''}${escapeHtml(last.text || (last.voice ? 'Голосовое сообщение' : last.sticker ? 'Стикер' : last.image ? 'Картинка' : last.project ? 'Пост' : ''))}` : 'Нет сообщений'}</small></span><span class="thread-meta"><small>${escapeHtml(last?.time || '')}</small>${unread ? '<i class="dot-badge" aria-label="Новое"></i>' : ''}</span></a>`;
   }).join('');
   const unreadNotices = activityUnread();
   const noticeRow = online && me ? `<a class="thread-row activity-row ${unreadNotices ? 'unread' : ''}" href="#/activity"><span class="activity-mark">${icon('bell')}</span><span class="thread-text"><b>Уведомления</b><small>Подписчики, ответы, поддержка и обновления</small></span><span class="thread-meta">${unreadNotices ? `<i class="count-badge">${unreadNotices > 99 ? '99+' : unreadNotices}</i>` : icon('chevronRight')}</span></a>` : '';
@@ -1353,9 +1353,10 @@ function bubbleHtml(message, thread) {
   const image = uploadUrl(message.image);
   const counts = Object.entries(message.reactions?.counts || {});
   const shared = message.project ? projectById(message.project) : null;
-  const kind = sticker ? 'is-sticker' : message.project && !message.text ? 'is-post' : image && !message.text ? 'is-image' : onlyEmoji(message.text) ? 'is-emoji' : '';
+  const kind = sticker ? 'is-sticker' : message.voice && !message.text ? 'is-voice' : message.project && !message.text ? 'is-post' : image && !message.text ? 'is-image' : onlyEmoji(message.text) ? 'is-emoji' : '';
   const post = message.project ? (shared ? `<button class="bubble-post" data-action="open-project" data-id="${escapeHtml(shared.id)}"><span class="bubble-post-art">${scene(shared, 0, 'still')}</span><span><b>${escapeHtml(shared.title)}</b><small>@${escapeHtml(shared.handle)} · ${escapeHtml(shared.summary)}</small></span></button>` : '<span class="bubble-text muted">Пост удалён</span>') : '';
-  const body = sticker ? stickerHtml(sticker) : `${post}${image ? `<button class="bubble-image" data-action="view-chat-image" data-src="${image}" aria-label="Открыть картинку"><img src="${image}" alt="Скриншот" loading="lazy"></button>` : ''}${message.text ? `<span class="bubble-text">${escapeHtml(message.text)}</span>` : ''}`;
+  const voice = message.voice ? voiceHtml(message.voice, message.duration) : '';
+  const body = sticker ? stickerHtml(sticker) : `${post}${voice}${image ? `<button class="bubble-image" data-action="view-chat-image" data-src="${image}" aria-label="Открыть картинку"><img src="${image}" alt="Скриншот" loading="lazy"></button>` : ''}${message.text ? `<span class="bubble-text">${escapeHtml(message.text)}</span>` : ''}`;
   const reactions = counts.length ? `<div class="reactions">${counts.map(([emoji, count]) => `<button class="reaction ${message.reactions.mine === emoji ? 'on' : ''}" data-action="react" data-id="${escapeHtml(message.id)}" data-emoji="${emoji}" aria-label="Реакция ${emoji}">${emoji}${count > 1 ? `<b>${count}</b>` : ''}</button>`).join('')}</div>` : '';
   const reactable = online && message.id && !thread.official;
   return `<div class="msg-row ${mine ? 'me' : 'them'}" ${reactable ? `data-msg="${escapeHtml(message.id)}"` : ''}><div class="bubble ${mine ? 'me' : 'them'} ${kind}">${body}${message.time ? `<small>${escapeHtml(message.time)}</small>` : ''}</div>${reactions}</div>`;
@@ -1366,7 +1367,12 @@ function chatComposerHtml(thread) {
   const stickers = chatStickers.map(sticker => `<button type="button" data-action="send-sticker" data-id="${sticker.id}" aria-label="Стикер ${escapeHtml(sticker.label)}">${stickerHtml(sticker)}</button>`).join('');
   const panel = `<div class="chat-panel" data-tab="emoji" hidden><div class="panel-tabs"><button type="button" class="on" data-action="chat-tab" data-tab="emoji">Эмодзи</button><button type="button" data-action="chat-tab" data-tab="stickers">Стикеры</button></div><div class="emoji-grid">${emoji}</div><div class="sticker-grid">${stickers}</div></div>`;
   const picture = online ? `<label class="cbtn" aria-label="Отправить скриншот" title="Скриншот или фото">${icon('image')}<input class="file-cover" type="file" accept="image/*" data-chat-image="${escapeHtml(thread.id)}"></label>` : '';
-  return `<div class="chat-composer">${panel}<form id="dm-form" class="composer chat-form" data-id="${escapeHtml(thread.id)}"><button type="button" class="cbtn" data-action="chat-panel" aria-label="Эмодзи и стикеры">${icon('smile')}</button><input name="text" placeholder="Сообщение…" aria-label="Сообщение" maxlength="2000" autocomplete="off">${picture}${voiceButton()}<button type="submit" aria-label="Отправить">${icon('send')}</button></form></div>`;
+  return `<div class="chat-composer">${panel}<form id="dm-form" class="composer chat-form" data-id="${escapeHtml(thread.id)}"><button type="button" class="cbtn" data-action="chat-panel" aria-label="Эмодзи и стикеры">${icon('smile')}</button><input name="text" placeholder="Сообщение…" aria-label="Сообщение" maxlength="2000" autocomplete="off">${picture}${chatVoiceButton(thread)}<button type="submit" aria-label="Отправить">${icon('send')}</button></form></div>`;
+}
+
+// The microphone in a chat records a voice message, like in comments. Typing by voice lives in ИИ-мир.
+function chatVoiceButton(thread) {
+  return online && me && typeof MediaRecorder === 'function' ? `<button type="button" class="cbtn" data-action="chat-voice" data-id="${escapeHtml(thread.id)}" aria-label="Записать голосовое" title="Голосовое сообщение">${icon('mic')}</button>` : '';
 }
 
 async function sendChat(threadId, payload) {
@@ -1417,7 +1423,7 @@ function openReactBar(row) {
   haptic('heavy');
 }
 
-/* Voice input: the browser's speech recognition types what you say into the field */
+/* Voice input in ИИ-мир: the browser's speech recognition types what you say into the task field */
 
 const SpeechRecognitionApi = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
 let dictation = null;
@@ -1609,7 +1615,7 @@ function renderProfile(handle, tab) {
       ? [[owned.length, 'проектов'], [state.follows.length, 'подписок'], [state.saved.length, 'сохранено']]
       : [[owned.length, 'проектов'], [owned.reduce((sum, project) => sum + voteCount(project), 0), 'поддержали'], [owned.reduce((sum, project) => sum + commentCount(project), 0), 'комментариев']];
   const actions = mine
-    ? `<button class="btn btn-primary btn-sm" data-action="publish">${icon('plus')} Проект</button><button class="btn btn-ghost btn-sm" data-action="application">${icon('gamepad')} Заявка в Steam</button>${online ? `<button class="btn btn-ghost btn-sm btn-square look-btn" data-action="look" aria-label="Оформление профиля">${icon('palette')}${hasPlusNow() ? '' : `<i class="lock-crown">${icon('crown')}</i>`}</button><button class="btn btn-ghost btn-sm btn-square" data-action="edit-profile" aria-label="Изменить профиль">${icon('pen')}</button>` : ''}`
+    ? `<button class="btn btn-primary btn-sm" data-action="publish">${icon('plus')} Проект</button><button class="btn btn-ghost btn-sm steam-apply" data-action="application" aria-label="Заявка в Steam" title="Заявка в Steam">${icon('gamepad')}<span class="btn-label">Заявка в Steam</span></button>${online ? `<button class="btn btn-ghost btn-sm btn-square look-btn" data-action="look" aria-label="Оформление профиля">${icon('palette')}${hasPlusNow() ? '' : `<i class="lock-crown">${icon('crown')}</i>`}</button><button class="btn btn-ghost btn-sm btn-square" data-action="edit-profile" aria-label="Изменить профиль">${icon('pen')}</button>` : ''}`
     : `${followPill(handle, 'btn-sm')}${person.official ? '' : `<a class="btn btn-ghost btn-sm" href="#/inbox/${encodeURIComponent(handle)}">${icon('inbox')} Написать</a>`}${online && !person.official ? `<button class="btn btn-ghost btn-sm" data-action="rate" data-handle="${escapeHtml(handle)}">${myRating ? `★ ${myRating.score} · Изменить` : '★ Оценить'}</button><button class="btn btn-ghost btn-sm btn-square" data-action="user-menu" data-handle="${escapeHtml(handle)}" aria-label="Ещё">${icon('more')}</button>` : ''}`;
   const tabs = mine
     ? [['', 'grid', 'Проекты'], ...(online && owned.length ? [['desk', 'rocket', 'Пульт']] : []), ['saved', 'bookmark', 'Сохранённое'], ...(online ? [['reposts', 'repost', 'Репосты']] : []), ['follows', 'users', 'Подписки'], ['applications', 'doc', 'Заявки'], ...(online ? [['reviews', 'comment', 'Отзывы']] : [])]
@@ -2616,7 +2622,7 @@ function renderEditor() {
   const panes = [['files', 'folder', 'Файлы'], ['code', 'code', 'Код'], ['assistant', 'sparkle', 'ИИ']];
   const welcome = `<div class="ai-welcome"><span class="ai-orb">${icon('sparkle')}</span><h2>Редактор в браузере</h2><p class="muted-line">Открывай папку, GitHub или пример, правь файлы и скачивай. Задачи для ИИ — в подключённых проектах.</p><div class="suggestions"><button class="suggestion" data-action="sample-prompt">Разобраться в проекте</button><button class="suggestion" data-action="explain-file">Объяснить ${escapeHtml(selectedFile?.path || 'файл')}</button><button class="suggestion" data-action="readme">${icon('download')} README</button></div></div>`;
   const chat = messages.length ? messages.map(message => `<div class="msg ${message.role}">${escapeHtml(message.text)}${message.link ? `<a class="btn btn-primary btn-xs" href="${message.link}">Подключить компьютер</a>` : ''}</div>`).join('') : welcome;
-  return `<div class="page wide">${aiNav('editor')}<div class="ws-head-editor">${sourceChip('#/ai/connect/folder')}</div><div class="ws-tabs" role="tablist">${panes.map(([id, iconName, label]) => `<button class="${workspacePane === id ? 'on' : ''}" data-action="pane" data-id="${id}" role="tab" aria-selected="${workspacePane === id}">${icon(iconName)}${label}</button>`).join('')}</div><div class="workspace" data-pane="${workspacePane}"><aside class="pane pane-files"><div class="pane-head"><b>Файлы проекта</b><span>${files.length}</span></div>${files.slice(0, 150).map(file => `<button class="file-row ${selectedFile?.path === file.path ? 'active' : ''}" data-action="file" data-path="${escapeHtml(file.path)}">${icon(fileIcon(file.path))}<span>${escapeHtml(file.path)}</span></button>`).join('')}<button class="add-source" data-action="connections">${icon('plus')} Источник</button></aside><section class="pane pane-code"><div class="pane-head"><span class="file-name">${escapeHtml(selectedFile?.path || 'Файл не выбран')}</span><span class="pane-actions"><button class="icon-btn" data-action="download-file" aria-label="Скачать файл">${icon('download')}</button>${selectedFile?.handle ? `<button class="icon-btn accent" data-action="write-file" aria-label="Сохранить в папку">${icon('check')}</button>` : ''}</span></div><textarea id="file-editor" aria-label="Содержимое файла" spellcheck="false">${escapeHtml(selectedFile?.content || '')}</textarea></section><section class="pane pane-ai"><div class="pane-head"><b>${icon('sparkle')} Помощник</b><small class="tag">без модели</small></div><div class="chat" id="chat">${chat}</div><form id="prompt-form" class="composer"><label class="sr-only" for="prompt">Задача для проекта</label><textarea id="prompt" name="prompt" rows="1" placeholder="Опиши задачу…" required>${escapeHtml(promptDraft)}</textarea><button type="submit" aria-label="Отправить задачу">${icon('send')}</button></form></section></div></div>`;
+  return `<div class="page wide">${aiNav('editor')}<div class="ws-head-editor">${sourceChip('#/ai/connect/folder')}</div><div class="ws-tabs" role="tablist">${panes.map(([id, iconName, label]) => `<button class="${workspacePane === id ? 'on' : ''}" data-action="pane" data-id="${id}" role="tab" aria-selected="${workspacePane === id}">${icon(iconName)}${label}</button>`).join('')}</div><div class="workspace" data-pane="${workspacePane}"><aside class="pane pane-files"><div class="pane-head"><b>Файлы проекта</b><span>${files.length}</span></div>${files.slice(0, 150).map(file => `<button class="file-row ${selectedFile?.path === file.path ? 'active' : ''}" data-action="file" data-path="${escapeHtml(file.path)}">${icon(fileIcon(file.path))}<span>${escapeHtml(file.path)}</span></button>`).join('')}<button class="add-source" data-action="connections">${icon('plus')} Источник</button></aside><section class="pane pane-code"><div class="pane-head"><span class="file-name">${escapeHtml(selectedFile?.path || 'Файл не выбран')}</span><span class="pane-actions"><button class="icon-btn" data-action="download-file" aria-label="Скачать файл">${icon('download')}</button>${selectedFile?.handle ? `<button class="icon-btn accent" data-action="write-file" aria-label="Сохранить в папку">${icon('check')}</button>` : ''}</span></div><textarea id="file-editor" aria-label="Содержимое файла" spellcheck="false">${escapeHtml(selectedFile?.content || '')}</textarea></section><section class="pane pane-ai"><div class="pane-head"><b>${icon('sparkle')} Помощник</b><small class="tag">без модели</small></div><div class="chat" id="chat">${chat}</div><form id="prompt-form" class="composer"><label class="sr-only" for="prompt">Задача для проекта</label><textarea id="prompt" name="prompt" rows="1" placeholder="Опиши задачу…" required>${escapeHtml(promptDraft)}</textarea>${voiceButton()}<button type="submit" aria-label="Отправить задачу">${icon('send')}</button></form></section></div></div>`;
 }
 
 /* Dialogs */
@@ -2626,8 +2632,9 @@ function showDialog(content, context = null) {
   dialogContext = context;
   modal.dataset.kind = context?.kind || '';
   modal.innerHTML = `<div class="grabber" aria-hidden="true"></div><button class="modal-close" data-action="close-modal" aria-label="Закрыть">${icon('close')}</button>${content}`;
-  // On phones a post opens at 70% of the screen and grows to full height once it is scrolled.
-  const detent = context?.kind === 'project' && isPhone() ? (wasOpen && sheetDetent === 'full' ? 'full' : 'half') : 'full';
+  // A post opens at full height. On a phone a swipe down drops it to 70%, the next one closes it; a post
+  // that re-renders while open keeps where it was.
+  const detent = context?.kind === 'project' && isPhone() && wasOpen ? sheetDetent : 'full';
   if (!wasOpen) {
     resetSheet();
     sheetDetent = detent;
@@ -3704,16 +3711,24 @@ document.addEventListener('click', async event => {
   else if (action === 'open-project') navigateToProject(id);
   else if (action === 'post-link') trackSignal(projectById(id), /steampowered\.com|s\.team/.test(target.href || '') ? 'wishlist' : 'open');
   else if (action === 'media') {
+    // One tap opens the post, two support it, three switch the sound. The second tap waits a moment
+    // for a third, so a triple tap does not also leave a like.
     const now = Date.now();
     clearTimeout(tapTimer);
-    if (lastTap.id === id && now - lastTap.time < 300) {
-      lastTap = { time: 0, id: '' };
-      if (!online || me) burst(target, event);
-      toggleProjectFlag('vote', id, { onlyOn: true });
-      haptic('success');
+    const count = lastTap.id === id && now - lastTap.time < 320 ? lastTap.count + 1 : 1;
+    lastTap = { time: now, id, count };
+    if (count === 1) tapTimer = setTimeout(() => navigateToProject(id), 300);
+    else if (count === 2) {
+      const point = { clientX: event.clientX, clientY: event.clientY };
+      tapTimer = setTimeout(() => {
+        if (!online || me) burst(target, point);
+        toggleProjectFlag('vote', id, { onlyOn: true });
+        haptic('success');
+      }, 260);
     } else {
-      lastTap = { time: now, id };
-      tapTimer = setTimeout(() => navigateToProject(id), 300);
+      lastTap = { time: 0, id: '', count: 0 };
+      setFeedSound(!soundOn(), target.closest?.('.card-media') || target);
+      haptic('tap');
     }
   } else if (action === 'comments') openComments(id);
   else if (action === 'share') openShare(id);
@@ -3822,6 +3837,7 @@ document.addEventListener('click', async event => {
   else if (action === 'profile-card') { const rect = target.getBoundingClientRect?.(); openProfileCard(target.dataset.handle, rect ? { x: rect.left, y: rect.bottom + 6 } : null); }
   else if (action === 'look') openLookEditor();
   else if (action === 'voice-stop') stopVoice(true);
+  else if (action === 'chat-voice') startVoice('', id);
   else if (action === 'voice-cancel') stopVoice(false);
   else if (action === 'play-voice') playVoice(target);
   else if (action === 'vote' || action === 'save') {
@@ -4605,6 +4621,50 @@ for (const name of ['focusin', 'focusout']) {
 }
 function stopSwipeClick(event) { event.preventDefault(); event.stopPropagation(); }
 
+// Holding a finger (or the mouse button) on a video in the feed pauses it, like a story; letting go plays
+// it on. Moving the finger is a scroll or a swipe, not a hold.
+let feedHold = null;
+
+function holdFeed() {
+  const hold = feedHold;
+  const video = hold?.media.querySelector?.('video[data-feed-video]');
+  if (!hold || !video || video.paused) return;
+  hold.held = true;
+  hold.video = video;
+  video.pause();
+  hold.media.classList.add('held');
+  hold.media.insertAdjacentHTML?.('beforeend', `<span class="hold-mark" aria-hidden="true">${icon('pause')}</span>`);
+  haptic('tap');
+}
+
+function releaseFeedHold() {
+  const hold = feedHold;
+  feedHold = null;
+  if (!hold) return;
+  clearTimeout(hold.timer);
+  if (!hold.held) return;
+  hold.media.classList.remove('held');
+  hold.media.querySelectorAll?.('.hold-mark').forEach(mark => mark.remove());
+  const item = hold.media.closest?.('.feed-item');
+  if (item?.classList.contains('in-view') && !modal.open) playFeedVideo(hold.video);
+  // Letting go is not a tap: the post does not open.
+  lastTap = { time: 0, id: '', count: 0 };
+  document.addEventListener('click', stopSwipeClick, { capture: true, once: true });
+  setTimeout(() => document.removeEventListener('click', stopSwipeClick, true), 350);
+}
+
+document.addEventListener('pointerdown', event => {
+  const media = event.target.closest?.('#feed .card-media');
+  if (!media || event.target.closest('button, a') || (event.pointerType === 'mouse' && event.button !== 0)) return;
+  releaseFeedHold();
+  feedHold = { media, x: event.clientX, y: event.clientY, held: false, timer: setTimeout(holdFeed, 280) };
+});
+document.addEventListener('pointermove', event => {
+  if (feedHold && !feedHold.held && Math.hypot(event.clientX - feedHold.x, event.clientY - feedHold.y) > 10) { clearTimeout(feedHold.timer); feedHold = null; }
+});
+['pointerup', 'pointercancel'].forEach(name => document.addEventListener(name, releaseFeedHold));
+document.addEventListener('contextmenu', event => { if (feedHold?.held || event.target.closest?.('#feed .card-media video')) event.preventDefault(); });
+
 // The feed mode menu closes on any tap outside it, and on Escape.
 document.addEventListener('click', event => {
   if (!event.target?.closest?.('.mode-menu, [data-action="feed-modes"]')) toggleModeMenu(false);
@@ -4769,7 +4829,10 @@ modal.addEventListener('touchend', () => {
   releaseSheet(drag.distance, drag.speed > 0.6);
 });
 modal.addEventListener('touchcancel', () => { if (sheetDrag?.active) setSheetOffset(0, true); sheetDrag = null; });
+// A trackpad pull at the top closes a sheet only at phone width. On a computer scrolling up to the top of a
+// post kept closing it by accident: there it closes with the X (or Esc, or a click beside it).
 modal.addEventListener('wheel', event => {
+  if (!isPhone()) return;
   const now = Date.now();
   if (now - sheetWheel.last > 300) sheetWheel.armed = modal.scrollTop <= 0 && !event.target.closest?.(sheetDragExcluded);
   sheetWheel.last = now;
@@ -6139,12 +6202,12 @@ function userById(id) {
 }
 
 function noticeRowHtml(item) {
-  const actor = userById(item.actor);
+  const actor = userById(item.actor) || item.who || null;
   const project = item.projectId ? projectById(item.projectId) : null;
   const href = String(item.url || '#/activity').replace(/^\//, '');
   const kind = noticeIcons[item.type] || 'bell';
   const face = actor ? avatar(actor, 'lg') : `<span class="notice-mark">${icon(kind)}</span>`;
-  return `<a class="notice-row ${item.read ? '' : 'unread'}" href="${escapeHtml(href)}"><span class="notice-face">${face}<i class="notice-kind ${escapeHtml(item.type)}">${icon(kind)}</i></span><span class="notice-text">${escapeHtml(item.text)}<small>${escapeHtml(timeAgo(item.at) || '')}</small></span>${project ? `<span class="notice-thumb">${scene(project, 0, 'still')}</span>` : ''}</a>`;
+  return `<a class="notice-row ${item.read ? '' : 'unread'}" href="${escapeHtml(href)}"><span class="notice-face">${face}<i class="notice-kind kind-${escapeHtml(item.type)}">${icon(kind)}</i></span><span class="notice-text">${escapeHtml(item.text)}<small>${escapeHtml(timeAgo(item.at) || '')}</small></span>${project ? `<span class="notice-thumb">${scene(project, 0, 'still')}</span>` : ''}</a>`;
 }
 
 function renderActivity() {
@@ -7146,24 +7209,28 @@ async function showDigest(id, button) {
 let voiceRec = null;
 let voicePlayer = null;
 
-async function startVoice(projectId) {
+// Where a recording goes: a comment under a post, or a message in a chat.
+const voiceForm = record => record?.threadId ? document.querySelector?.('#dm-form') : modal.querySelector?.('#comment-form');
+
+async function startVoice(projectId, threadId = '') {
   if (needLogin('Чтобы оставить голосовой, войди в аккаунт') || voiceRec) return;
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { toast('Нет доступа к микрофону — разреши его в настройках сайта'); return; }
   const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(item => MediaRecorder.isTypeSupported?.(item)) || '';
   const recorder = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 48000 } : undefined);
   const chunks = [];
-  voiceRec = { recorder, chunks, stream, projectId, start: Date.now(), timer: 0, send: false };
+  voiceRec = { recorder, chunks, stream, projectId, threadId, start: Date.now(), timer: 0, send: false };
   recorder.ondataavailable = event => { if (event.data?.size) chunks.push(event.data); };
   recorder.onstop = () => finishVoice();
   recorder.start(250);
-  const form = modal.querySelector?.('#comment-form');
+  haptic('tap');
+  const form = voiceForm(voiceRec);
   form?.classList.add('recording');
   form?.insertAdjacentHTML?.('afterbegin', `<div class="voice-rec"><i class="rec-dot"></i><b class="rec-time">0:00</b><span>Говори — до двух минут</span><button type="button" class="btn btn-ghost btn-sm" data-action="voice-cancel">Отмена</button><button type="button" class="btn btn-grad btn-sm" data-action="voice-stop">${icon('send')} Отправить</button></div>`);
   voiceRec.timer = setInterval(() => {
     if (!voiceRec) return;
     const seconds = Math.floor((Date.now() - voiceRec.start) / 1000);
-    const clock = modal.querySelector?.('.rec-time');
+    const clock = voiceForm(voiceRec)?.querySelector?.('.rec-time');
     if (clock) clock.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     if (seconds >= 120) stopVoice(true);
   }, 250);
@@ -7181,7 +7248,7 @@ async function finishVoice() {
   voiceRec = null;
   if (!record) return;
   record.stream.getTracks().forEach(track => track.stop());
-  const form = modal.querySelector?.('#comment-form');
+  const form = voiceForm(record);
   form?.classList.remove('recording');
   form?.querySelector?.('.voice-rec')?.remove?.();
   if (!record.send) return;
@@ -7191,6 +7258,11 @@ async function finishVoice() {
   try {
     toast('Отправляем голосовое…');
     const url = await uploadBlob(blob, 'audio');
+    if (record.threadId) {
+      await sendChat(record.threadId, { voice: url, duration });
+      toast('Голосовое отправлено');
+      return;
+    }
     const replyTo = replyTarget?.projectId === record.projectId ? replyTarget.id : '';
     const { project } = await apiCall('POST', `/api/projects/${encodeURIComponent(record.projectId)}/comments`, { voice: url, duration, replyTo });
     replyTarget = null;

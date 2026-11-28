@@ -320,3 +320,32 @@ test('the feed sound switch: a drawn icon that can be tapped, remembered, muted 
   assert.match(css, /#topbar > \* \{ pointer-events: auto; \}/);
   assert.match(css.match(/#topbar > \.mode-scrim \{[^}]*\}/)?.[0] || '', /pointer-events: none/);
 });
+
+test('feed taps: one opens the post, two support it, three switch the sound without a like', async () => {
+  const app = createApp();
+  const votes = [];
+  const opened = [];
+  app.context.toggleProjectFlag = (action, id) => { votes.push([action, id]); };
+  app.context.navigateToProject = id => { opened.push(id); };
+  runInContext('toggleProjectFlag = globalThis.toggleProjectFlag; navigateToProject = globalThis.navigateToProject;', app.context);
+  const media = { dataset: { action: 'media', id: 'p1' }, closest(selector) { return selector === '[data-action]' || selector === '.card-media' ? this : null; }, querySelector: () => null, insertAdjacentHTML() {} };
+  const tap = () => app.dispatch('click', media);
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  tap(); tap(); tap();
+  await wait(400);
+  assert.deepEqual(votes, [], 'a triple tap leaves no like');
+  assert.deepEqual(opened, [], 'and does not open the post');
+  assert.equal(runInContext('soundOn()', app.context), true, 'the sound is on');
+
+  await wait(400);
+  tap(); tap();
+  await wait(400);
+  assert.deepEqual(votes, [['vote', 'p1']]);
+  assert.deepEqual(opened, []);
+
+  tap();
+  await wait(400);
+  assert.deepEqual(opened, ['p1']);
+});
+
