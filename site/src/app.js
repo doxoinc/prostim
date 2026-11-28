@@ -66,6 +66,8 @@ let postDraft = null;
 const loadedFonts = new Set();
 const legacyScenes = ['forest', 'coast', 'board', 'analytics'];
 let feedMuted = true;
+// Browsers start sound only after a tap on the page: until then a feed video with sound on plays muted.
+let soundBlocked = false;
 let avatarDraft = null;
 let liveEvents = null;
 const reviewsCache = new Map();
@@ -674,8 +676,43 @@ function syncFeedVideo(item) {
       lastTime = video.currentTime;
     });
   }
-  video.muted = feedMuted;
-  if (item.classList.contains('in-view') && !modal.open && !dataSaver) video.play?.().catch(() => {}); else video.pause?.();
+  video.muted = feedMuted || soundBlocked;
+  if (item.classList.contains('in-view') && !modal.open && !dataSaver) playFeedVideo(video); else video.pause?.();
+}
+
+function playFeedVideo(video) {
+  video.play?.()?.catch?.(error => {
+    if (video.muted || error?.name !== 'NotAllowedError') return;
+    soundBlocked = true;
+    video.muted = true;
+    updateSoundButtons();
+    video.play?.()?.catch?.(() => {});
+  });
+}
+
+const soundOn = () => !feedMuted && !soundBlocked;
+
+function soundButtonHtml() {
+  const on = soundOn();
+  return `<button class="sound-btn" data-action="toggle-sound" aria-pressed="${on}" aria-label="${on ? 'Выключить звук' : 'Включить звук'}">${icon(on ? 'soundOn' : 'soundOff')}</button>`;
+}
+
+function updateSoundButtons() {
+  document.querySelectorAll?.('.sound-btn').forEach(button => { button.outerHTML = soundButtonHtml(); });
+}
+
+// One switch for the button on videos and the line in settings; the choice is remembered.
+function setFeedSound(on, flash) {
+  feedMuted = !on;
+  soundBlocked = false;
+  try { storage.setItem(SOUND_KEY, on ? '1' : '0'); } catch {}
+  document.querySelectorAll?.('video[data-feed-video]').forEach(video => { video.muted = feedMuted; });
+  updateSoundButtons();
+  if (!flash) return;
+  flash.querySelector?.('.sound-flash')?.remove?.();
+  flash.insertAdjacentHTML?.('beforeend', `<span class="sound-flash" aria-hidden="true">${icon(on ? 'soundOn' : 'soundOff')}</span>`);
+  const mark = flash.querySelector?.('.sound-flash');
+  setTimeout(() => mark?.remove?.(), 800);
 }
 
 // Every picture of a post keeps its chosen point in view, in the feed, on the page and in thumbnails.
@@ -691,7 +728,7 @@ function rawMediaHtml(item, title, mode) {
     if (mode === 'still') return poster ? `<div class="scene photo upload"><img src="${poster}" alt="${escapeHtml(title)}" loading="lazy" draggable="false"><span class="play-mark">${icon('play')}</span></div>` : `<div class="scene photo upload"><video src="${item.url}#t=0.5" muted playsinline preload="metadata"></video><span class="play-mark">${icon('play')}</span></div>`;
     if (mode === 'player') return `<div class="scene photo upload player"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} controls playsinline preload="metadata"></video></div>`;
     if (mode === 'preview') return `<div class="scene photo upload">${poster ? `<img src="${poster}" alt="${escapeHtml(title)}" draggable="false">` : `<video src="${item.url}#t=0.1" muted playsinline preload="metadata"></video>`}<span class="play-mark">${icon('play')}</span></div>`;
-    return `<div class="scene photo upload video"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} muted loop playsinline preload="metadata" data-feed-video></video><button class="sound-btn" data-action="toggle-sound" aria-label="${feedMuted ? 'Включить звук' : 'Выключить звук'}">${feedMuted ? '🔇' : '🔊'}</button></div>`;
+    return `<div class="scene photo upload video"><video src="${item.url}" ${poster ? `poster="${poster}"` : ''} muted loop playsinline preload="metadata" data-feed-video></video>${soundButtonHtml()}</div>`;
   }
   return `<div class="scene photo upload"><img src="${item.url}" alt="${escapeHtml(title || 'Скриншот проекта')}" loading="lazy" draggable="false"></div>`;
 }
@@ -3969,9 +4006,8 @@ document.addEventListener('click', async event => {
       toast('Проект удалён');
     } catch (error) { toast(error.message); }
   } else if (action === 'toggle-sound') {
-    feedMuted = !feedMuted;
-    document.querySelectorAll('video[data-feed-video]').forEach(video => { video.muted = feedMuted; });
-    document.querySelectorAll('.sound-btn').forEach(button => { button.textContent = feedMuted ? '🔇' : '🔊'; button.setAttribute('aria-label', feedMuted ? 'Включить звук' : 'Выключить звук'); });
+    setFeedSound(!soundOn(), target.closest?.('.scene'));
+    haptic('tap');
   } else if (action === 'media-cover') {
     const [item] = publishMedia.splice(Number(target.dataset.index), 1);
     publishMedia.unshift(item);
@@ -4465,6 +4501,14 @@ document.addEventListener('pointerdown', event => {
   const media = event.target.closest?.('.card-media');
   pointerStart = media && !event.target.closest('button') ? { x: event.clientX, y: event.clientY, id: media.dataset.id } : null;
 });
+// The first tap or key press lets the browser start sound: a video that had to start muted gets it back.
+['click', 'keydown'].forEach(name => document.addEventListener(name, event => {
+  if (!soundBlocked || event.target?.closest?.('.sound-btn')) return;
+  soundBlocked = false;
+  document.querySelectorAll?.('video[data-feed-video]').forEach(video => { video.muted = feedMuted; });
+  updateSoundButtons();
+}, true));
+
 document.addEventListener('pointerup', event => {
   if (!pointerStart) return;
   const deltaX = event.clientX - pointerStart.x;
@@ -5836,8 +5880,7 @@ function toggleSetting(key, on) {
     try { storage.setItem(HAPTICS_KEY, on ? '1' : '0'); } catch {}
     if (on) haptic('success');
   } else if (key === 'sound') {
-    feedMuted = !on;
-    try { storage.setItem(SOUND_KEY, on ? '1' : '0'); } catch {}
+    setFeedSound(on);
   }
 }
 

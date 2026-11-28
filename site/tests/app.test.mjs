@@ -263,3 +263,32 @@ test('the tab bar hides only for a real keyboard, not for a collapsing browser b
   sync();
   assert.equal(seen.keyboard, false, 'a small change is a toolbar, not a keyboard');
 });
+
+test('the feed sound switch: a drawn icon that can be tapped, remembered, muted only while the browser blocks sound', async () => {
+  const app = createApp();
+  const feedVideo = () => runInContext(`rawMediaHtml({ type: 'video', url: '/uploads/v-1.mp4' }, 'Видео', 'feed')`, app.context);
+  assert.match(feedVideo(), /class="sound-btn"[^>]*aria-pressed="false"[^>]*><svg/);
+  assert.doesNotMatch(feedVideo(), /🔇|🔊/);
+
+  runInContext('setFeedSound(true)', app.context);
+  assert.match(feedVideo(), /aria-pressed="true"/);
+  assert.equal(runInContext('storage.getItem(SOUND_KEY)', app.context), '1');
+
+  // A browser that allows sound only after a tap: the video still plays, muted, until the first tap anywhere.
+  app.context.video = {
+    muted: false, plays: 0,
+    play() { this.plays += 1; return this.muted ? Promise.resolve() : Promise.reject(Object.assign(new Error('blocked'), { name: 'NotAllowedError' })); }
+  };
+  runInContext('playFeedVideo(video)', app.context);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(app.context.video.muted, true);
+  assert.equal(app.context.video.plays, 2);
+  assert.match(feedVideo(), /aria-pressed="false"/);
+  app.dispatch('click', { closest: () => null });
+  assert.equal(runInContext('soundOn()', app.context), true);
+
+  // The see-through scrim under the top bar must not catch taps: `#topbar > *` turns them back on for its children.
+  const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /#topbar > \* \{ pointer-events: auto; \}/);
+  assert.match(css.match(/#topbar > \.mode-scrim \{[^}]*\}/)?.[0] || '', /pointer-events: none/);
+});
