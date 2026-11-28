@@ -237,6 +237,34 @@ test('ads go in after every five posts, rotate, and never sit next to the same p
   assert.equal(result.none, 12);
 });
 
+test('ad markup avoids the class names ad blockers hide, and the hint goes when the ad is hidden anyway', () => {
+  const app = createApp();
+  const html = runInContext(`(() => {
+    const project = demoProjects[0];
+    return [feedItem(project, 'ad', 'ad-demo-x'), plusFeedItem(), adGlowHtml(), adFrameHtml(), adLabelHtml(project), String(reportAd)].join(' ');
+  })()`, app.context);
+  // EasyList, RuAdList and AdGuard hide these on every site; a blocker took the whole ad card away.
+  const classes = [...html.matchAll(/class="([^"]*)"/g)].flatMap(match => match[1].split(/\s+/));
+  const blocked = classes.filter(name => /^(ad|ads|is-ad|ad-.+|.+-ad|advert.*|sponsor.*)$/i.test(name));
+  assert.deepEqual(blocked, []);
+  assert.doesNotMatch(html, /data-ad[=\s]/);
+  assert.doesNotMatch(html, /\/api\/ads\//, 'EasyList blocks ||onrender.com/api/ads/');
+  assert.match(html, /class="feed-item is-boosted"/);
+  assert.match(html, /Реклама/, 'the ad is still labelled for people');
+
+  // The card before the ad laid out, the ad did not: the «Дальше реклама» hint is removed.
+  const removed = [];
+  const hint = { classList: { has: new Set(['feed-item', 'before-boost']), contains(name) { return this.has.has(name); }, remove(name) { this.has.delete(name); } }, getClientRects: () => [{}], querySelectorAll: () => [{ remove: () => removed.push('glow') }, { remove: () => removed.push('pill') }] };
+  const ad = { previousElementSibling: hint, getClientRects: () => [] };
+  app.context.hiddenAd = ad;
+  assert.equal(runInContext('boostHidden(hiddenAd)', app.context), true);
+  runInContext('dropBoostHint(hiddenAd.previousElementSibling)', app.context);
+  assert.equal(hint.classList.contains('before-boost'), false);
+  assert.deepEqual(removed, ['glow', 'pill']);
+  app.context.shownAd = { previousElementSibling: hint, getClientRects: () => [{}] };
+  assert.equal(runInContext('boostHidden(shownAd)', app.context), false);
+});
+
 test('the tab bar hides only for a real keyboard, not for a collapsing browser bar or a zoom', () => {
   const app = createApp();
   const seen = { kb: '', keyboard: null };

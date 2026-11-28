@@ -1871,31 +1871,32 @@ html.ios-app { --safe-t: calc(env(safe-area-inset-top, 0px) + 12px); }
 /* Ads in the feed. The card before an ad carries a pearly wave on its bottom edge and a «skip» pill;
    the ad itself is labelled and has its own skip button. Pearl = soft pink, lilac, sky, mint and cream. */
 :root { --pearl: linear-gradient(100deg, #ffc9e6 0%, #dccbff 18%, #bfe6ff 34%, #c8ffe8 50%, #fff0c4 66%, #ffc9e6 82%, #dccbff 100%); }
-.feed-item.next-ad, .feed-item.is-ad { position: relative; }
+.feed-item.before-boost, .feed-item.is-boosted { position: relative; }
 /* The light before an ad: like the edge glow of the new Siri, but rising only from the bottom of the card.
    A thin bright line and a wide soft halo, both a conic sweep of warm and cool colours that keeps turning. */
 @property --siri { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
 :root { --siri-colors: #ff2e63, #ff8a3d, #ffd36e, #5ec8ff, #7c6cff, #d46bff, #ff2e63; }
-.ad-glow { position: absolute; z-index: 3; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; -webkit-mask-image: linear-gradient(to top, #000 0%, #000 14%, rgba(0, 0, 0, .4) 34%, transparent 56%); mask-image: linear-gradient(to top, #000 0%, #000 14%, rgba(0, 0, 0, .4) 34%, transparent 56%); animation: siri-spin 5s linear infinite; }
-.feed:not(.io) .ad-glow, .feed-item.next-ad.in-view .ad-glow { animation: siri-in .45s var(--ease) both, siri-spin 5s linear infinite; }
-.ad-glow .glow-line { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--siri) at 50% 100%, var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
-.ad-glow .glow-soft { padding: 0; background: none; -webkit-mask: none; mask: none; filter: blur(18px); animation: siri-breathe 2.6s ease-in-out infinite; }
-.ad-glow .glow-soft b { position: absolute; inset: 0; border-radius: inherit; padding: 24px; background: conic-gradient(from var(--siri) at 50% 100%, var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
-.ad-glow::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 160px; background: radial-gradient(60% 100% at 50% 100%, rgba(255, 90, 140, .22), rgba(124, 108, 255, .1) 55%, transparent 80%); }
+.boost-glow { position: absolute; z-index: 3; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; -webkit-mask-image: linear-gradient(to top, #000 0%, #000 14%, rgba(0, 0, 0, .4) 34%, transparent 56%); mask-image: linear-gradient(to top, #000 0%, #000 14%, rgba(0, 0, 0, .4) 34%, transparent 56%); animation: siri-spin 5s linear infinite; }
+.feed:not(.io) .boost-glow, .feed-item.before-boost.in-view .boost-glow { animation: siri-in .45s var(--ease) both, siri-spin 5s linear infinite; }
+.boost-glow .glow-line { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--siri) at 50% 100%, var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.boost-glow .glow-soft { padding: 0; background: none; -webkit-mask: none; mask: none; filter: blur(18px); animation: siri-breathe 2.6s ease-in-out infinite; }
+.boost-glow .glow-soft b { position: absolute; inset: 0; border-radius: inherit; padding: 24px; background: conic-gradient(from var(--siri) at 50% 100%, var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.boost-glow::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 160px; background: radial-gradient(60% 100% at 50% 100%, rgba(255, 90, 140, .22), rgba(124, 108, 255, .1) 55%, transparent 80%); }
 @keyframes siri-spin { to { --siri: 360deg; } }
 @keyframes siri-in { from { opacity: 0; translate: 0 24px; } to { opacity: 1; translate: 0 0; } }
 @keyframes siri-breathe { 50% { opacity: .6; } }
-.ad-next { position: absolute; z-index: 5; left: 50%; bottom: 16px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 5px 0 12px; border: 1.5px solid transparent; border-radius: 99px; background: linear-gradient(rgba(14, 14, 18, .72), rgba(14, 14, 18, .72)) padding-box, conic-gradient(from var(--siri), var(--siri-colors)) border-box; color: rgba(255, 255, 255, .82); font-size: 12.5px; font-weight: 650; white-space: nowrap; transform: translateX(-50%); opacity: 0; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: siri-spin 5s linear infinite; }
-.feed:not(.io) .ad-next, .feed-item.next-ad.in-view .ad-next { animation: siri-in .45s .1s var(--ease) both, siri-spin 5s linear infinite; }
-.ad-next > .i { font-size: 15px; color: #ffd36e; }
-.ad-next b { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 99px; background: var(--grad); color: #fff; font-weight: 800; }
-.ad-next b .i { font-size: 13px; }
-.feed-item.next-ad .card-info { padding-bottom: 66px; }
+.boost-next { position: absolute; z-index: 5; left: 50%; bottom: 16px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 5px 0 12px; border: 1.5px solid transparent; border-radius: 99px; background: linear-gradient(rgba(14, 14, 18, .72), rgba(14, 14, 18, .72)) padding-box, conic-gradient(from var(--siri), var(--siri-colors)) border-box; color: rgba(255, 255, 255, .82); font-size: 12.5px; font-weight: 650; white-space: nowrap; transform: translateX(-50%); opacity: 0; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); animation: siri-spin 5s linear infinite; }
+.feed:not(.io) .boost-next, .feed-item.before-boost.in-view .boost-next { animation: siri-in .45s .1s var(--ease) both, siri-spin 5s linear infinite; }
+.boost-next > .i { font-size: 15px; color: #ffd36e; }
+.boost-next b { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border-radius: 99px; background: var(--grad); color: #fff; font-weight: 800; }
+.boost-next b .i { font-size: 13px; }
+.feed-item.before-boost .card-info { padding-bottom: 66px; }
 @keyframes pearl-shift { to { background-position: -200% 0; } }
-.feed-item.is-ad .card::after { content: ""; position: absolute; z-index: 2; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(220, 203, 255, .28), inset 0 -80px 120px -60px rgba(220, 203, 255, .18); pointer-events: none; }
-.ad-skip { position: absolute; z-index: 6; top: 14px; right: 14px; display: inline-flex; align-items: center; gap: 4px; height: 34px; padding: 0 12px; border-radius: 99px; background: rgba(12, 12, 16, .55); border: 1px solid rgba(220, 203, 255, .4); color: #fff; font-size: 13px; font-weight: 700; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.ad-skip .i { font-size: 14px; }
-body.scrolling :is(.ad-glow, .ad-glow .glow-soft, .ad-next, .plus-promo-art i, .plus-promo-mark) { animation-play-state: paused; }
+.feed-item.is-boosted .card-media::after { content: ""; position: absolute; z-index: 2; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(220, 203, 255, .28), inset 0 -80px 120px -60px rgba(220, 203, 255, .18); pointer-events: none; }
+.boost-skip { position: absolute; z-index: 6; top: 14px; right: 14px; display: inline-flex; align-items: center; gap: 4px; height: 34px; padding: 0 12px; border-radius: 99px; background: rgba(12, 12, 16, .55); border: 1px solid rgba(220, 203, 255, .4); color: #fff; font-size: 13px; font-weight: 700; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.boost-skip .i { font-size: 14px; }
+.feed-item.is-boosted .sound-btn { top: 58px; }
+body.scrolling :is(.boost-glow, .boost-glow .glow-soft, .boost-next, .plus-promo-art i, .plus-promo-mark) { animation-play-state: paused; }
 
 /* Promotion on the post, the package picker, Plus */
 .btn-grad { background: var(--grad); color: #fff; box-shadow: var(--grad-glow); }
@@ -1947,35 +1948,36 @@ body.scrolling :is(.ad-glow, .ad-glow .glow-soft, .ad-next, .plus-promo-art i, .
 .plus-sheet .test-note { margin-bottom: 14px; text-align: left; }
 
 @media (max-width: 760px) {
-  .ad-skip { top: calc(var(--top-h) + var(--safe-t) + 8px); right: 12px; }
-  .feed-item.next-ad .card-info { padding-bottom: 64px; }
-  .ad-glow { border-radius: 0 0 34px 34px; }
-  .ad-frame { border-radius: 44px 44px 30px 30px; }
-  .feed-item.next-ad .rail { bottom: 62px; }
-  .ad-next { left: 16px; transform: none; }
+  .boost-skip { top: calc(var(--top-h) + var(--safe-t) + 8px); right: 12px; }
+  .feed-item.is-boosted .sound-btn { top: calc(var(--top-h) + var(--safe-t) + 52px); }
+  .feed-item.before-boost .card-info { padding-bottom: 64px; }
+  .boost-glow { border-radius: 0 0 34px 34px; }
+  .boost-frame { border-radius: 44px 44px 30px 30px; }
+  .feed-item.before-boost .rail { bottom: 62px; }
+  .boost-next { left: 16px; transform: none; }
   .plan-card { padding: 16px 10px 12px; }
   .plan-card b { font-size: 15px; }
   .plan-card strong { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ad-glow, .ad-glow .glow-soft, .ad-next, .plus-mark, .plus-promo-art i, .plus-promo-mark, .ad-frame, .ad-frame .frame-soft { animation: none !important; opacity: 1; }
-  .ad-frame { --reveal: 180deg; }
-  .ad-frame .frame-comet { display: none; }
+  .boost-glow, .boost-glow .glow-soft, .boost-next, .plus-mark, .plus-promo-art i, .plus-promo-mark, .boost-frame, .boost-frame .frame-soft { animation: none !important; opacity: 1; }
+  .boost-frame { --reveal: 180deg; }
+  .boost-frame .frame-comet { display: none; }
 }
 
 /* The ad itself: the whole screen edge glows. */
 @property --reveal { syntax: "<angle>"; inherits: true; initial-value: 180deg; }
 @property --comet { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
-.ad-frame { --reveal: 0deg; position: absolute; z-index: 4; inset: 0; border-radius: inherit; pointer-events: none; -webkit-mask-image: conic-gradient(#000 0 var(--reveal), transparent var(--reveal) calc(360deg - var(--reveal)), #000 calc(360deg - var(--reveal))); mask-image: conic-gradient(#000 0 var(--reveal), transparent var(--reveal) calc(360deg - var(--reveal)), #000 calc(360deg - var(--reveal))); }
-.feed:not(.io) .ad-frame, .feed-item.is-ad.near .ad-frame { --reveal: 180deg; animation: frame-draw .7s var(--ease) both, siri-spin 5s linear infinite, frame-comet 3.4s ease-in-out infinite alternate; }
-.ad-frame .frame-line { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--siri), var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
-.ad-frame .frame-soft { position: absolute; inset: 0; border-radius: inherit; filter: blur(16px); animation: siri-breathe 2.4s ease-in-out infinite; }
-.ad-frame .frame-soft b { position: absolute; inset: 0; border-radius: inherit; padding: 22px; background: conic-gradient(from var(--siri), var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
-.ad-frame .frame-comet { position: absolute; inset: 0; border-radius: inherit; filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 12px rgba(255, 255, 255, .7)); }
-.ad-frame .frame-comet b { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--comet), #fff 0deg, rgba(255, 255, 255, .55) 7deg, transparent 20deg 340deg, rgba(255, 255, 255, .55) 353deg); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.boost-frame { --reveal: 0deg; position: absolute; z-index: 4; inset: 0; border-radius: inherit; pointer-events: none; -webkit-mask-image: conic-gradient(#000 0 var(--reveal), transparent var(--reveal) calc(360deg - var(--reveal)), #000 calc(360deg - var(--reveal))); mask-image: conic-gradient(#000 0 var(--reveal), transparent var(--reveal) calc(360deg - var(--reveal)), #000 calc(360deg - var(--reveal))); }
+.feed:not(.io) .boost-frame, .feed-item.is-boosted.near .boost-frame { --reveal: 180deg; animation: frame-draw .7s var(--ease) both, siri-spin 5s linear infinite, frame-comet 3.4s ease-in-out infinite alternate; }
+.boost-frame .frame-line { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--siri), var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.boost-frame .frame-soft { position: absolute; inset: 0; border-radius: inherit; filter: blur(16px); animation: siri-breathe 2.4s ease-in-out infinite; }
+.boost-frame .frame-soft b { position: absolute; inset: 0; border-radius: inherit; padding: 22px; background: conic-gradient(from var(--siri), var(--siri-colors)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
+.boost-frame .frame-comet { position: absolute; inset: 0; border-radius: inherit; filter: drop-shadow(0 0 5px #fff) drop-shadow(0 0 12px rgba(255, 255, 255, .7)); }
+.boost-frame .frame-comet b { position: absolute; inset: 0; border-radius: inherit; padding: 3px; background: conic-gradient(from var(--comet), #fff 0deg, rgba(255, 255, 255, .55) 7deg, transparent 20deg 340deg, rgba(255, 255, 255, .55) 353deg); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0); }
 @keyframes frame-draw { from { --reveal: 0deg; } to { --reveal: 180deg; } }
 @keyframes frame-comet { from { --comet: -30deg; } to { --comet: 330deg; } }
-body.scrolling .ad-frame .frame-soft { animation-play-state: paused; }
+body.scrolling .boost-frame .frame-soft { animation-play-state: paused; }
 
 /* про.стим advertising Plus in an ad slot of the feed */
 .plus-promo { background: radial-gradient(80% 55% at 75% 18%, rgba(124, 108, 255, .34), transparent 62%), radial-gradient(70% 50% at 15% 62%, rgba(255, 46, 99, .3), transparent 62%), radial-gradient(60% 45% at 85% 82%, rgba(255, 176, 59, .24), transparent 62%), #0c0a11; cursor: default; }
@@ -3037,14 +3039,14 @@ dialog.card-host:has(.pcard-wrap.desk)::backdrop { background: transparent; -web
 .pw-compare { margin: 0 18px 10px; }
 
 /* The ad label: the only mark a post can carry in the feed */
-.ad-label { display: inline-flex; align-items: center; gap: 6px; width: max-content; max-width: 100%; margin-bottom: 10px; padding: 5px 6px 5px 9px; border-radius: 99px; background: rgba(12, 12, 16, .5); border: 1px solid rgba(220, 203, 255, .45); color: #fff; font-size: 12px; line-height: 1; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.ad-label > .i { font-size: 13px; color: #e6dcff; }
-.ad-label b { font-weight: 800; letter-spacing: .02em; }
-.ad-label span { overflow: hidden; color: rgba(255, 255, 255, .7); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.ad-label i { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: rgba(255, 255, 255, .16); color: #fff; font-size: 10px; font-style: normal; font-weight: 800; font-family: Georgia, serif; }
-.ad-info-mark { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 10px; border-radius: 18px; background: var(--pearl); background-size: 200% 100%; color: #2a1d3d; font-size: 26px; }
-.ad-info .set-row { margin-top: 14px; }
-.ad-info .gift-row { margin-top: 10px; }
+.boost-label { display: inline-flex; align-items: center; gap: 6px; width: max-content; max-width: 100%; margin-bottom: 10px; padding: 5px 6px 5px 9px; border-radius: 99px; background: rgba(12, 12, 16, .5); border: 1px solid rgba(220, 203, 255, .45); color: #fff; font-size: 12px; line-height: 1; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.boost-label > .i { font-size: 13px; color: #e6dcff; }
+.boost-label b { font-weight: 800; letter-spacing: .02em; }
+.boost-label span { overflow: hidden; color: rgba(255, 255, 255, .7); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.boost-label i { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: rgba(255, 255, 255, .16); color: #fff; font-size: 10px; font-style: normal; font-weight: 800; font-family: Georgia, serif; }
+.boost-info-mark { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 10px; border-radius: 18px; background: var(--pearl); background-size: 200% 100%; color: #2a1d3d; font-size: 26px; }
+.boost-info .set-row { margin-top: 14px; }
+.boost-info .gift-row { margin-top: 10px; }
 
 /* Layout fixes: the media picker, sheet tops, FAQ on narrow screens */
 .pick-cover + .pick-strip { margin-top: 10px; }

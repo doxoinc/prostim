@@ -519,15 +519,18 @@ test('promotion: paid in test mode, shown to others between posts, never to Plus
   const ads = bought_((await viewer('GET', '/api/bootstrap')).body.ads);
   assert.deepEqual(ads.map(ad => ad.projectId), [project.id]);
   assert.equal((await owner('POST', '/api/promotions', { projectId: project.id, plan: 'day' })).status, 409, 'one campaign at a time');
-  await viewer('POST', `/api/ads/${ads[0].id}/seen`);
-  await viewer('POST', `/api/ads/${ads[0].id}/seen`);
-  await other('POST', `/api/ads/${ads[0].id}/seen`);
-  await owner('POST', `/api/ads/${ads[0].id}/seen`);
+  await viewer('POST', `/api/boosts/${ads[0].id}/seen`);
+  await viewer('POST', `/api/boosts/${ads[0].id}/seen`);
+  await other('POST', `/api/boosts/${ads[0].id}/seen`);
+  await owner('POST', `/api/boosts/${ads[0].id}/seen`);
+  await viewer('POST', `/api/boosts/${ads[0].id}/click`);
+  // The old path (blocked by EasyList on onrender.com) still counts for pages loaded before the change.
   await viewer('POST', `/api/ads/${ads[0].id}/click`);
+  await other('POST', `/api/ads/${ads[0].id}/click`);
   const stats = (await owner('GET', '/api/bootstrap')).body.promotions[0];
   assert.equal(stats.status, 'active');
   assert.equal(stats.shown, 2, 'each viewer counts once, the author not at all');
-  assert.equal(stats.clicks, 1);
+  assert.equal(stats.clicks, 2);
   const plus = await viewer('POST', '/api/plus');
   assert.equal(plus.body.payment.amount, 149, 'the first month is at half price');
   await viewer('POST', `/api/payments/${plus.body.payment.id}/test`);

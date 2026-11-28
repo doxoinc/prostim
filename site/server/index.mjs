@@ -851,7 +851,9 @@ on('POST', '/api/payments/yookassa', async ({ body }) => {
 
 // Impressions and taps on ads, counted once per viewer per promotion and half hour.
 const adEvents = new Map();
-on('POST', '/api/ads/:id/:event', async ({ request, user, params }) => {
+// `/api/boosts/…`, not `/api/ads/…`: EasyList blocks `||onrender.com/api/ads/`, so with a blocker no
+// impression or tap was counted. The old path stays for pages loaded before the change.
+async function countAdEvent({ request, user, params }) {
   if (!['seen', 'click'].includes(params.event)) fail(404, 'Не найдено');
   const promotion = D.promotions.find(item => item.id === params.id);
   if (!promotion || !promotionLive(promotion)) return { ok: true };
@@ -864,7 +866,9 @@ on('POST', '/api/ads/:id/:event', async ({ request, user, params }) => {
   promotionLive(promotion);
   db.save();
   return { ok: true };
-});
+}
+on('POST', '/api/boosts/:id/:event', countAdEvent);
+on('POST', '/api/ads/:id/:event', countAdEvent);
 
 on('PATCH', '/api/me', async ({ user, body }) => {
   needUser(user);

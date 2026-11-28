@@ -607,7 +607,8 @@ function afterRender(view, changedPage, current) {
         entry.target.classList.toggle('in-view', entry.isIntersecting);
         syncFeedVideo(entry.target);
         if (entry.isIntersecting) {
-          if (entry.target.dataset?.ad) reportAd(entry.target.dataset.ad, 'seen');
+          if (entry.target.dataset?.boost) reportAd(entry.target.dataset.boost, 'seen');
+          if (boostHidden(entry.target.nextElementSibling)) dropBoostHint(entry.target);
           beginView(entry.target);
           extendFeedNear(entry.target);
           preloadAhead(entry.target);
@@ -646,7 +647,7 @@ function observeFeedItems(feed) {
   feed.querySelectorAll('.feed-item:not([data-observed])').forEach(item => {
     item.dataset.observed = '1';
     feedObserver?.observe(item);
-    if (item.classList.contains('is-ad')) adObserver?.observe(item);
+    if (item.classList.contains('is-boosted')) adObserver?.observe(item);
   });
 }
 
@@ -835,36 +836,61 @@ function feedAds() {
   return hasPlusNow() ? ads : [...ads, { id: 'plus', projectId: '' }];
 }
 
+// «Пропустить» sits on the picture itself: on a computer the card also holds the button rail, and the
+// pill used to hang over its edge. Inside the media it also survives a slide change.
+function boostSkipHtml() {
+  return `<button class="boost-skip" data-action="boost-skip">Пропустить ${icon('skip')}</button>`;
+}
+
 function plusFeedItem() {
   const perks = plusPlan.perks.slice(0, 3).map(perk => `<li>${icon('check')}${escapeHtml(perk)}</li>`).join('');
-  return `<section class="feed-item is-ad plus-ad" data-ad="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button><div class="card-media plus-promo"><div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info">${adLabelHtml(null)}<h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">${remote?.account?.plusTrial ? `Попробовать бесплатно · ${plusPlan.trialHours} часа` : `Первый месяц · ${remote?.account?.plusPrice || plusPlan.price} ₽`}</button></div></div></article></section>`;
+  return `<section class="feed-item is-boosted plus-card" data-boost="plus" aria-label="Реклама про.стим: ${plusPlan.title}"><article class="card"><div class="card-media plus-promo">${boostSkipHtml()}<div class="plus-promo-art" aria-hidden="true"><i></i><i></i><i></i><span class="plus-promo-mark">${icon('crown')}</span></div><div class="card-shade"></div><div class="card-info">${adLabelHtml(null)}<h2 class="plus-promo-title">${plusPlan.title}</h2><ul class="plus-promo-perks">${perks}</ul><button class="btn btn-grad plus-promo-cta" data-action="plus">${remote?.account?.plusTrial ? `Попробовать бесплатно · ${plusPlan.trialHours} часа` : `Первый месяц · ${remote?.account?.plusPrice || plusPlan.price} ₽`}</button></div></div></article></section>`;
 }
 
 // The card before an ad gets a pearly wave along its bottom edge and a «skip» pill, so the ad never
 // comes as a surprise and can be jumped over in one tap.
+//
+// Ad markup avoids the names ad blockers hide everywhere (`.is-ad`, `.ad-label`, `.ad-frame` are in
+// EasyList, RuAdList and AdGuard): with a blocker on a computer the ad card vanished, the hint before it
+// stayed, and the feed went from «Дальше реклама» straight to an ordinary post.
 function markNextAds(feed = document.querySelector('#feed')) {
-  feed?.querySelectorAll?.('.feed-item.is-ad').forEach(ad => {
+  feed?.querySelectorAll?.('.feed-item.is-boosted').forEach(ad => {
     const frame = ad.querySelector?.('.card-media');
-    if (frame && !frame.querySelector?.('.ad-frame')) frame.insertAdjacentHTML?.('beforeend', adFrameHtml());
+    if (frame && !frame.querySelector?.('.boost-frame')) frame.insertAdjacentHTML?.('beforeend', adFrameHtml());
     const before = ad.previousElementSibling;
-    if (!before?.classList?.contains('feed-item') || before.classList.contains('is-ad')) return;
-    before.classList.add('next-ad');
+    if (!before?.classList?.contains('feed-item') || before.classList.contains('is-boosted')) return;
+    if (boostHidden(ad)) { dropBoostHint(before); return; }
+    before.classList.add('before-boost');
     const media = before.querySelector?.('.card-media');
-    if (media && !media.querySelector?.('.ad-glow')) media.insertAdjacentHTML?.('beforeend', adGlowHtml());
+    if (media && !media.querySelector?.('.boost-glow')) media.insertAdjacentHTML?.('beforeend', adGlowHtml());
   });
+}
+
+// Something on the page still hid the ad (a blocker rule written for this site): the card before it laid
+// out, the ad did not. Then there is nothing to announce.
+function boostHidden(ad) {
+  const before = ad?.previousElementSibling;
+  if (typeof ad?.getClientRects !== 'function' || typeof before?.getClientRects !== 'function') return false;
+  return before.getClientRects().length > 0 && ad.getClientRects().length === 0;
+}
+
+function dropBoostHint(item) {
+  if (!item?.classList?.contains('before-boost')) return;
+  item.classList.remove('before-boost');
+  item.querySelectorAll?.('.boost-glow, .boost-next').forEach(node => node.remove?.());
 }
 
 // An ad is recognisable by its light, not only by its label: the whole edge of the screen glows in the
 // same colours as the hint before it. The line draws itself from the top centre as soon as the ad starts
 // to scroll in, the halo breathes, and a spark runs back and forth around the frame.
 function adFrameHtml() {
-  return '<div class="ad-frame" aria-hidden="true"><span class="frame-line"></span><span class="frame-soft"><b></b></span><span class="frame-comet"><b></b></span></div>';
+  return '<div class="boost-frame" aria-hidden="true"><span class="frame-line"></span><span class="frame-soft"><b></b></span><span class="frame-comet"><b></b></span></div>';
 }
 
 // Like the edge light of the new Siri, but only along the bottom: the screen glows from below
 // a moment before an ad, with a pill to skip it.
 function adGlowHtml() {
-  return `<div class="ad-glow" aria-hidden="true"><span class="glow-line"></span><span class="glow-soft"><b></b></span></div><button class="ad-next" data-action="ad-skip" aria-label="Дальше реклама — пропустить">${icon('megaphone')}<span>Дальше реклама</span><b>Пропустить ${icon('skip')}</b></button>`;
+  return `<div class="boost-glow" aria-hidden="true"><span class="glow-line"></span><span class="glow-soft"><b></b></span></div><button class="boost-next" data-action="boost-skip" aria-label="Дальше реклама — пропустить">${icon('megaphone')}<span>Дальше реклама</span><b>Пропустить ${icon('skip')}</b></button>`;
 }
 
 const adReported = new Set();
@@ -872,17 +898,17 @@ function reportAd(id, event) {
   const key = `${event}:${id}`;
   if (!online || !id || id === 'plus' || adReported.has(key) || typeof fetch !== 'function') return;
   adReported.add(key);
-  fetch(`/api/ads/${encodeURIComponent(id)}/${event}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+  fetch(`/api/boosts/${encodeURIComponent(id)}/${event}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
 }
 
 function skipAd(from) {
   const feed = document.querySelector('#feed');
   const item = from?.closest?.('.feed-item');
   if (!feed || !item) return;
-  const ad = item.classList.contains('is-ad') ? item : item.nextElementSibling;
+  const ad = item.classList.contains('is-boosted') ? item : item.nextElementSibling;
   // The ad may be the last card loaded so far: grow the feed first, then jump past it.
   if (ad && !ad.nextElementSibling) extendFeedNear(ad);
-  const next = ad?.classList?.contains('is-ad') ? ad.nextElementSibling : item.nextElementSibling;
+  const next = ad?.classList?.contains('is-boosted') ? ad.nextElementSibling : item.nextElementSibling;
   if (next) feed.scrollTo?.({ top: next.offsetTop, behavior: 'smooth' });
 }
 
@@ -891,7 +917,7 @@ function openAdInfo(id) {
   const project = id && id !== 'plus' ? projectById(id) : null;
   const who = project ? `<button class="set-row" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(userByHandle(project.handle) || project, 'lg')}<span><b>${escapeHtml(project.author || `@${project.handle}`)}</b><small>@${escapeHtml(project.handle)} · рекламодатель</small></span>${icon('chevronRight')}</button>` : `<div class="set-row"><span class="row-mark">${icon('crown')}</span><span><b>про.стим</b><small>Реклама собственной подписки</small></span></div>`;
   const noAds = hasPlusNow() ? '' : `<button class="gift-row" data-action="plus"><span class="plus-mark small">${icon('crown')}</span><span><b>Лента без рекламы</b><small>С ${plusPlan.title}</small></span>${icon('chevronRight')}</button>`;
-  showDialog(`<div class="sheet-body ad-info"><span class="ad-info-mark">${icon('megaphone')}</span><h2 id="modal-title">Рекламный пост</h2><p class="hub-hint">${project ? 'Автор оплатил показы этого поста через продвижение про.стим.' : 'про.стим рассказывает о своей подписке.'} Реклама стоит после каждых ${AD_EVERY} постов и всегда подписана.</p>${who}${noAds}</div>`, { kind: 'ad-info' });
+  showDialog(`<div class="sheet-body boost-info"><span class="boost-info-mark">${icon('megaphone')}</span><h2 id="modal-title">Рекламный пост</h2><p class="hub-hint">${project ? 'Автор оплатил показы этого поста через продвижение про.стим.' : 'про.стим рассказывает о своей подписке.'} Реклама стоит после каждых ${AD_EVERY} постов и всегда подписана.</p>${who}${noAds}</div>`, { kind: 'boost-info' });
 }
 
 // The feed never ends: after the new posts a card says so, and then round after round of what is there,
@@ -949,15 +975,14 @@ function renderFeed() {
 
 function feedItem(project, reason = '', ad = '') {
   const id = escapeHtml(project.id);
-  const skip = ad ? `<button class="ad-skip" data-action="ad-skip">Пропустить ${icon('skip')}</button>` : '';
-  return `<section class="feed-item${ad ? ' is-ad' : ''}" data-project="${id}"${ad ? ` data-ad="${escapeHtml(ad)}"` : ''} aria-label="${ad ? 'Реклама: ' : ''}${escapeHtml(project.title)}"><article class="card">${skip}<div class="card-media" data-action="media" data-id="${id}" data-reason="${escapeHtml(reason)}">${mediaInner(project, reason)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
+  return `<section class="feed-item${ad ? ' is-boosted' : ''}" data-project="${id}"${ad ? ` data-boost="${escapeHtml(ad)}"` : ''} aria-label="${ad ? 'Реклама: ' : ''}${escapeHtml(project.title)}"><article class="card"><div class="card-media" data-action="media" data-id="${id}" data-reason="${escapeHtml(reason)}">${mediaInner(project, reason)}</div><div class="rail" data-rail="${id}">${railInner(project)}</div></article></section>`;
 }
 
 // Posts carry no «new», «for you» or «again» labels: the feed just shows them. Only an ad is marked,
 // as the law on advertising requires: «Реклама» and who pays for it, with a tap for the details.
 function adLabelHtml(project) {
   const handle = project ? escapeHtml(project.handle) : '';
-  return `<button class="ad-label" data-action="ad-info" data-id="${project ? escapeHtml(project.id) : 'plus'}" aria-label="Рекламный пост${project ? ` от @${handle}` : ' про.стим'}. Подробнее">${icon('megaphone')}<b>Реклама</b><span>${project ? `@${handle}` : 'про.стим'}</span><i aria-hidden="true">i</i></button>`;
+  return `<button class="boost-label" data-action="boost-info" data-id="${project ? escapeHtml(project.id) : 'plus'}" aria-label="Рекламный пост${project ? ` от @${handle}` : ' про.стим'}. Подробнее">${icon('megaphone')}<b>Реклама</b><span>${project ? `@${handle}` : 'про.стим'}</span><i aria-hidden="true">i</i></button>`;
 }
 
 /* Attention: how long each post holds the screen, and what people do with it */
@@ -1076,7 +1101,7 @@ function mediaInner(project, reason = '') {
   const from = slideFrom.has(project.id) ? slideFrom.get(project.id) : -1;
   const dots = count > 1 ? `<div class="slide-dots" role="img" aria-label="Слайд ${slide + 1} из ${count}">${Array.from({ length: count }, (_, index) => `<i class="${index === slide ? 'on' : index === from ? 'was' : ''}"></i>`).join('')}</div>` : '';
   const author = userByHandle(project.handle);
-  return `${scene(project, slide)}<div class="card-shade"></div>${controls}<div class="card-info">${dots}${reason === 'ad' ? adLabelHtml(project) : ''}${steamBadgeHtml(project)}${playtestChipHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
+  return `${scene(project, slide)}<div class="card-shade"></div>${controls}${reason === 'ad' ? boostSkipHtml() : ''}<div class="card-info">${dots}${reason === 'ad' ? adLabelHtml(project) : ''}${steamBadgeHtml(project)}${playtestChipHtml(project)}<button class="card-author" data-action="profile" data-handle="${escapeHtml(project.handle)}">${avatar(author || project, 'xs')}<b>${isMine(project.handle) ? 'Вы' : escapeHtml(project.author || `@${project.handle}`)}</b>${plusBadge(author)}<span>· ${escapeHtml(categoryNames[project.category])}</span></button><button class="card-title" data-action="open-project" data-id="${id}">${escapeHtml(project.title)}</button><p class="card-summary">${escapeHtml(project.summary)}</p>${cardUpdateHtml(project)}${cardCtaHtml(project)}${tagline(project)}</div>`;
 }
 
 // The post's own call to action, right on the card: «Играть» for a demo that runs in the browser,
@@ -3631,11 +3656,11 @@ document.addEventListener('click', async event => {
   const action = target.dataset.action;
   const id = target.dataset.id;
   if (hapticActions[action]) haptic(hapticActions[action]);
-  const adItem = ['open-project', 'media'].includes(action) ? target.closest?.('.feed-item.is-ad') : null;
-  if (adItem) reportAd(adItem.dataset.ad, 'click');
+  const adItem = ['open-project', 'media'].includes(action) ? target.closest?.('.feed-item.is-boosted') : null;
+  if (adItem) reportAd(adItem.dataset.boost, 'click');
   if (action === 'close-modal') closeAnimated();
-  else if (action === 'ad-skip') skipAd(target);
-  else if (action === 'ad-info') openAdInfo(target.dataset.id);
+  else if (action === 'boost-skip') skipAd(target);
+  else if (action === 'boost-info') openAdInfo(target.dataset.id);
   else if (action === 'boost') openBoost(id);
   else if (action === 'plus') openPlus();
   else if (action === 'pay-test') payTest(id, target);
